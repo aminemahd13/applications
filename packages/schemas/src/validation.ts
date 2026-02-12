@@ -22,11 +22,11 @@ export function generateFormSchema(definition: FormDefinition) {
                 case FieldType.NUMBER:
                     // Backend receives numbers as numbers usually, but might optionally handle string
                     // Frontend Zod handles string->number transform.
-                    // For shared, we can be lenient or strict. 
+                    // For shared, we can be lenient or strict.
                     // Let's allow both for robustness.
                     schema = z.union([z.string(), z.number()])
                         .transform((val) => (val === '' ? undefined : Number(val)))
-                        .refine((val) => val === undefined || !isNaN(val), { message: 'Must be a number' });
+                        .refine((val: number | undefined) => val === undefined || !Number.isNaN(val), { message: 'Must be a number' });
                     break;
                 case FieldType.CHECKBOX:
                     schema = z.boolean();
@@ -65,7 +65,7 @@ export function generateFormSchema(definition: FormDefinition) {
 
             if (rules.required) {
                 if (field.type === FieldType.CHECKBOX) {
-                    schema = (schema as z.ZodBoolean).refine(val => val === true, { message: 'Required' });
+                    schema = (schema as z.ZodBoolean).refine((val: boolean) => val === true, { message: 'Required' });
                 } else if (field.type === FieldType.MULTISELECT) {
                     schema = (schema as z.ZodArray<any>).min(1, { message: 'Required' });
                 } else if (field.type === FieldType.FILE_UPLOAD) {
@@ -76,7 +76,7 @@ export function generateFormSchema(definition: FormDefinition) {
                         return true;
                     }, { message: 'Required' });
                 } else if (field.type === FieldType.NUMBER) {
-                    schema = schema.refine(val => val !== undefined, { message: 'Required' });
+                    schema = schema.refine((val: unknown) => val !== undefined, { message: 'Required' });
                 } else {
                     schema = (schema as z.ZodString).min(1, { message: 'Required' });
                 }
@@ -86,8 +86,8 @@ export function generateFormSchema(definition: FormDefinition) {
 
             if (rules.min !== undefined) {
                 if (field.type === FieldType.NUMBER) {
-                    schema = (schema as z.ZodEffects<any>).refine(
-                        (val) => val === undefined || val >= rules.min!,
+                    schema = schema.refine(
+                        (val: unknown) => val === undefined || (typeof val === 'number' && val >= rules.min!),
                         { message: `Min ${rules.min}` },
                     );
                 } else if (field.type === FieldType.TEXT || field.type === FieldType.TEXTAREA) {
@@ -97,8 +97,8 @@ export function generateFormSchema(definition: FormDefinition) {
 
             if (rules.max !== undefined) {
                 if (field.type === FieldType.NUMBER) {
-                    schema = (schema as z.ZodEffects<any>).refine(
-                        (val) => val === undefined || val <= rules.max!,
+                    schema = schema.refine(
+                        (val: unknown) => val === undefined || (typeof val === 'number' && val <= rules.max!),
                         { message: `Max ${rules.max}` },
                     );
                 } else if (field.type === FieldType.TEXT || field.type === FieldType.TEXTAREA) {
