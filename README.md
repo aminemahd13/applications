@@ -62,11 +62,12 @@ The easiest way to run the project in production is using Docker Compose. This s
 
 6.  **Run Seed Manually (Optional, Only If Needed)**
     ```bash
-    docker-compose -f docker-compose.prod.yml run --rm api sh -lc "npm run -w packages/db seed"
+    docker-compose -f docker-compose.prod.yml run --rm api sh -lc "npm run -w packages/db seed:prod"
     ```
+    This runs `prisma migrate deploy` before seeding, so schema and seed stay in sync.
     If you are running an older API image that does not include monorepo root metadata, use:
     ```bash
-    docker-compose -f docker-compose.prod.yml run --rm api sh -lc "cd packages/db && npm run seed"
+    docker-compose -f docker-compose.prod.yml run --rm api sh -lc "./node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma && cd packages/db && npm run seed"
     ```
 
 7.  **Start Application Services**

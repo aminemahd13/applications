@@ -4,6 +4,8 @@ set -eu
 SCHEMA_PATH="packages/db/prisma/schema.prisma"
 BASELINE_MIGRATION="20260205173053_add_expires_at_to_files"
 FOLLOWUP_INDEX_MIGRATION="20260211221500_add_followup_scale_indexes"
+LEGACY_SCHEMA_BACKFILL_MIGRATION="20260212191000_backfill_legacy_event_columns"
+LEGACY_SCHEMA_BACKFILL_SQL="packages/db/prisma/migrations/${LEGACY_SCHEMA_BACKFILL_MIGRATION}/migration.sql"
 MAX_ATTEMPTS="${PRISMA_MIGRATE_MAX_ATTEMPTS:-30}"
 RETRY_DELAY_SECONDS="${PRISMA_MIGRATE_RETRY_DELAY_SECONDS:-5}"
 
@@ -106,6 +108,46 @@ resolve_failed_followup_index_migration() {
   return 1
 }
 
+ensure_legacy_schema_backfill_prerequisites() {
+  # Reconcile drift between legacy SQL migrations and Prisma migration history.
+  # This is idempotent and safe to run on every boot.
+  if [ ! -f "$LEGACY_SCHEMA_BACKFILL_SQL" ]; then
+    log "Legacy schema backfill script not found at $LEGACY_SCHEMA_BACKFILL_SQL; skipping."
+    return 0
+  fi
+
+  ./node_modules/.bin/prisma db execute \
+    --schema "$SCHEMA_PATH" \
+    --file "$LEGACY_SCHEMA_BACKFILL_SQL" >/tmp/prisma-legacy-backfill.log 2>&1
+}
+
+resolve_failed_legacy_schema_backfill_migration() {
+  log "Repairing prerequisites for $LEGACY_SCHEMA_BACKFILL_MIGRATION."
+  if ensure_legacy_schema_backfill_prerequisites; then
+    if [ -f /tmp/prisma-legacy-backfill.log ]; then
+      cat /tmp/prisma-legacy-backfill.log
+    fi
+  else
+    if [ -f /tmp/prisma-legacy-backfill.log ]; then
+      cat /tmp/prisma-legacy-backfill.log
+    fi
+    log "Failed to run compatibility script for $LEGACY_SCHEMA_BACKFILL_MIGRATION."
+    return 1
+  fi
+
+  log "Marking failed migration $LEGACY_SCHEMA_BACKFILL_MIGRATION as rolled back so deploy can retry."
+  if ./node_modules/.bin/prisma migrate resolve \
+    --rolled-back "$LEGACY_SCHEMA_BACKFILL_MIGRATION" \
+    --schema "$SCHEMA_PATH" >/tmp/prisma-resolve.log 2>&1; then
+    cat /tmp/prisma-resolve.log
+    return 0
+  fi
+
+  cat /tmp/prisma-resolve.log
+  log "Could not mark $LEGACY_SCHEMA_BACKFILL_MIGRATION as rolled back."
+  return 1
+}
+
 extract_failed_migration_from_log() {
   log_file="$1"
   sed -n "s/.*The \`\([A-Za-z0-9_]\+\)\` migration.*/\1/p" "$log_file" | tail -n 1
@@ -120,6 +162,9 @@ resolve_known_failed_migration() {
     "$FOLLOWUP_INDEX_MIGRATION")
       resolve_failed_followup_index_migration
       ;;
+    "$LEGACY_SCHEMA_BACKFILL_MIGRATION")
+      resolve_failed_legacy_schema_backfill_migration
+      ;;
     *)
       log "No auto-resolution rule for failed migration: $failed_migration"
       return 1
@@ -129,6 +174,8 @@ resolve_known_failed_migration() {
 
 # Pre-check once so databases with pre-existing baseline tables are fixed early.
 resolve_failed_baseline_migration || true
+# Pre-check legacy/prisma schema drift; harmless no-op if already reconciled.
+ensure_legacy_schema_backfill_prerequisites || true
 # Pre-check messaging prerequisites; harmless no-op if tables do not exist yet.
 ensure_followup_index_prerequisites || true
 

@@ -38,10 +38,18 @@
 - Current API startup auto-resolves that baseline migration when it detects legacy tables, then retries deploy.
 
 **"npm ERR! enoent Could not read package.json: /app/package.json" (while seeding in Docker)**:
-- Root workspace metadata is missing in the API runtime image, so `npm run -w packages/db seed` cannot resolve workspaces.
+- Root workspace metadata is missing in the API runtime image, so workspace commands cannot resolve.
 - Rebuild the API image: `docker compose -f docker-compose.prod.yml build api`.
 - Run seed again, or use a workspace-independent fallback:
-  `docker compose -f docker-compose.prod.yml run --rm api sh -lc "cd packages/db && npm run seed"`.
+  `docker compose -f docker-compose.prod.yml run --rm api sh -lc "./node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma && cd packages/db && npm run seed"`.
+
+**`P2022` missing column during seed (e.g. `events.is_system_site` / `events.requires_email_verification`)**:
+- Your database schema is behind the current Prisma schema.
+- Latest builds include `20260212191000_backfill_legacy_event_columns` and startup auto-reconciliation for legacy drift.
+- Pull the latest code, then run:
+  `docker compose -f docker-compose.prod.yml run --rm api sh -lc "./node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma"`.
+- Retry seed with:
+  `docker compose -f docker-compose.prod.yml run --rm api sh -lc "npm run -w packages/db seed:prod"`.
 
 ### 3. Build Errors
 

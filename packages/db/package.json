@@ -8,7 +8,8 @@
         "build": "tsc",
         "generate": "prisma generate",
         "db:pull": "prisma db pull",
-        "seed": "ts-node seed.ts"
+        "seed": "ts-node seed.ts",
+        "seed:prod": "prisma migrate deploy --schema prisma/schema.prisma && ts-node seed.ts"
     },
     "dependencies": {
         "@prisma/client": "^5.0.0"
