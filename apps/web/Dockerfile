@@ -6,9 +6,6 @@ FROM base AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm
-
 COPY package.json package-lock.json* ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/db/package.json ./packages/db/
@@ -16,12 +13,11 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/schemas/package.json ./packages/schemas/
 
 
-RUN pnpm install --frozen-lockfile
+RUN npm ci
 
 # Rebuild the source code only when needed
 FROM base AS builder
 WORKDIR /app
-RUN npm install -g pnpm
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
