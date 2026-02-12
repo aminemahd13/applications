@@ -64,6 +64,10 @@ The easiest way to run the project in production is using Docker Compose. This s
     ```bash
     docker-compose -f docker-compose.prod.yml run --rm api sh -lc "npm run -w packages/db seed"
     ```
+    If you are running an older API image that does not include monorepo root metadata, use:
+    ```bash
+    docker-compose -f docker-compose.prod.yml run --rm api sh -lc "cd packages/db && npm run seed"
+    ```
 
 7.  **Start Application Services**
     ```bash

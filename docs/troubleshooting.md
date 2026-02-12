@@ -37,6 +37,12 @@
 - If the failed migration is `20260205173053_add_expires_at_to_files`, your DB likely came from historical SQL files in `infra/migrations` (legacy baseline).
 - Current API startup auto-resolves that baseline migration when it detects legacy tables, then retries deploy.
 
+**"npm ERR! enoent Could not read package.json: /app/package.json" (while seeding in Docker)**:
+- Root workspace metadata is missing in the API runtime image, so `npm run -w packages/db seed` cannot resolve workspaces.
+- Rebuild the API image: `docker compose -f docker-compose.prod.yml build api`.
+- Run seed again, or use a workspace-independent fallback:
+  `docker compose -f docker-compose.prod.yml run --rm api sh -lc "cd packages/db && npm run seed"`.
+
 ### 3. Build Errors
 
 **"Type error: Property 'x' does not exist on type 'y'"**:
