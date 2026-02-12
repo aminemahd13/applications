@@ -19,7 +19,7 @@ import {
 } from './password-reset.service';
 import { LoginSchema, SignupSchema } from '@event-platform/shared';
 import * as express from 'express';
-import { v4 as uuidv4 } from 'uuid';
+import * as crypto from 'crypto';
 import { SkipCsrf } from '../common/decorators/skip-csrf.decorator';
 import { Throttle } from '@nestjs/throttler';
 
@@ -43,7 +43,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: express.Response,
   ) {
     if (!session.csrfToken) {
-      session.csrfToken = uuidv4();
+      session.csrfToken = crypto.randomUUID();
     }
     // Prevent caching of CSRF tokens
     res.setHeader('Cache-Control', 'no-store');

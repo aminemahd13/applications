@@ -69,6 +69,8 @@ describe('PermissionsGuard', () => {
                                 id: userId,
                                 is_global_admin: isGlobalAdmin,
                                 email_verified_at: emailVerifiedAt,
+                                email_verified: emailVerifiedAt != null,
+                                has_staff_role: false,
                             },
                         }
                         : {},

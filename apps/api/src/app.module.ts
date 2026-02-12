@@ -3,7 +3,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
 import { ClsModule } from 'nestjs-cls';
-import { v4 as uuidv4 } from 'uuid';
+import * as crypto from 'crypto';
 import { LoggerModule } from './common/logger/logger.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
@@ -33,7 +33,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
       middleware: {
         mount: true,
         generateId: true,
-        idGenerator: (req) => req.headers['x-request-id'] ?? uuidv4(),
+        idGenerator: (req) => req.headers['x-request-id'] ?? crypto.randomUUID(),
       },
     }),
     ThrottlerModule.forRoot([

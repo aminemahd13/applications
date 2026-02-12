@@ -8,7 +8,6 @@ import { RateLimiterService } from '../common/services/rate-limiter.service';
 import { EmailService } from '../common/email/email.service';
 import * as crypto from 'crypto';
 import * as argon2 from 'argon2';
-import { v4 as uuidv4 } from 'uuid';
 
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -43,7 +42,7 @@ export class PasswordResetService {
     // Store hashed token
     await this.prisma.password_reset_tokens.create({
       data: {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         user_id: userId,
         token_hash: tokenHash,
         expires_at: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
@@ -230,7 +229,7 @@ export class EmailVerificationService {
     // Store hashed token
     await this.prisma.email_verification_tokens.create({
       data: {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         user_id: userId,
         token_hash: tokenHash,
         expires_at: new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS),
