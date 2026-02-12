@@ -1,16 +1,23 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 
 @Injectable()
-export class EmailService {
+export class EmailService implements OnModuleInit {
   private readonly logger = new Logger(EmailService.name);
   private transporter: nodemailer.Transporter;
+  private readonly smtpHost: string;
+  private readonly smtpPort: number;
+  private readonly smtpSecure: boolean;
 
   constructor() {
+    this.smtpHost = process.env.SMTP_HOST || 'localhost';
+    this.smtpPort = this.parsePort(process.env.SMTP_PORT);
+    this.smtpSecure = this.parseSecure(process.env.SMTP_SECURE, this.smtpPort);
+
     this.transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'localhost',
-      port: parseInt(process.env.SMTP_PORT || '1025', 10),
-      secure: false,
+      host: this.smtpHost,
+      port: this.smtpPort,
+      secure: this.smtpSecure,
       ...(process.env.SMTP_USER
         ? {
             auth: {
@@ -20,6 +27,43 @@ export class EmailService {
           }
         : {}),
     });
+
+    this.logger.log(
+      `SMTP transport configured host=${this.smtpHost} port=${this.smtpPort} secure=${this.smtpSecure} auth=${process.env.SMTP_USER ? 'on' : 'off'} from=${this.fromAddress}`,
+    );
+  }
+
+  async onModuleInit(): Promise<void> {
+    if (!process.env.SMTP_HOST) {
+      this.logger.warn(
+        'SMTP_HOST is not set. Falling back to localhost; outbound email will fail unless an SMTP server is running in this container.',
+      );
+    }
+
+    try {
+      await this.transporter.verify();
+      this.logger.log('SMTP connection verified successfully.');
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.error(`SMTP verification failed: ${reason}`);
+    }
+  }
+
+  private parsePort(value: string | undefined): number {
+    const parsed = parseInt(value ?? '1025', 10);
+    return Number.isFinite(parsed) ? parsed : 1025;
+  }
+
+  private parseSecure(rawValue: string | undefined, port: number): boolean {
+    if (typeof rawValue === 'string' && rawValue.trim().length > 0) {
+      const normalized = rawValue.trim().toLowerCase();
+      if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+      if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+      this.logger.warn(
+        `SMTP_SECURE value "${rawValue}" is invalid; falling back to port-based default.`,
+      );
+    }
+    return port === 465;
   }
 
   private get fromAddress(): string {
@@ -166,7 +210,9 @@ export class EmailService {
       });
       this.logger.log(`Email sent to ${options.to}: ${options.subject}`);
     } catch (error) {
-      this.logger.error(`Failed to send email to ${options.to}`, error);
+      const reason = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(`Failed to send email to ${options.to}: ${reason}`, stack);
       throw error;
     }
   }
