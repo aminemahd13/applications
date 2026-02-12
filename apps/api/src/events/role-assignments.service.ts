@@ -158,16 +158,15 @@ export class RoleAssignmentsService {
         const requestedRoles = Array.from(
           new Set(validAssignItems.map((item) => item.role)),
         );
-        const existingAssignments = await this.prisma.event_role_assignments.findMany(
-          {
+        const existingAssignments =
+          await this.prisma.event_role_assignments.findMany({
             where: {
               event_id: eventId,
               user_id: { in: Array.from(validUserIds) },
               role: { in: requestedRoles },
             },
             select: { user_id: true, role: true },
-          },
-        );
+          });
         const existingKeys = new Set(
           existingAssignments.map((row) => `${row.user_id}:${row.role}`),
         );

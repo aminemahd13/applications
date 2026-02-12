@@ -318,7 +318,7 @@ export class MessagesService {
       eventId: m.event_id,
       type: m.type as MessageType,
       title: m.title,
-      status: (m as any).status || 'SENT',
+      status: m.status || 'SENT',
       recipientCount: m._count.message_recipients,
       readCount: readCountByMessageId.get(m.id) ?? 0,
       createdAt: m.created_at,
@@ -357,16 +357,16 @@ export class MessagesService {
       eventId: message.event_id,
       type: message.type as MessageType,
       title: message.title,
-      status: (message as any).status || 'SENT',
+      status: message.status || 'SENT',
       recipientCount: message._count.message_recipients,
       readCount,
       createdAt: message.created_at,
       createdBy: message.created_by,
       bodyRich: message.body_rich,
-      bodyText: (message as any).body_text,
+      bodyText: message.body_text,
       actionButtons: message.action_buttons as any[],
-      recipientFilter: (message as any).recipient_filter_json,
-      resolvedAt: (message as any).resolved_at,
+      recipientFilter: message.recipient_filter_json,
+      resolvedAt: message.resolved_at,
     };
   }
 
@@ -492,7 +492,7 @@ export class MessagesService {
         eventId: r.messages.event_id,
         createdAt: r.created_at,
         readAt: r.read_at,
-        preview: ((r.messages as any).body_text || '').slice(0, 100),
+        preview: (r.messages.body_text || '').slice(0, 100),
       })),
       nextCursor: hasMore
         ? items[items.length - 1].created_at.toISOString()
@@ -535,9 +535,9 @@ export class MessagesService {
       eventId: recipient.messages.event_id,
       createdAt: recipient.created_at,
       readAt: recipient.read_at,
-      preview: ((recipient.messages as any).body_text || '').slice(0, 100),
+      preview: (recipient.messages.body_text || '').slice(0, 100),
       bodyRich: recipient.messages.body_rich,
-      bodyText: (recipient.messages as any).body_text,
+      bodyText: recipient.messages.body_text,
       actionButtons,
     };
   }
@@ -701,7 +701,10 @@ export class MessagesService {
     }
 
     const currentAttemptsById = new Map<string, number>(
-      recipients.map((recipient) => [recipient.id, recipient.email_attempts ?? 0]),
+      recipients.map((recipient) => [
+        recipient.id,
+        recipient.email_attempts ?? 0,
+      ]),
     );
     const bodyHtmlByMessageId = new Map<string, string>();
     const buttonsByMessageId = new Map<
@@ -748,7 +751,10 @@ export class MessagesService {
               bodyHtmlByMessageId.get(recipient.message_id) ?? '',
               buttonsByMessageId.get(recipient.message_id) ?? [],
             );
-            return { id: recipient.id, status: EmailDeliveryStatus.SENT as const };
+            return {
+              id: recipient.id,
+              status: EmailDeliveryStatus.SENT as const,
+            };
           } catch (error) {
             return {
               id: recipient.id,

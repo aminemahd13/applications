@@ -72,6 +72,7 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-uploads}
+      STORAGE_PUBLIC_ENDPOINT: ${STORAGE_PUBLIC_ENDPOINT:-}
       
       # Mail (SMTP)
       SMTP_HOST: ${SMTP_HOST}
@@ -95,6 +96,12 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
+        NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST:-/uploads}
+        NEXT_PUBLIC_DIRECT_ASSET_HOST: ${NEXT_PUBLIC_DIRECT_ASSET_HOST:-}
+        NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-localhost}
+        NEXT_PUBLIC_ROUTING_MODE: ${NEXT_PUBLIC_ROUTING_MODE:-path}
     container_name: event_platform_web
     restart: always
     depends_on:
@@ -110,12 +117,12 @@ services:
       NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-localhost}
       
       # API & Assets
-      NEXT_PUBLIC_API_URL: /api/v1
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
       # Server-side Next.js calls (RSC/middleware) should use internal Docker network.
       INTERNAL_API_URL: http://api:3000/api/v1
       # If using external S3/CDN directly, set this. Otherwise leave empty for proxying or relative paths.
-      NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST}
-      NEXT_PUBLIC_DIRECT_ASSET_HOST: ${NEXT_PUBLIC_DIRECT_ASSET_HOST}
+      NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST:-/uploads}
+      NEXT_PUBLIC_DIRECT_ASSET_HOST: ${NEXT_PUBLIC_DIRECT_ASSET_HOST:-}
       
       # Session
       SESSION_VALIDATION_MAX_AGE_SECONDS: ${SESSION_VALIDATION_MAX_AGE_SECONDS:-900}

@@ -13,6 +13,7 @@ import { createHash } from 'crypto';
 @Injectable()
 export class StorageService {
   private s3Client: S3Client;
+  private signingS3Client: S3Client;
   private bucket: string;
   private logger = new Logger(StorageService.name);
 
@@ -20,6 +21,7 @@ export class StorageService {
     rawEndpoint: string | undefined,
     minioPort: string,
     useSsl: boolean,
+    appendDefaultPort = true,
   ): string {
     const protocol = useSsl ? 'https' : 'http';
     const fallback = `${protocol}://localhost:${minioPort}`;
@@ -35,7 +37,7 @@ export class StorageService {
 
     try {
       const parsed = new URL(withProtocol);
-      if (!parsed.port) {
+      if (appendDefaultPort && !parsed.port) {
         parsed.port = minioPort;
       }
       // Keep path support for deployments that expose storage behind a URL prefix.
@@ -46,6 +48,73 @@ export class StorageService {
       );
       return fallback;
     }
+  }
+
+  private normalizeAbsoluteUrl(
+    rawUrl: string | undefined,
+    options?: { originOnly?: boolean },
+  ): string | null {
+    const trimmed = rawUrl?.trim();
+    if (!trimmed || !/^https?:\/\//i.test(trimmed)) {
+      return null;
+    }
+
+    try {
+      const parsed = new URL(trimmed);
+      return options?.originOnly
+        ? parsed.origin
+        : parsed.toString().replace(/\/$/, '');
+    } catch {
+      return null;
+    }
+  }
+
+  private isLikelyPrivateEndpoint(endpoint: string): boolean {
+    try {
+      const hostname = new URL(endpoint).hostname.toLowerCase();
+      if (
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname === '::1' ||
+        hostname === 'minio'
+      ) {
+        return true;
+      }
+
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) {
+        return (
+          hostname.startsWith('10.') ||
+          hostname.startsWith('127.') ||
+          hostname.startsWith('192.168.') ||
+          /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+        );
+      }
+
+      return !hostname.includes('.');
+    } catch {
+      return false;
+    }
+  }
+
+  private resolvePublicSigningEndpoint(
+    rawPublicEndpoint: string | undefined,
+    appBaseUrl: string | undefined,
+    nodeEnv: string | undefined,
+    internalEndpoint: string,
+  ): string | null {
+    const explicitPublicEndpoint = this.normalizeAbsoluteUrl(rawPublicEndpoint);
+    if (explicitPublicEndpoint) {
+      return explicitPublicEndpoint;
+    }
+
+    if (
+      nodeEnv?.toLowerCase() !== 'production' ||
+      !this.isLikelyPrivateEndpoint(internalEndpoint)
+    ) {
+      return null;
+    }
+
+    return this.normalizeAbsoluteUrl(appBaseUrl, { originOnly: true });
   }
 
   constructor(private configService: ConfigService) {
@@ -85,6 +154,26 @@ export class StorageService {
         secretAccessKey,
       },
     });
+
+    const publicSigningEndpoint = this.resolvePublicSigningEndpoint(
+      this.configService.get<string>('STORAGE_PUBLIC_ENDPOINT'),
+      this.configService.get<string>('APP_BASE_URL'),
+      this.configService.get<string>('NODE_ENV'),
+      endpoint,
+    );
+
+    this.signingS3Client =
+      publicSigningEndpoint && publicSigningEndpoint !== endpoint
+        ? new S3Client({
+            region,
+            endpoint: publicSigningEndpoint,
+            forcePathStyle: true,
+            credentials: {
+              accessKeyId,
+              secretAccessKey,
+            },
+          })
+        : this.s3Client;
   }
 
   async getPresignedPutUrl(
@@ -97,7 +186,7 @@ export class StorageService {
       Key: key,
       ContentType: contentType,
     });
-    return getSignedUrl(this.s3Client, command, { expiresIn: expiry });
+    return getSignedUrl(this.signingS3Client, command, { expiresIn: expiry });
   }
 
   async getPresignedGetUrl(key: string, expiry = 3600): Promise<string> {
@@ -114,7 +203,7 @@ export class StorageService {
       Key: key,
       ResponseContentDisposition: responseContentDisposition,
     });
-    return getSignedUrl(this.s3Client, command, { expiresIn: expiry });
+    return getSignedUrl(this.signingS3Client, command, { expiresIn: expiry });
   }
 
   async headObject(key: string): Promise<boolean> {

@@ -124,12 +124,8 @@ export class PermissionsGuard implements CanActivate {
     );
 
     if (isApplicantOnlyRoute) {
-      const sessionEmailVerified = this.toBoolean(
-        (sessionUser as any)?.email_verified,
-      );
-      const sessionHasStaffRole = this.toBoolean(
-        (sessionUser as any)?.has_staff_role,
-      );
+      const sessionEmailVerified = this.toBoolean(sessionUser?.email_verified);
+      const sessionHasStaffRole = this.toBoolean(sessionUser?.has_staff_role);
 
       let emailVerified = sessionEmailVerified === true;
       let hasAnyStaffRole = sessionHasStaffRole === true;
@@ -152,13 +148,13 @@ export class PermissionsGuard implements CanActivate {
 
         emailVerified = Boolean(userMeta.email_verified_at);
         if (sessionUser) {
-          (sessionUser as any).email_verified = emailVerified;
+          sessionUser.email_verified = emailVerified;
         }
 
         if (sessionHasStaffRole === undefined) {
           hasAnyStaffRole = Boolean(staffRole);
           if (sessionUser) {
-            (sessionUser as any).has_staff_role = hasAnyStaffRole;
+            sessionUser.has_staff_role = hasAnyStaffRole;
           }
         }
       }

@@ -434,7 +434,11 @@ export class PrismaService
       });
       eventId = this.pickString(application?.event_id);
       if (eventId) {
-        this.setCachedEventId(this.applicationEventCache, applicationId, eventId);
+        this.setCachedEventId(
+          this.applicationEventCache,
+          applicationId,
+          eventId,
+        );
         return eventId;
       }
     }
@@ -465,7 +469,11 @@ export class PrismaService
       });
       eventId = this.pickString(version?.applications?.event_id);
       if (eventId) {
-        this.setCachedEventId(this.submissionEventCache, submissionVersionId, eventId);
+        this.setCachedEventId(
+          this.submissionEventCache,
+          submissionVersionId,
+          eventId,
+        );
         const linkedApplicationId = this.pickString(version?.application_id);
         if (linkedApplicationId) {
           this.setCachedEventId(

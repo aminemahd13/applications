@@ -205,23 +205,21 @@ export class ApplicationsService {
     for (const application of applications) {
       const responseValues = new Map<string, string>();
       const fileIds = new Set<string>();
-      const sortedStepStates = [...(application.application_step_states ?? [])]
-        .sort(
-          (a, b) =>
-            (a.workflow_steps?.step_index ?? 0) -
-              (b.workflow_steps?.step_index ?? 0) ||
-            a.step_id.localeCompare(b.step_id),
-        );
+      const sortedStepStates = [
+        ...(application.application_step_states ?? []),
+      ].sort(
+        (a, b) =>
+          (a.workflow_steps?.step_index ?? 0) -
+            (b.workflow_steps?.step_index ?? 0) ||
+          a.step_id.localeCompare(b.step_id),
+      );
       for (const stepState of sortedStepStates) {
         const submissionVersionId = stepState.latest_submission_version_id;
         if (!submissionVersionId) continue;
         const effectiveAnswers = this.normalizeAnswersShape(
           effectiveAnswersBySubmissionVersionId.get(submissionVersionId),
         );
-        this.collectFileObjectIds(
-          effectiveAnswers,
-          fileIds,
-        );
+        this.collectFileObjectIds(effectiveAnswers, fileIds);
 
         const stepIndex = stepState.workflow_steps?.step_index ?? 0;
         const stepId = stepState.step_id;
@@ -245,7 +243,9 @@ export class ApplicationsService {
             const usageCount = responseHeaderUsageCount.get(baseHeader) ?? 0;
             responseHeaderUsageCount.set(baseHeader, usageCount + 1);
             const finalHeader =
-              usageCount === 0 ? baseHeader : `${baseHeader} (${usageCount + 1})`;
+              usageCount === 0
+                ? baseHeader
+                : `${baseHeader} (${usageCount + 1})`;
             responseHeaderByColumnKey.set(responseColumnKey, finalHeader);
           }
 
@@ -882,7 +882,7 @@ export class ApplicationsService {
       title: r.messages.title,
       type: r.messages.type,
       bodyRich: r.messages.body_rich,
-      bodyText: (r.messages as any).body_text ?? null,
+      bodyText: r.messages.body_text ?? null,
       actionButtons: r.messages.action_buttons ?? [],
       createdAt: r.messages.created_at,
       readAt: r.read_at,
@@ -1041,8 +1041,7 @@ export class ApplicationsService {
         entityType: log.entity_type,
         entityId: log.entity_id,
         actorEmail: log.users?.email ?? 'system',
-        actorName:
-          (log.users as any)?.applicant_profiles?.full_name ?? undefined,
+        actorName: log.users?.applicant_profiles?.full_name ?? undefined,
         details,
         createdAt: log.created_at,
         redactionApplied: log.redaction_applied,

@@ -212,7 +212,10 @@ export class EmailService implements OnModuleInit {
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       const stack = error instanceof Error ? error.stack : undefined;
-      this.logger.error(`Failed to send email to ${options.to}: ${reason}`, stack);
+      this.logger.error(
+        `Failed to send email to ${options.to}: ${reason}`,
+        stack,
+      );
       throw error;
     }
   }
