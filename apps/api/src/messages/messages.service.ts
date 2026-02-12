@@ -127,15 +127,28 @@ export class MessagesService {
       where.AND = andConditions;
     }
 
-    // Get filtered applications
-    const filteredApps = await this.prisma.applications.findMany({
-      where,
-      select: { id: true, applicant_user_id: true },
-    });
-
     const recipientsByApplicationId = new Map<string, string>();
-    for (const app of filteredApps) {
-      recipientsByApplicationId.set(app.id, app.applicant_user_id);
+
+    const hasSegmentedCriteria =
+      andConditions.length > 0 ||
+      filter.confirmed !== undefined ||
+      filter.checkedIn !== undefined;
+    const hasExplicitTargets =
+      (filter.applicationIds?.length ?? 0) > 0 ||
+      (filter.userIds?.length ?? 0) > 0 ||
+      ((filterAny.emails?.length ?? 0) > 0);
+    const includeBaseEventAudience =
+      hasSegmentedCriteria || !hasExplicitTargets;
+
+    if (includeBaseEventAudience) {
+      // Segmented filters and the empty filter target event applicants by default.
+      const filteredApps = await this.prisma.applications.findMany({
+        where,
+        select: { id: true, applicant_user_id: true },
+      });
+      for (const app of filteredApps) {
+        recipientsByApplicationId.set(app.id, app.applicant_user_id);
+      }
     }
 
     // Add explicit applicationIds
