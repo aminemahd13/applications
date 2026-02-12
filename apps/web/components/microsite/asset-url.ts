@@ -1,5 +1,5 @@
 const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api/v1";
+  process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
 const PUBLIC_ASSET_HOST = (process.env.NEXT_PUBLIC_ASSET_HOST ?? "").trim();
 const DIRECT_ASSET_HOST = (
   process.env.NEXT_PUBLIC_DIRECT_ASSET_HOST ?? ""
