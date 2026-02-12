@@ -34,8 +34,9 @@
 
 **"P3009 migrate found failed migrations"**:
 - This usually means a migration failed earlier and Prisma blocked new ones.
-- If the failed migration is `20260205173053_add_expires_at_to_files`, your DB likely came from historical SQL files in `infra/migrations` (legacy baseline).
-- Current API startup auto-resolves that baseline migration when it detects legacy tables, then retries deploy.
+- Re-run deploy and inspect logs:
+  `docker compose -f docker-compose.prod.yml run --rm api sh -lc "./node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma"`.
+- If Prisma reports a specific failed migration, resolve it explicitly with `prisma migrate resolve` before retrying deploy.
 
 **"npm ERR! enoent Could not read package.json: /app/package.json" (while seeding in Docker)**:
 - Root workspace metadata is missing in the API runtime image, so workspace commands cannot resolve.
@@ -45,7 +46,7 @@
 
 **`P2022` missing column during seed (e.g. `events.is_system_site` / `events.requires_email_verification`)**:
 - Your database schema is behind the current Prisma schema.
-- Latest builds include `20260212191000_backfill_legacy_event_columns` and startup auto-reconciliation for legacy drift.
+- Latest builds include migration `20260212191000` to reconcile prior schema drift.
 - Pull the latest code, then run:
   `docker compose -f docker-compose.prod.yml run --rm api sh -lc "./node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma"`.
 - Retry seed with:

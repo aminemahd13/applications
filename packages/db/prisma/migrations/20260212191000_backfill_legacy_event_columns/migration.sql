@@ -1,6 +1,66 @@
--- Backfill schema drift between legacy SQL migrations (infra/migrations)
--- and Prisma migrations, using idempotent DDL so existing environments
--- with partially-applied legacy SQL can converge safely.
+-- Reconcile schema drift across previously deployed environments and current
+-- Prisma migration history, using idempotent DDL so repeated deploys are safe.
+
+-- ============================================================================
+-- AUTH TOKEN TABLE DRIFT
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS "password_reset_tokens" (
+  "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+  "user_id" UUID NOT NULL,
+  "token_hash" TEXT NOT NULL,
+  "expires_at" TIMESTAMPTZ(6) NOT NULL,
+  "used_at" TIMESTAMPTZ(6),
+  "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "password_reset_tokens_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE IF NOT EXISTS "email_verification_tokens" (
+  "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+  "user_id" UUID NOT NULL,
+  "token_hash" TEXT NOT NULL,
+  "expires_at" TIMESTAMPTZ(6) NOT NULL,
+  "used_at" TIMESTAMPTZ(6),
+  "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "email_verification_tokens_pkey" PRIMARY KEY ("id")
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'password_reset_tokens_user_id_fkey'
+  ) THEN
+    ALTER TABLE "password_reset_tokens"
+      ADD CONSTRAINT "password_reset_tokens_user_id_fkey"
+      FOREIGN KEY ("user_id")
+      REFERENCES "users"("id")
+      ON DELETE CASCADE
+      ON UPDATE NO ACTION;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'email_verification_tokens_user_id_fkey'
+  ) THEN
+    ALTER TABLE "email_verification_tokens"
+      ADD CONSTRAINT "email_verification_tokens_user_id_fkey"
+      FOREIGN KEY ("user_id")
+      REFERENCES "users"("id")
+      ON DELETE CASCADE
+      ON UPDATE NO ACTION;
+  END IF;
+END
+$$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "prt_token_hash_uq"
+ON "password_reset_tokens" ("token_hash");
+
+CREATE INDEX IF NOT EXISTS "prt_user_expires_idx"
+ON "password_reset_tokens" ("user_id", "expires_at");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "evt_token_hash_uq"
+ON "email_verification_tokens" ("token_hash");
+
+CREATE INDEX IF NOT EXISTS "evt_user_expires_idx"
+ON "email_verification_tokens" ("user_id", "expires_at");
 
 -- ============================================================================
 -- EVENTS + WORKFLOW DRIFT
@@ -39,6 +99,30 @@ ALTER TABLE "workflow_steps"
   ALTER COLUMN "sensitivity_level" SET DEFAULT 'NORMAL',
   ALTER COLUMN "sensitivity_level" SET NOT NULL;
 
+CREATE INDEX IF NOT EXISTS "ass_step_status_revision_idx"
+ON "application_step_states" ("step_id", "status", "revision_cycle_count");
+
+CREATE INDEX IF NOT EXISTS "ass_latest_submission_idx"
+ON "application_step_states" ("latest_submission_version_id");
+
+CREATE INDEX IF NOT EXISTS "nir_step_status_idx"
+ON "needs_info_requests" ("step_id", "status");
+
+CREATE INDEX IF NOT EXISTS "nir_application_status_idx"
+ON "needs_info_requests" ("application_id", "status");
+
+CREATE INDEX IF NOT EXISTS "app_applicant_idx"
+ON "applications" ("applicant_user_id");
+
+CREATE INDEX IF NOT EXISTS "era_user_idx"
+ON "event_role_assignments" ("user_id");
+
+CREATE INDEX IF NOT EXISTS "era_user_event_idx"
+ON "event_role_assignments" ("user_id", "event_id");
+
+CREATE INDEX IF NOT EXISTS "events_status_created_idx"
+ON "events" ("status", "created_at" DESC);
+
 -- ============================================================================
 -- MESSAGING DRIFT
 -- ============================================================================
@@ -60,6 +144,12 @@ ON "message_recipients" ("recipient_user_id", "created_at" DESC);
 
 CREATE INDEX IF NOT EXISTS "msg_event_created_idx"
 ON "messages" ("event_id", "created_at" DESC);
+
+CREATE INDEX IF NOT EXISTS "mr_message_created_idx"
+ON "message_recipients" ("message_id", "created_at" DESC);
+
+CREATE INDEX IF NOT EXISTS "mr_email_status_last_attempt_idx"
+ON "message_recipients" ("delivery_email_status", "email_last_attempt_at");
 
 -- ============================================================================
 -- FIELD VERIFICATION DRIFT
@@ -317,3 +407,29 @@ ON "microsite_page_versions" ("microsite_version_id");
 
 CREATE INDEX IF NOT EXISTS "mpv_version_pos_idx"
 ON "microsite_page_versions" ("microsite_version_id", "position");
+
+-- ============================================================================
+-- TYPE / DEFAULT CONVERGENCE
+-- ============================================================================
+DO $$
+DECLARE
+  file_status_udt TEXT;
+BEGIN
+  SELECT c.udt_name
+  INTO file_status_udt
+  FROM information_schema.columns c
+  WHERE c.table_schema = 'public'
+    AND c.table_name = 'file_objects'
+    AND c.column_name = 'status';
+
+  IF file_status_udt = 'FileStatus' THEN
+    ALTER TABLE "file_objects"
+      ALTER COLUMN "status" TYPE TEXT USING "status"::text;
+  END IF;
+END
+$$;
+
+DROP TYPE IF EXISTS "FileStatus";
+
+ALTER TABLE "applicant_profiles"
+  ALTER COLUMN "links" SET DEFAULT '[]'::jsonb;

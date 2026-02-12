@@ -58,7 +58,7 @@ The easiest way to run the project in production is using Docker Compose. This s
     ```bash
     docker-compose -f docker-compose.prod.yml run --rm api sh -lc "./node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma"
     ```
-    If this database was initialized with historical SQL files from `infra/migrations`, the API container startup script now auto-resolves the legacy baseline migration (`20260205173053_add_expires_at_to_files`) before deploying current Prisma migrations.
+    This is the only required schema step before starting services.
 
 6.  **Run Seed Manually (Optional, Only If Needed)**
     ```bash
