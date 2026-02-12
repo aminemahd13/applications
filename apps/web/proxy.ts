@@ -8,10 +8,14 @@ const ROUTING_MODE = (process.env.NEXT_PUBLIC_ROUTING_MODE || "path") as
   | "path"
   | "subdomain";
 const ROOT_DOMAIN = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost:3000";
+const INTERNAL_API_URL = (process.env.INTERNAL_API_URL ?? "").trim();
+const PUBLIC_API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").trim();
 const API_URL =
-  process.env.INTERNAL_API_URL ||
-  process.env.NEXT_PUBLIC_API_URL ||
-  "http://localhost:3001/api/v1";
+  INTERNAL_API_URL ||
+  (PUBLIC_API_URL.startsWith("http://") ||
+  PUBLIC_API_URL.startsWith("https://")
+    ? PUBLIC_API_URL
+    : "http://localhost:3001/api/v1");
 const SESSION_VALIDATION_COOKIE = "session_validated";
 const SESSION_VALIDATION_MAX_AGE_SECONDS = Number(
   process.env.SESSION_VALIDATION_MAX_AGE_SECONDS || "900",

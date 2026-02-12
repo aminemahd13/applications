@@ -83,13 +83,14 @@ services:
       context: ../../
       dockerfile: infra/docker/web.Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: http://localhost/api/v1 # Client-side URL (via Nginx)
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1} # Client-side URL (via Nginx)
         NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST:-http://localhost/uploads}
         NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-localhost}
         NEXT_PUBLIC_ROUTING_MODE: ${NEXT_PUBLIC_ROUTING_MODE:-subdomain}
     restart: always
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost/api/v1
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
+      INTERNAL_API_URL: ${INTERNAL_API_URL:-http://api:3001/api/v1}
       NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST:-http://localhost/uploads}
       NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-localhost}
       NEXT_PUBLIC_ROUTING_MODE: ${NEXT_PUBLIC_ROUTING_MODE:-subdomain}

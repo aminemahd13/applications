@@ -268,7 +268,7 @@ export default function AdminPeoplePage() {
       if (userFilter !== "all") params.set("filter", userFilter);
       const queryString = params.toString();
       const endpoint =
-        `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api/v1"}/admin/users/export` +
+        `${process.env.NEXT_PUBLIC_API_URL ?? "/api/v1"}/admin/users/export` +
         (queryString ? `?${queryString}` : "");
 
       const res = await fetch(endpoint, { credentials: "include" });

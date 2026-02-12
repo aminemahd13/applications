@@ -52,7 +52,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 /* ---------- Constants ---------- */
 
 const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api/v1";
+  process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
 
 /* ---------- Provider ---------- */
 
