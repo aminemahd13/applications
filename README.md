@@ -150,6 +150,7 @@ Required for sending invites, password resets, and notifications.
 |----------|-------------|
 | `SMTP_HOST` | SMTP Server (e.g., `smtp.gmail.com`) |
 | `SMTP_PORT` | SMTP Port (e.g., `587`) |
+| `SMTP_SECURE` | Optional explicit TLS mode (`true` for implicit TLS/465, `false` for STARTTLS/587). |
 | `SMTP_USER` | SMTP Username |
 | `SMTP_PASS` | SMTP Password |
 | `SMTP_FROM` | Default "From" address |
