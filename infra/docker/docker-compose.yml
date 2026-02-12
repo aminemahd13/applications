@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: event-platform-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: events_platform
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: event-platform-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis_data:/data
+
+  minio:
+    image: minio/minio
+    container_name: event-platform-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - minio_data:/data
+
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb myminio/uploads;
+      /usr/bin/mc policy set download myminio/uploads;
+      /usr/bin/mc mb myminio/public-assets;
+      /usr/bin/mc policy set public myminio/public-assets;
+      exit 0;
+      "
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: event-platform-mailhog
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # UI
+    environment:
+      MH_UI_WEB_PATH: ""
+
+  dbmate:
+    image: amacneil/dbmate
+    container_name: event-platform-dbmate
+    environment:
+      DATABASE_URL: "postgres://postgres:password@postgres:5432/events_platform?sslmode=disable"
+    volumes:
+      - ../migrations:/db/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: up
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

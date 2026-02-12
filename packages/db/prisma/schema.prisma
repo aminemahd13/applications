@@ -1,0 +1,546 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model password_reset_tokens {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String    @db.Uuid
+  token_hash String    @unique(map: "prt_token_hash_uq")
+  expires_at DateTime  @db.Timestamptz(6)
+  used_at    DateTime? @db.Timestamptz(6)
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id, expires_at], map: "prt_user_expires_idx")
+}
+
+model email_verification_tokens {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String    @db.Uuid
+  token_hash String    @unique(map: "evt_token_hash_uq")
+  expires_at DateTime  @db.Timestamptz(6)
+  used_at    DateTime? @db.Timestamptz(6)
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id, expires_at], map: "evt_user_expires_idx")
+}
+
+model admin_change_patches {
+  id                       String                   @id @db.Uuid
+  application_id           String                   @db.Uuid
+  step_id                  String                   @db.Uuid
+  submission_version_id    String                   @db.Uuid
+  ops                      Json
+  reason                   String
+  visibility               String                   @default("INTERNAL_ONLY")
+  created_by               String                   @db.Uuid
+  created_at               DateTime                 @default(now()) @db.Timestamptz(6)
+  is_active                Boolean                  @default(true)
+  applications             applications             @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                    users                    @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  workflow_steps           workflow_steps           @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  step_submission_versions step_submission_versions @relation(fields: [submission_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model applicant_profiles {
+  user_id         String   @id @db.Uuid
+  full_name       String?
+  phone           String?
+  education_level String?
+  institution     String?
+  city            String?
+  country         String?
+  links           Json     @default("[]")
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime @default(now()) @db.Timestamptz(6)
+  users           users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model application_step_states {
+  id                           String         @id @db.Uuid
+  application_id               String         @db.Uuid
+  step_id                      String         @db.Uuid
+  status                       String         @default("LOCKED")
+  current_draft_id             String?        @db.Uuid
+  latest_submission_version_id String?        @db.Uuid
+  revision_cycle_count         Int            @default(0)
+  unlocked_at                  DateTime?      @db.Timestamptz(6)
+  last_activity_at             DateTime       @default(now()) @db.Timestamptz(6)
+  applications                 applications   @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  workflow_steps               workflow_steps @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([application_id, step_id])
+  @@index([step_id, status, revision_cycle_count], map: "ass_step_status_revision_idx")
+  @@index([latest_submission_version_id], map: "ass_latest_submission_idx")
+}
+
+model applications {
+  id                                             String                     @id @db.Uuid
+  event_id                                       String                     @db.Uuid
+  applicant_user_id                              String                     @db.Uuid
+  decision_status                                String                     @default("NONE")
+  decision_published_at                          DateTime?                  @db.Timestamptz(6)
+  decision_draft                                 Json                       @default("{}")
+  tags                                           String[]                   @default([])
+  internal_notes                                 String?
+  assigned_reviewer_id                           String?                    @db.Uuid
+  created_at                                     DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at                                     DateTime                   @default(now()) @db.Timestamptz(6)
+  admin_change_patches                           admin_change_patches[]
+  application_step_states                        application_step_states[]
+  users_applications_applicant_user_idTousers    users                      @relation("applications_applicant_user_idTousers", fields: [applicant_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_applications_assigned_reviewer_idTousers users?                     @relation("applications_assigned_reviewer_idTousers", fields: [assigned_reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  events                                         events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  attendance_records                             attendance_records?
+  checkin_records                                checkin_records[]
+  needs_info_requests                            needs_info_requests[]
+  step_drafts                                    step_drafts[]
+  step_submission_versions                       step_submission_versions[]
+
+  @@unique([event_id, applicant_user_id])
+  @@index([applicant_user_id], map: "app_applicant_idx")
+  @@index([event_id, decision_status], map: "app_event_decision_idx")
+  @@index([event_id, updated_at], map: "app_event_updated_idx")
+  @@index([tags], map: "app_tags_gin", type: Gin)
+}
+
+model attendance_records {
+  application_id                     String                    @id @db.Uuid
+  confirmed_at                       DateTime?                 @db.Timestamptz(6)
+  confirmation_submission_version_id String?                   @db.Uuid
+  qr_token_hash                      String?
+  qr_issued_at                       DateTime?                 @db.Timestamptz(6)
+  checked_in_at                      DateTime?                 @db.Timestamptz(6)
+  checked_in_by                      String?                   @db.Uuid
+  status                             String                    @default("NONE")
+  applications                       applications              @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                              users?                    @relation(fields: [checked_in_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  step_submission_versions           step_submission_versions? @relation(fields: [confirmation_submission_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model audit_logs {
+  id                String   @id @db.Uuid
+  event_id          String?  @db.Uuid
+  actor_user_id     String?  @db.Uuid
+  action            String
+  entity_type       String
+  entity_id         String
+  before            Json?
+  after             Json?
+  meta              Json     @default("{}")
+  created_at        DateTime @default(now()) @db.Timestamptz(6)
+  request_id        String?
+  ip_address        String?
+  user_agent        String?
+  redaction_applied Boolean  @default(false)
+  users             users?   @relation(fields: [actor_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  events            events?  @relation(fields: [event_id], references: [id], onUpdate: NoAction)
+
+  @@index([event_id, created_at(sort: Desc)], map: "audit_event_time_idx")
+}
+
+model checkin_records {
+  id                    String        @id @db.Uuid
+  event_id              String        @db.Uuid
+  application_id        String?       @db.Uuid
+  staff_user_id         String        @db.Uuid
+  scanned_at            DateTime      @default(now()) @db.Timestamptz(6)
+  result                String
+  fail_reason           String?
+  raw_token_fingerprint String?
+  client_device_id      String?
+  applications          applications? @relation(fields: [application_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  events                events        @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                 users         @relation(fields: [staff_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model event_role_assignments {
+  id         String   @id @db.Uuid
+  event_id   String   @db.Uuid
+  user_id    String   @db.Uuid
+  role       String
+  overrides  Json     @default("{}")
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  events     events   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([event_id, user_id, role])
+  @@index([user_id], map: "era_user_idx")
+  @@index([user_id, event_id], map: "era_user_event_idx")
+  @@index([event_id, role], map: "era_event_idx")
+}
+
+model events {
+  id                     String                   @id @db.Uuid
+  series_key             String?
+  edition_label          String?
+  title                  String
+  slug                   String                   @unique
+  timezone               String
+  start_at               DateTime?                @db.Timestamptz(6)
+  end_at                 DateTime?                @db.Timestamptz(6)
+  venue_name             String?
+  venue_address          String?
+  venue_map_url          String?
+  description            String?
+  capacity               Int?
+  requires_email_verification Boolean                @default(false)
+  format                 String
+  application_open_at    DateTime?                @db.Timestamptz(6)
+  application_close_at   DateTime?                @db.Timestamptz(6)
+  status                 String                   @default("draft")
+  decision_config        Json                     @default("{}")
+  checkin_config         Json                     @default("{}")
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  is_system_site         Boolean                  @default(false)
+  applications           applications[]
+  audit_logs             audit_logs[]
+  checkin_records        checkin_records[]
+  event_role_assignments event_role_assignments[]
+  file_objects           file_objects[]
+  forms                  forms[]
+  messages               messages[]
+  microsites             microsites?
+  workflow_steps         workflow_steps[]
+
+  @@index([application_open_at, application_close_at], map: "events_open_close_idx")
+  @@index([status])
+  @@index([status, created_at(sort: Desc)], map: "events_status_created_idx")
+  @@index([is_system_site])
+}
+
+model field_verifications {
+  id                       String                   @id @db.Uuid
+  submission_version_id    String                   @db.Uuid
+  field_id                 String
+  status                   String                   @default("PENDING")
+  reason_code              String?
+  notes_internal           String?
+  notes_applicant          String?
+  set_by                   String                   @db.Uuid
+  set_at                   DateTime                 @default(now()) @db.Timestamptz(6)
+  file_object_id           String?                  @db.Uuid
+  file_objects             file_objects?            @relation(fields: [file_object_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                    users                    @relation(fields: [set_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  step_submission_versions step_submission_versions @relation(fields: [submission_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([submission_version_id, field_id, file_object_id], map: "field_verifications_uq")
+}
+
+model file_objects {
+  id                  String                @id @db.Uuid
+  event_id            String                @db.Uuid
+  storage_key         String
+  original_filename   String
+  mime_type           String
+  size_bytes          BigInt
+  sha256              String?
+  sensitivity         String                @default("normal")
+  virus_scan_status   String                @default("pending")
+  created_by          String                @db.Uuid
+  created_at          DateTime              @default(now()) @db.Timestamptz(6)
+  expires_at          DateTime?             @db.Timestamptz(6)
+  status              String                @default("STAGED")
+  field_verifications field_verifications[]
+  users               users                 @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  events              events                @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([event_id, created_at], map: "fo_event_created_idx")
+}
+
+model form_versions {
+  id                       String                     @id @db.Uuid
+  form_id                  String                     @db.Uuid
+  version_number           Int
+  schema                   Json
+  ui                       Json
+  published_by             String                     @db.Uuid
+  published_at             DateTime                   @default(now()) @db.Timestamptz(6)
+  forms                    forms                      @relation(fields: [form_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                    users                      @relation(fields: [published_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  step_drafts              step_drafts[]
+  step_submission_versions step_submission_versions[]
+  workflow_steps           workflow_steps[]
+
+  @@unique([form_id, version_number])
+}
+
+model forms {
+  id            String          @id @db.Uuid
+  event_id      String          @db.Uuid
+  name          String
+  draft_schema  Json            @default("{}")
+  draft_ui      Json            @default("{}")
+  created_at    DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime        @default(now()) @db.Timestamptz(6)
+  form_versions form_versions[]
+  events        events          @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model message_recipients {
+  id                    String    @id @db.Uuid
+  message_id            String    @db.Uuid
+  recipient_user_id     String    @db.Uuid
+  delivery_email_status String    @default("queued")
+  delivery_email_error  String?
+  read_at               DateTime? @db.Timestamptz(6)
+  created_at            DateTime  @default(now()) @db.Timestamptz(6)
+  delivery_inbox_status String?   @default("DELIVERED")
+  email_attempts        Int?      @default(0)
+  email_last_attempt_at DateTime? @db.Timestamptz(6)
+  email_failure_reason  String?
+  messages              messages  @relation(fields: [message_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                 users     @relation(fields: [recipient_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([message_id, recipient_user_id])
+  @@index([recipient_user_id, created_at(sort: Desc)], map: "mr_recipient_created_idx")
+  @@index([message_id, created_at(sort: Desc)], map: "mr_message_created_idx")
+  @@index([delivery_email_status, email_last_attempt_at], map: "mr_email_status_last_attempt_idx")
+}
+
+model messages {
+  id                       String               @id @db.Uuid
+  event_id                 String?              @db.Uuid
+  type                     String
+  title                    String
+  body_rich                Json                 @default("{}")
+  action_buttons           Json                 @default("[]")
+  created_by               String               @db.Uuid
+  created_at               DateTime             @default(now()) @db.Timestamptz(6)
+  body_text                String?
+  recipient_filter_json    Json?
+  resolved_recipient_count Int?
+  resolved_at              DateTime?            @db.Timestamptz(6)
+  status                   String?              @default("SENT")
+  message_recipients       message_recipients[]
+  users                    users                @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  events                   events?              @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([event_id, created_at(sort: Desc)], map: "msg_event_created_idx")
+}
+
+model needs_info_requests {
+  id                       String                    @id @db.Uuid
+  application_id           String                    @db.Uuid
+  step_id                  String                    @db.Uuid
+  submission_version_id    String?                   @db.Uuid
+  target_field_ids         String[]
+  message                  String
+  deadline_at              DateTime?                 @db.Timestamptz(6)
+  status                   String                    @default("OPEN")
+  created_by               String                    @db.Uuid
+  created_at               DateTime                  @default(now()) @db.Timestamptz(6)
+  resolved_at              DateTime?                 @db.Timestamptz(6)
+  applications             applications              @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                    users                     @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  workflow_steps           workflow_steps            @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  step_submission_versions step_submission_versions? @relation(fields: [submission_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([step_id, status], map: "nir_step_status_idx")
+  @@index([application_id, status], map: "nir_application_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model org_settings {
+  id         Int      @id
+  branding   Json     @default("{}")
+  security   Json     @default("{}")
+  email      Json     @default("{}")
+  storage    Json     @default("{}")
+  retention  Json     @default("{}")
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+}
+
+model review_records {
+  id                       String                   @id @db.Uuid
+  submission_version_id    String                   @db.Uuid
+  reviewer_id              String                   @db.Uuid
+  outcome                  String
+  checklist_result         Json                     @default("{}")
+  message_to_applicant     String?
+  notes_internal           String?
+  created_at               DateTime                 @default(now()) @db.Timestamptz(6)
+  users                    users                    @relation(fields: [reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  step_submission_versions step_submission_versions @relation(fields: [submission_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model schema_migrations {
+  version String @id @db.VarChar
+}
+
+model step_drafts {
+  id              String         @id @db.Uuid
+  application_id  String         @db.Uuid
+  step_id         String         @db.Uuid
+  form_version_id String         @db.Uuid
+  answers_draft   Json           @default("{}")
+  updated_at      DateTime       @default(now()) @db.Timestamptz(6)
+  applications    applications   @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  form_versions   form_versions  @relation(fields: [form_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  workflow_steps  workflow_steps @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model step_submission_versions {
+  id                   String                 @id @db.Uuid
+  application_id       String                 @db.Uuid
+  step_id              String                 @db.Uuid
+  form_version_id      String                 @db.Uuid
+  version_number       Int
+  answers_snapshot     Json
+  submitted_at         DateTime               @default(now()) @db.Timestamptz(6)
+  submitted_by         String                 @db.Uuid
+  admin_change_patches admin_change_patches[]
+  attendance_records   attendance_records[]
+  field_verifications  field_verifications[]
+  needs_info_requests  needs_info_requests[]
+  review_records       review_records[]
+  applications         applications           @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  form_versions        form_versions          @relation(fields: [form_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  workflow_steps       workflow_steps         @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                users                  @relation(fields: [submitted_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([application_id, step_id, version_number])
+}
+
+model users {
+  id                                                    String                      @id @db.Uuid
+  email                                                 String                      @unique @db.Citext
+  password_hash                                         String
+  email_verified_at                                     DateTime?                   @db.Timestamptz(6)
+  is_disabled                                           Boolean                     @default(false)
+  created_at                                            DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at                                            DateTime                    @default(now()) @db.Timestamptz(6)
+  is_global_admin                                       Boolean                     @default(false)
+  admin_change_patches                                  admin_change_patches[]
+  applicant_profiles                                    applicant_profiles?
+  applications_applications_applicant_user_idTousers    applications[]              @relation("applications_applicant_user_idTousers")
+  applications_applications_assigned_reviewer_idTousers applications[]              @relation("applications_assigned_reviewer_idTousers")
+  attendance_records                                    attendance_records[]
+  audit_logs                                            audit_logs[]
+  checkin_records                                       checkin_records[]
+  email_verification_tokens                             email_verification_tokens[]
+  event_role_assignments                                event_role_assignments[]
+  field_verifications                                   field_verifications[]
+  file_objects                                          file_objects[]
+  form_versions                                         form_versions[]
+  message_recipients                                    message_recipients[]
+  messages                                              messages[]
+  microsite_page_versions                               microsite_page_versions[]
+  microsite_versions                                    microsite_versions[]
+  needs_info_requests                                   needs_info_requests[]
+  password_reset_tokens                                 password_reset_tokens[]
+  review_records                                        review_records[]
+  step_submission_versions                              step_submission_versions[]
+}
+
+model workflow_steps {
+  id                       String                     @id @db.Uuid
+  event_id                 String                     @db.Uuid
+  step_index               Int
+  category                 String
+  title                    String
+  instructions_rich        Json                       @default("{}")
+  unlock_policy            String
+  unlock_at                DateTime?                  @db.Timestamptz(6)
+  review_required          Boolean                    @default(false)
+  reviewer_roles_allowed   Json                       @default("[\"reviewer\", \"organizer\"]")
+    reject_behavior          String                     @default("reject_resubmit_allowed")
+    strict_gating            Boolean                    @default(true)
+    sensitivity_level        String                     @default("NORMAL")
+    deadline_at              DateTime?                  @db.Timestamptz(6)
+  late_policy              String                     @default("allow")
+  max_revision_cycles      Int?
+  form_version_id          String?                    @db.Uuid
+  created_at               DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at               DateTime                   @default(now()) @db.Timestamptz(6)
+  admin_change_patches     admin_change_patches[]
+  application_step_states  application_step_states[]
+  needs_info_requests      needs_info_requests[]
+  step_drafts              step_drafts[]
+  step_submission_versions step_submission_versions[]
+  events                   events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  form_versions            form_versions?             @relation(fields: [form_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([event_id, step_index])
+  @@index([event_id, step_index], map: "ws_event_idx")
+}
+
+model microsite_page_versions {
+  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  microsite_id         String             @db.Uuid
+  microsite_version_id String             @db.Uuid
+  page_id              String             @db.Uuid
+  version              Int
+  slug                 String
+  title                String
+  position             Int
+  blocks               Json
+  seo                  Json
+  visibility           String
+  created_at           DateTime           @default(now()) @db.Timestamptz(6)
+  created_by           String?            @db.Uuid
+  users                users?             @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  microsites           microsites         @relation(fields: [microsite_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  microsite_versions   microsite_versions @relation(fields: [microsite_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  microsite_pages      microsite_pages    @relation(fields: [page_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([page_id, version])
+  @@unique([microsite_version_id, slug], map: "mpv_version_slug_idx")
+  @@index([microsite_id, version], map: "mpv_microsite_version_idx")
+  @@index([microsite_version_id], map: "mpv_parent_version_idx")
+  @@index([microsite_version_id, position], map: "mpv_version_pos_idx")
+}
+
+model microsite_pages {
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  microsite_id            String                    @db.Uuid
+  slug                    String
+  title                   String
+  position                Int                       @default(0)
+  blocks                  Json                      @default("[]")
+  seo                     Json                      @default("{}")
+  visibility              String                    @default("PUBLIC")
+  created_at              DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime                  @default(now()) @db.Timestamptz(6)
+  microsite_page_versions microsite_page_versions[]
+  microsites              microsites                @relation(fields: [microsite_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([microsite_id, slug])
+  @@index([microsite_id, position], map: "mp_pos_idx")
+  @@index([microsite_id, slug], map: "mp_slug_idx")
+}
+
+model microsite_versions {
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  microsite_id            String                    @db.Uuid
+  version                 Int
+  settings                Json
+  created_at              DateTime                  @default(now()) @db.Timestamptz(6)
+  created_by              String?                   @db.Uuid
+  microsite_page_versions microsite_page_versions[]
+  users                   users?                    @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  microsites              microsites                @relation(fields: [microsite_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([microsite_id, version])
+}
+
+model microsites {
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  event_id                String                    @unique @db.Uuid
+  settings                Json                      @default("{}")
+  published_version       Int                       @default(0)
+  created_at              DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime                  @default(now()) @db.Timestamptz(6)
+  microsite_page_versions microsite_page_versions[]
+  microsite_pages         microsite_pages[]
+  microsite_versions      microsite_versions[]
+  events                  events                    @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
