@@ -14,6 +14,17 @@ CREATE TABLE IF NOT EXISTS "password_reset_tokens" (
   CONSTRAINT "password_reset_tokens_pkey" PRIMARY KEY ("id")
 );
 
+ALTER TABLE "password_reset_tokens"
+  ADD COLUMN IF NOT EXISTS "user_id" UUID,
+  ADD COLUMN IF NOT EXISTS "token_hash" TEXT,
+  ADD COLUMN IF NOT EXISTS "expires_at" TIMESTAMPTZ(6),
+  ADD COLUMN IF NOT EXISTS "used_at" TIMESTAMPTZ(6),
+  ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ(6);
+
+ALTER TABLE "password_reset_tokens"
+  ALTER COLUMN "id" SET DEFAULT gen_random_uuid(),
+  ALTER COLUMN "created_at" SET DEFAULT CURRENT_TIMESTAMP;
+
 CREATE TABLE IF NOT EXISTS "email_verification_tokens" (
   "id" UUID NOT NULL DEFAULT gen_random_uuid(),
   "user_id" UUID NOT NULL,
@@ -23,6 +34,17 @@ CREATE TABLE IF NOT EXISTS "email_verification_tokens" (
   "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "email_verification_tokens_pkey" PRIMARY KEY ("id")
 );
+
+ALTER TABLE "email_verification_tokens"
+  ADD COLUMN IF NOT EXISTS "user_id" UUID,
+  ADD COLUMN IF NOT EXISTS "token_hash" TEXT,
+  ADD COLUMN IF NOT EXISTS "expires_at" TIMESTAMPTZ(6),
+  ADD COLUMN IF NOT EXISTS "used_at" TIMESTAMPTZ(6),
+  ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ(6);
+
+ALTER TABLE "email_verification_tokens"
+  ALTER COLUMN "id" SET DEFAULT gen_random_uuid(),
+  ALTER COLUMN "created_at" SET DEFAULT CURRENT_TIMESTAMP;
 
 DO $$
 BEGIN
@@ -205,6 +227,20 @@ CREATE TABLE IF NOT EXISTS "microsites" (
   CONSTRAINT "microsites_pkey" PRIMARY KEY ("id")
 );
 
+ALTER TABLE "microsites"
+  ADD COLUMN IF NOT EXISTS "event_id" UUID,
+  ADD COLUMN IF NOT EXISTS "settings" JSONB,
+  ADD COLUMN IF NOT EXISTS "published_version" INTEGER,
+  ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ(6),
+  ADD COLUMN IF NOT EXISTS "updated_at" TIMESTAMPTZ(6);
+
+ALTER TABLE "microsites"
+  ALTER COLUMN "id" SET DEFAULT gen_random_uuid(),
+  ALTER COLUMN "settings" SET DEFAULT '{}'::jsonb,
+  ALTER COLUMN "published_version" SET DEFAULT 0,
+  ALTER COLUMN "created_at" SET DEFAULT CURRENT_TIMESTAMP,
+  ALTER COLUMN "updated_at" SET DEFAULT CURRENT_TIMESTAMP;
+
 CREATE TABLE IF NOT EXISTS "microsite_pages" (
   "id" UUID NOT NULL DEFAULT gen_random_uuid(),
   "microsite_id" UUID NOT NULL,
@@ -219,6 +255,26 @@ CREATE TABLE IF NOT EXISTS "microsite_pages" (
   CONSTRAINT "microsite_pages_pkey" PRIMARY KEY ("id")
 );
 
+ALTER TABLE "microsite_pages"
+  ADD COLUMN IF NOT EXISTS "microsite_id" UUID,
+  ADD COLUMN IF NOT EXISTS "slug" TEXT,
+  ADD COLUMN IF NOT EXISTS "title" TEXT,
+  ADD COLUMN IF NOT EXISTS "position" INTEGER,
+  ADD COLUMN IF NOT EXISTS "blocks" JSONB,
+  ADD COLUMN IF NOT EXISTS "seo" JSONB,
+  ADD COLUMN IF NOT EXISTS "visibility" TEXT,
+  ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ(6),
+  ADD COLUMN IF NOT EXISTS "updated_at" TIMESTAMPTZ(6);
+
+ALTER TABLE "microsite_pages"
+  ALTER COLUMN "id" SET DEFAULT gen_random_uuid(),
+  ALTER COLUMN "position" SET DEFAULT 0,
+  ALTER COLUMN "blocks" SET DEFAULT '[]'::jsonb,
+  ALTER COLUMN "seo" SET DEFAULT '{}'::jsonb,
+  ALTER COLUMN "visibility" SET DEFAULT 'PUBLIC',
+  ALTER COLUMN "created_at" SET DEFAULT CURRENT_TIMESTAMP,
+  ALTER COLUMN "updated_at" SET DEFAULT CURRENT_TIMESTAMP;
+
 CREATE TABLE IF NOT EXISTS "microsite_versions" (
   "id" UUID NOT NULL DEFAULT gen_random_uuid(),
   "microsite_id" UUID NOT NULL,
@@ -228,6 +284,17 @@ CREATE TABLE IF NOT EXISTS "microsite_versions" (
   "created_by" UUID,
   CONSTRAINT "microsite_versions_pkey" PRIMARY KEY ("id")
 );
+
+ALTER TABLE "microsite_versions"
+  ADD COLUMN IF NOT EXISTS "microsite_id" UUID,
+  ADD COLUMN IF NOT EXISTS "version" INTEGER,
+  ADD COLUMN IF NOT EXISTS "settings" JSONB,
+  ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ(6),
+  ADD COLUMN IF NOT EXISTS "created_by" UUID;
+
+ALTER TABLE "microsite_versions"
+  ALTER COLUMN "id" SET DEFAULT gen_random_uuid(),
+  ALTER COLUMN "created_at" SET DEFAULT CURRENT_TIMESTAMP;
 
 CREATE TABLE IF NOT EXISTS "microsite_page_versions" (
   "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -245,6 +312,24 @@ CREATE TABLE IF NOT EXISTS "microsite_page_versions" (
   "created_by" UUID,
   CONSTRAINT "microsite_page_versions_pkey" PRIMARY KEY ("id")
 );
+
+ALTER TABLE "microsite_page_versions"
+  ADD COLUMN IF NOT EXISTS "microsite_id" UUID,
+  ADD COLUMN IF NOT EXISTS "microsite_version_id" UUID,
+  ADD COLUMN IF NOT EXISTS "page_id" UUID,
+  ADD COLUMN IF NOT EXISTS "version" INTEGER,
+  ADD COLUMN IF NOT EXISTS "slug" TEXT,
+  ADD COLUMN IF NOT EXISTS "title" TEXT,
+  ADD COLUMN IF NOT EXISTS "position" INTEGER,
+  ADD COLUMN IF NOT EXISTS "blocks" JSONB,
+  ADD COLUMN IF NOT EXISTS "seo" JSONB,
+  ADD COLUMN IF NOT EXISTS "visibility" TEXT,
+  ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ(6),
+  ADD COLUMN IF NOT EXISTS "created_by" UUID;
+
+ALTER TABLE "microsite_page_versions"
+  ALTER COLUMN "id" SET DEFAULT gen_random_uuid(),
+  ALTER COLUMN "created_at" SET DEFAULT CURRENT_TIMESTAMP;
 
 DO $$
 BEGIN
@@ -411,6 +496,9 @@ ON "microsite_page_versions" ("microsite_version_id", "position");
 -- ============================================================================
 -- TYPE / DEFAULT CONVERGENCE
 -- ============================================================================
+ALTER TABLE "file_objects"
+  ALTER COLUMN "status" DROP DEFAULT;
+
 DO $$
 DECLARE
   file_status_udt TEXT;
@@ -430,6 +518,14 @@ END
 $$;
 
 DROP TYPE IF EXISTS "FileStatus";
+
+ALTER TABLE "file_objects"
+  ALTER COLUMN "status" SET DEFAULT 'STAGED',
+  ALTER COLUMN "status" SET NOT NULL;
+
+UPDATE "applicant_profiles"
+SET "links" = '[]'::jsonb
+WHERE jsonb_typeof("links") IS DISTINCT FROM 'array';
 
 ALTER TABLE "applicant_profiles"
   ALTER COLUMN "links" SET DEFAULT '[]'::jsonb;
