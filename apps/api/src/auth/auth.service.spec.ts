@@ -1,0 +1,209 @@
+import { AuthService } from './auth.service';
+import {
+    BadRequestException,
+    ForbiddenException,
+    UnauthorizedException,
+} from '@nestjs/common';
+import * as argon2 from 'argon2';
+
+// Pre-hash a known password so tests don't need real argon2 rounds
+let TEST_HASH: string;
+
+beforeAll(async () => {
+    TEST_HASH = await argon2.hash('correct-password');
+});
+
+describe('AuthService', () => {
+    let service: AuthService;
+    let mockPrisma: any;
+    let mockOrgSettings: any;
+    let mockRateLimiter: any;
+
+    beforeEach(() => {
+        mockPrisma = {
+            users: {
+                findUnique: jest.fn(),
+                create: jest.fn(),
+                update: jest.fn(),
+            },
+            applicant_profiles: {
+                upsert: jest.fn(),
+                create: jest.fn(),
+            },
+            event_role_assignments: {
+                findFirst: jest.fn().mockResolvedValue(null),
+            },
+            $transaction: jest.fn((fn: any) => fn(mockPrisma)),
+        };
+
+        mockOrgSettings = {
+            getSettings: jest.fn().mockResolvedValue({
+                security: {
+                    registrationEnabled: true,
+                    maintenanceMode: false,
+                    emailVerificationRequired: false,
+                },
+            }),
+        };
+
+        mockRateLimiter = {
+            isAllowed: jest.fn().mockResolvedValue(true),
+            recordAttempt: jest.fn(),
+            trackSession: jest.fn(),
+        };
+
+        service = new AuthService(mockPrisma, mockOrgSettings, mockRateLimiter);
+    });
+
+    // ─── signup ──────────────────────────────────────────
+
+    describe('signup', () => {
+        const dto = { email: 'test@example.com', password: 'StrongPass123!' };
+
+        it('should throw ForbiddenException when registration is disabled', async () => {
+            mockOrgSettings.getSettings.mockResolvedValue({
+                security: { registrationEnabled: false },
+            });
+
+            await expect(service.signup(dto)).rejects.toThrow(ForbiddenException);
+        });
+
+        it('should throw BadRequestException when email already exists (verified)', async () => {
+            mockPrisma.users.findUnique.mockResolvedValue({
+                id: 'user-1',
+                email: dto.email,
+                email_verified_at: new Date(),
+            });
+
+            await expect(service.signup(dto)).rejects.toThrow(BadRequestException);
+        });
+
+        it('should succeed for new user', async () => {
+            mockPrisma.users.findUnique.mockResolvedValue(null);
+            mockPrisma.$transaction.mockImplementation(async (fn: any) => {
+                return fn(mockPrisma);
+            });
+
+            // Mock create to return a new user
+            mockPrisma.users.create.mockResolvedValue({
+                id: 'new-user-uuid',
+                email: dto.email,
+            });
+
+            const result = await service.signup(dto);
+            expect(result).toBeDefined();
+            expect(result.email).toBe(dto.email);
+            expect(result.wasExistingUnverified).toBe(false);
+        });
+    });
+
+    // ─── validateUser ────────────────────────────────────
+
+    describe('validateUser', () => {
+        it('should return user (without password_hash) with correct password', async () => {
+            mockPrisma.users.findUnique.mockResolvedValue({
+                id: 'user-1',
+                email: 'test@example.com',
+                password_hash: TEST_HASH,
+                is_disabled: false,
+                is_global_admin: false,
+            });
+
+            const result = await service.validateUser(
+                'test@example.com',
+                'correct-password',
+            );
+            expect(result).toBeDefined();
+            expect(result.id).toBe('user-1');
+            expect(result.password_hash).toBeUndefined();
+        });
+
+        it('should return null with incorrect password', async () => {
+            mockPrisma.users.findUnique.mockResolvedValue({
+                id: 'user-1',
+                email: 'test@example.com',
+                password_hash: TEST_HASH,
+                is_disabled: false,
+            });
+
+            const result = await service.validateUser(
+                'test@example.com',
+                'wrong-password',
+            );
+            expect(result).toBeNull();
+        });
+
+        it('should return null for disabled user', async () => {
+            mockPrisma.users.findUnique.mockResolvedValue({
+                id: 'user-1',
+                email: 'test@example.com',
+                password_hash: TEST_HASH,
+                is_disabled: true,
+            });
+
+            const result = await service.validateUser(
+                'test@example.com',
+                'correct-password',
+            );
+            expect(result).toBeNull();
+        });
+
+        it('should return null for non-existent user', async () => {
+            mockPrisma.users.findUnique.mockResolvedValue(null);
+
+            const result = await service.validateUser(
+                'nobody@example.com',
+                'any-password',
+            );
+            expect(result).toBeNull();
+        });
+    });
+
+    // ─── changePassword ──────────────────────────────────
+
+    describe('changePassword', () => {
+        it('should throw BadRequestException when passwords are missing', async () => {
+            await expect(
+                service.changePassword('user-1', '', 'newpass123'),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('should throw BadRequestException when new password is too short', async () => {
+            await expect(
+                service.changePassword('user-1', 'current', 'short'),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('should throw UnauthorizedException when current password is wrong', async () => {
+            mockPrisma.users.findUnique.mockResolvedValue({
+                id: 'user-1',
+                password_hash: TEST_HASH,
+            });
+
+            await expect(
+                service.changePassword('user-1', 'wrong-current', 'newpassword123'),
+            ).rejects.toThrow(UnauthorizedException);
+        });
+
+        it('should succeed with correct current password and valid new password', async () => {
+            mockPrisma.users.findUnique.mockResolvedValue({
+                id: 'user-1',
+                password_hash: TEST_HASH,
+            });
+            mockPrisma.users.update.mockResolvedValue({});
+
+            const result = await service.changePassword(
+                'user-1',
+                'correct-password',
+                'new-strong-password-123',
+            );
+            expect(result.message).toContain('changed successfully');
+            expect(mockPrisma.users.update).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: { id: 'user-1' },
+                    data: expect.objectContaining({ password_hash: expect.any(String) }),
+                }),
+            );
+        });
+    });
+});

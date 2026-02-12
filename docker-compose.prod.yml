@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-event_platform}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    networks:
+      - internal
+
+  minio:
+    image: minio/minio
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    networks:
+      - internal
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: always
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      
+      # Database & Redis
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-event_platform}
+      REDIS_URL: redis://redis:6379
+      
+      # Security
+      JWT_SECRET: ${JWT_SECRET}
+      SESSION_SECRET: ${SESSION_SECRET}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN}
+      
+      # App Config
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      
+      # S3 / MinIO Storage
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-uploads}
+      
+      # Mail (SMTP)
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM:-noreply@event-platform.com}
+      
+      # Audit & Session Management
+      SESSION_REVOKE_SCAN_FALLBACK: ${SESSION_REVOKE_SCAN_FALLBACK:-false}
+      SESSION_REVOKE_SCAN_MAX_KEYS: ${SESSION_REVOKE_SCAN_MAX_KEYS:-5000}
+      AUDIT_QUEUE_MAX_SIZE: ${AUDIT_QUEUE_MAX_SIZE:-2000}
+      AUDIT_MAX_RETRIES: ${AUDIT_MAX_RETRIES:-2}
+      AUDIT_EVENT_LOOKUP_CACHE_TTL_MS: ${AUDIT_EVENT_LOOKUP_CACHE_TTL_MS:-120000}
+
+    networks:
+      - internal
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: always
+    depends_on:
+      - api
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      
+      # Routing & Domain
+      NEXT_PUBLIC_ROUTING_MODE: ${NEXT_PUBLIC_ROUTING_MODE:-path}
+      NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-localhost}
+      
+      # API & Assets
+      NEXT_PUBLIC_API_URL: /api/v1
+      # If using external S3/CDN directly, set this. Otherwise leave empty for proxying or relative paths.
+      NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST}
+      NEXT_PUBLIC_DIRECT_ASSET_HOST: ${NEXT_PUBLIC_DIRECT_ASSET_HOST}
+      
+      # Session
+      SESSION_VALIDATION_MAX_AGE_SECONDS: ${SESSION_VALIDATION_MAX_AGE_SECONDS:-900}
+      
+    networks:
+      - internal
+
+  nginx:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "80:80"
+      # Expose MinIO Console if needed (optional, for debugging)
+      # - "9001:9001" 
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - api
+      - web
+    networks:
+      - internal
+      - public
+
+networks:
+  internal:
+    driver: bridge
+  public:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  minio_data:

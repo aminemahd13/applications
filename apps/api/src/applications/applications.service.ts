@@ -1,0 +1,1731 @@
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
+import { PrismaService } from '../common/prisma/prisma.service';
+import { ClsService } from 'nestjs-cls';
+import { Prisma } from '@event-platform/db';
+import {
+  ApplicationFilterDto,
+  ApplicationSummary,
+  ApplicationDetail,
+  ApplicantProfile,
+  DecisionStatus,
+  StepStatus,
+  PaginatedResponse,
+} from '@event-platform/shared';
+import { StepStateService } from './step-state.service';
+import * as jwt from 'jsonwebtoken';
+
+@Injectable()
+export class ApplicationsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cls: ClsService,
+    private readonly stepStateService: StepStateService,
+  ) {}
+
+  /**
+   * List applications for an event (admin/reviewer view)
+   */
+  async findAll(
+    eventId: string,
+    filter: ApplicationFilterDto,
+  ): Promise<PaginatedResponse<ApplicationSummary>> {
+    const {
+      cursor,
+      limit,
+      order,
+      decisionStatus,
+      stepId,
+      stepStatus,
+      assignedReviewerId,
+      tags,
+      q,
+    } = filter;
+
+    const where: any = { event_id: eventId };
+
+    if (cursor) where.id = { lt: cursor };
+    if (decisionStatus) where.decision_status = decisionStatus;
+    if (assignedReviewerId) where.assigned_reviewer_id = assignedReviewerId;
+    if (tags && tags.length > 0) where.tags = { hasEvery: tags };
+
+    if (q && q.trim().length > 0) {
+      const query = q.trim();
+      where.OR = [
+        {
+          users_applications_applicant_user_idTousers: {
+            is: {
+              email: { contains: query, mode: 'insensitive' },
+            },
+          },
+        },
+        {
+          users_applications_applicant_user_idTousers: {
+            is: {
+              applicant_profiles: {
+                is: {
+                  full_name: { contains: query, mode: 'insensitive' },
+                },
+              },
+            },
+          },
+        },
+      ];
+    }
+
+    // Filter by step status requires a join
+    if (stepId && stepStatus) {
+      where.application_step_states = {
+        some: {
+          step_id: stepId,
+          status: stepStatus,
+        },
+      };
+    }
+
+    const applications = await this.prisma.applications.findMany({
+      where,
+      orderBy: { updated_at: order },
+      take: limit + 1,
+      include: {
+        users_applications_applicant_user_idTousers: {
+          select: {
+            id: true,
+            email: true,
+            applicant_profiles: {
+              select: {
+                full_name: true,
+                phone: true,
+                education_level: true,
+                institution: true,
+                city: true,
+                country: true,
+                links: true,
+              },
+            },
+          },
+        },
+        application_step_states: {
+          select: {
+            status: true,
+            workflow_steps: { select: { step_index: true } },
+          },
+        },
+        attendance_records: {
+          select: { status: true },
+        },
+      },
+    });
+
+    const hasMore = applications.length > limit;
+    const data = hasMore ? applications.slice(0, -1) : applications;
+
+    return {
+      data: data.map((app) => this.toSummary(app)),
+      meta: {
+        nextCursor: hasMore ? data[data.length - 1].id : null,
+        hasMore,
+      },
+    };
+  }
+
+  /**
+   * Export all applications for an event as CSV with direct links.
+   */
+  async exportEventApplicationsCsv(
+    eventId: string,
+  ): Promise<{ filename: string; csv: string }> {
+    const event = await this.prisma.events.findUnique({
+      where: { id: eventId },
+      select: { id: true, slug: true, title: true },
+    });
+    if (!event) throw new NotFoundException('Event not found');
+
+    const applications = await this.prisma.applications.findMany({
+      where: { event_id: eventId },
+      orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+      include: {
+        users_applications_applicant_user_idTousers: {
+          select: {
+            id: true,
+            email: true,
+            applicant_profiles: {
+              select: {
+                full_name: true,
+                phone: true,
+                education_level: true,
+                institution: true,
+                city: true,
+                country: true,
+                links: true,
+              },
+            },
+          },
+        },
+        application_step_states: {
+          select: {
+            step_id: true,
+            status: true,
+            latest_submission_version_id: true,
+            workflow_steps: { select: { title: true, step_index: true } },
+          },
+        },
+        attendance_records: {
+          select: { status: true },
+        },
+      },
+    });
+
+    const submissionVersionIds = Array.from(
+      new Set(
+        applications.flatMap((application) =>
+          (application.application_step_states ?? [])
+            .map((stepState) => stepState.latest_submission_version_id)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      ),
+    );
+
+    const effectiveAnswersBySubmissionVersionId =
+      await this.getEffectiveAnswersBySubmissionVersionIds(
+        submissionVersionIds,
+      );
+
+    const responseColumnKeySet = new Set<string>();
+    const responseHeaderByColumnKey = new Map<string, string>();
+    const responseHeaderUsageCount = new Map<string, number>();
+    const responseValuesByApplicationId = new Map<
+      string,
+      Map<string, string>
+    >();
+    const fileIdsByApplicationId = new Map<string, Set<string>>();
+    for (const application of applications) {
+      const responseValues = new Map<string, string>();
+      const fileIds = new Set<string>();
+      const sortedStepStates = [...(application.application_step_states ?? [])]
+        .sort(
+          (a, b) =>
+            (a.workflow_steps?.step_index ?? 0) -
+              (b.workflow_steps?.step_index ?? 0) ||
+            a.step_id.localeCompare(b.step_id),
+        );
+      for (const stepState of sortedStepStates) {
+        const submissionVersionId = stepState.latest_submission_version_id;
+        if (!submissionVersionId) continue;
+        const effectiveAnswers = this.normalizeAnswersShape(
+          effectiveAnswersBySubmissionVersionId.get(submissionVersionId),
+        );
+        this.collectFileObjectIds(
+          effectiveAnswers,
+          fileIds,
+        );
+
+        const stepIndex = stepState.workflow_steps?.step_index ?? 0;
+        const stepId = stepState.step_id;
+        const sortedAnswerEntries = Object.entries(effectiveAnswers).sort(
+          ([a], [b]) =>
+            a.localeCompare(b, undefined, {
+              numeric: true,
+              sensitivity: 'base',
+            }),
+        );
+
+        for (const [fieldKey, fieldValue] of sortedAnswerEntries) {
+          const responseColumnKey = `${String(stepIndex)}:${stepId}:${fieldKey}`;
+          if (!responseColumnKeySet.has(responseColumnKey)) {
+            responseColumnKeySet.add(responseColumnKey);
+            const baseHeader = this.buildResponseHeaderLabel(
+              stepState.workflow_steps?.title,
+              stepState.workflow_steps?.step_index,
+              fieldKey,
+            );
+            const usageCount = responseHeaderUsageCount.get(baseHeader) ?? 0;
+            responseHeaderUsageCount.set(baseHeader, usageCount + 1);
+            const finalHeader =
+              usageCount === 0 ? baseHeader : `${baseHeader} (${usageCount + 1})`;
+            responseHeaderByColumnKey.set(responseColumnKey, finalHeader);
+          }
+
+          responseValues.set(
+            responseColumnKey,
+            this.serializeAnswerValueForCsv(fieldValue),
+          );
+        }
+      }
+      if (fileIds.size > 0) {
+        fileIdsByApplicationId.set(application.id, fileIds);
+      }
+      if (responseValues.size > 0) {
+        responseValuesByApplicationId.set(application.id, responseValues);
+      }
+    }
+
+    const responseColumnKeys = Array.from(responseColumnKeySet).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }),
+    );
+    const responseHeaders = responseColumnKeys.map(
+      (columnKey) => responseHeaderByColumnKey.get(columnKey) ?? columnKey,
+    );
+
+    const allFileIds = Array.from(
+      new Set(
+        Array.from(fileIdsByApplicationId.values()).flatMap((fileIds) =>
+          Array.from(fileIds),
+        ),
+      ),
+    );
+    const fileObjects = allFileIds.length
+      ? await this.prisma.file_objects.findMany({
+          where: {
+            id: { in: allFileIds },
+            event_id: eventId,
+          },
+          select: {
+            id: true,
+            original_filename: true,
+            mime_type: true,
+            size_bytes: true,
+            status: true,
+          },
+        })
+      : [];
+    const fileObjectsById = new Map(fileObjects.map((file) => [file.id, file]));
+
+    const appBaseUrl = this.getAppBaseUrl();
+    const headers = [
+      'applicationId',
+      'eventId',
+      'eventSlug',
+      'eventTitle',
+      'applicantUserId',
+      'applicantEmail',
+      'applicantName',
+      'phone',
+      'education',
+      'institution',
+      'city',
+      'country',
+      'profileLinks',
+      'decisionStatus',
+      'decisionPublishedAt',
+      'derivedStatus',
+      'tags',
+      'stepStatuses',
+      'uploadedFileCount',
+      'uploadedFileIds',
+      'uploadedFiles',
+      'staffApplicationPath',
+      'adminApplicationPath',
+      'staffApplicationUrl',
+      'adminApplicationUrl',
+      'applicationCreatedAt',
+      'applicationUpdatedAt',
+      ...responseHeaders,
+    ];
+
+    const rows: unknown[][] = applications.map((application) => {
+      const summary = this.toSummary(application);
+      const user = application.users_applications_applicant_user_idTousers;
+      const profile = user?.applicant_profiles;
+      const stepStatuses = [...(application.application_step_states ?? [])]
+        .sort(
+          (a, b) =>
+            (a.workflow_steps?.step_index ?? 0) -
+            (b.workflow_steps?.step_index ?? 0),
+        )
+        .map(
+          (stepState) =>
+            `${stepState.workflow_steps?.step_index ?? 0}:${stepState.workflow_steps?.title ?? stepState.step_id}=${stepState.status}`,
+        )
+        .join(' | ');
+
+      const fileIds = Array.from(
+        fileIdsByApplicationId.get(application.id) ?? [],
+      );
+      const uploadedFiles = fileIds
+        .map((fileId) => {
+          const file = fileObjectsById.get(fileId);
+          if (!file) return fileId;
+          return `${file.original_filename} (${String(file.size_bytes)} bytes, ${file.mime_type}, ${file.status})`;
+        })
+        .join(' | ');
+
+      const staffApplicationPath = `/staff/${eventId}/applications/${application.id}`;
+      const adminApplicationPath = `/admin/events/${eventId}/applications/${application.id}`;
+      const responseValues = responseValuesByApplicationId.get(application.id);
+
+      return [
+        application.id,
+        event.id,
+        event.slug,
+        event.title,
+        summary.applicantUserId,
+        summary.applicantEmail ?? '',
+        summary.applicantName ?? '',
+        profile?.phone ?? '',
+        profile?.education_level ?? '',
+        profile?.institution ?? '',
+        profile?.city ?? '',
+        profile?.country ?? '',
+        this.formatProfileLinks(profile?.links),
+        summary.decisionStatus,
+        this.toIsoString(summary.decisionPublishedAt),
+        summary.derivedStatus,
+        (summary.tags ?? []).join(' | '),
+        stepStatuses,
+        fileIds.length,
+        fileIds.join(' | '),
+        uploadedFiles,
+        staffApplicationPath,
+        adminApplicationPath,
+        `${appBaseUrl}${staffApplicationPath}`,
+        `${appBaseUrl}${adminApplicationPath}`,
+        this.toIsoString(application.created_at),
+        this.toIsoString(application.updated_at),
+        ...responseColumnKeys.map(
+          (columnKey) => responseValues?.get(columnKey) ?? '',
+        ),
+      ];
+    });
+
+    const safeSlug = this.toFilenameSafePart(event.slug || event.id);
+    return {
+      filename: `applications-${safeSlug}.csv`,
+      csv: this.buildCsv(headers, rows),
+    };
+  }
+
+  /**
+   * Get application by ID with full step states
+   */
+  async findById(
+    eventId: string,
+    applicationId: string,
+  ): Promise<ApplicationDetail> {
+    let app = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+      include: {
+        users_applications_applicant_user_idTousers: {
+          select: {
+            id: true,
+            email: true,
+            applicant_profiles: {
+              select: {
+                full_name: true,
+                phone: true,
+                education_level: true,
+                institution: true,
+                city: true,
+                country: true,
+                links: true,
+              },
+            },
+          },
+        },
+        application_step_states: {
+          include: {
+            workflow_steps: {
+              select: {
+                title: true,
+                step_index: true,
+                deadline_at: true,
+                instructions_rich: true,
+                form_versions: { select: { schema: true } },
+              },
+            },
+          },
+          orderBy: { workflow_steps: { step_index: 'asc' } },
+        },
+        attendance_records: {
+          select: { status: true },
+        },
+      },
+    });
+
+    if (!app) throw new NotFoundException('Application not found');
+    const updated = await this.stepStateService.ensureStepStates(
+      app.id,
+      eventId,
+    );
+    if (updated) {
+      app = await this.prisma.applications.findFirst({
+        where: { id: applicationId, event_id: eventId },
+        include: {
+          users_applications_applicant_user_idTousers: {
+            select: {
+              id: true,
+              email: true,
+              applicant_profiles: {
+                select: {
+                  full_name: true,
+                  phone: true,
+                  education_level: true,
+                  institution: true,
+                  city: true,
+                  country: true,
+                  links: true,
+                },
+              },
+            },
+          },
+          application_step_states: {
+            include: {
+              workflow_steps: {
+                select: {
+                  title: true,
+                  step_index: true,
+                  deadline_at: true,
+                  instructions_rich: true,
+                  form_versions: { select: { schema: true } },
+                },
+              },
+            },
+            orderBy: { workflow_steps: { step_index: 'asc' } },
+          },
+          attendance_records: {
+            select: { status: true },
+          },
+        },
+      });
+      if (!app) throw new NotFoundException('Application not found');
+    }
+
+    const answersByStepId = await this.getEffectiveAnswersByStepId(
+      app.application_step_states ?? [],
+    );
+
+    const detail = this.toDetail(app, { answersByStepId });
+    const profile = await this.prisma.applicant_profiles.findUnique({
+      where: { user_id: detail.applicantUserId },
+      select: {
+        full_name: true,
+        phone: true,
+        education_level: true,
+        institution: true,
+        city: true,
+        country: true,
+        links: true,
+      },
+    });
+    if (profile) {
+      detail.applicantProfile = this.mapApplicantProfile(profile) ?? undefined;
+      if (!detail.applicantName && profile.full_name) {
+        detail.applicantName = profile.full_name;
+      }
+    }
+
+    return detail;
+  }
+
+  /**
+   * Create new application (applicant starting their application)
+   */
+  async create(eventId: string): Promise<ApplicationDetail> {
+    const userId = this.cls.get('actorId');
+
+    // Check event exists and applications are open
+    const event = await this.prisma.events.findFirst({
+      where: { id: eventId },
+    });
+    if (!event) throw new NotFoundException('Event not found');
+
+    // Enforce event must be published
+    if (String(event.status).toLowerCase() !== 'published') {
+      throw new ForbiddenException('Applications are not open for this event');
+    }
+
+    // Enforce application window (if set)
+    const now = new Date();
+    if (
+      event.application_open_at &&
+      now < new Date(event.application_open_at)
+    ) {
+      throw new ForbiddenException('Applications have not opened yet');
+    }
+    if (
+      event.application_close_at &&
+      now > new Date(event.application_close_at)
+    ) {
+      throw new ForbiddenException('Applications are closed');
+    }
+
+    if (event.capacity !== null && event.capacity !== undefined) {
+      const totalApplications = await this.prisma.applications.count({
+        where: { event_id: eventId },
+      });
+      if (totalApplications >= event.capacity) {
+        throw new ForbiddenException('Event capacity has been reached');
+      }
+    }
+
+    // Check for existing application
+    const existing = await this.prisma.applications.findFirst({
+      where: { event_id: eventId, applicant_user_id: userId },
+    });
+    if (existing) {
+      const detail = await this.findMyApplication(eventId);
+      if (!detail) throw new NotFoundException('Application not found');
+      return detail;
+    }
+
+    // Create application
+    let applicationId: string;
+    try {
+      const application = await this.prisma.applications.create({
+        data: {
+          id: crypto.randomUUID(),
+          event_id: eventId,
+          applicant_user_id: userId,
+          decision_status: DecisionStatus.NONE,
+          decision_draft: {},
+          tags: [],
+        },
+      });
+      applicationId = application.id;
+    } catch (error) {
+      // Handle create races (e.g. duplicate client requests in dev strict mode).
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const racedExisting = await this.prisma.applications.findFirst({
+          where: { event_id: eventId, applicant_user_id: userId },
+          select: { id: true },
+        });
+        if (racedExisting?.id) {
+          const detail = await this.findMyApplication(eventId);
+          if (!detail) throw new NotFoundException('Application not found');
+          return detail;
+        }
+      }
+      throw error;
+    }
+
+    // Initialize step states based on workflow
+    await this.stepStateService.initializeStepStates(applicationId, eventId);
+
+    const detail = await this.findMyApplication(eventId);
+    if (!detail) throw new NotFoundException('Application not found');
+    return detail;
+  }
+
+  /**
+   * Get the current user's application for an event
+   */
+  async findMyApplication(eventId: string): Promise<ApplicationDetail | null> {
+    const userId = this.cls.get('actorId');
+
+    let app = await this.prisma.applications.findFirst({
+      where: { event_id: eventId, applicant_user_id: userId },
+      include: {
+        users_applications_applicant_user_idTousers: {
+          select: {
+            id: true,
+            email: true,
+            applicant_profiles: {
+              select: {
+                full_name: true,
+                phone: true,
+                education_level: true,
+                institution: true,
+                city: true,
+                country: true,
+                links: true,
+              },
+            },
+          },
+        },
+        application_step_states: {
+          include: {
+            workflow_steps: {
+              select: {
+                title: true,
+                step_index: true,
+                deadline_at: true,
+                instructions_rich: true,
+                form_versions: { select: { schema: true } },
+              },
+            },
+          },
+          orderBy: { workflow_steps: { step_index: 'asc' } },
+        },
+        attendance_records: {
+          select: { status: true },
+        },
+      },
+    });
+
+    if (!app) return null;
+    const updated = await this.stepStateService.ensureStepStates(
+      app.id,
+      eventId,
+    );
+    if (updated) {
+      app = await this.prisma.applications.findFirst({
+        where: { id: app.id, event_id: eventId },
+        include: {
+          users_applications_applicant_user_idTousers: {
+            select: {
+              id: true,
+              email: true,
+              applicant_profiles: {
+                select: {
+                  full_name: true,
+                  phone: true,
+                  education_level: true,
+                  institution: true,
+                  city: true,
+                  country: true,
+                  links: true,
+                },
+              },
+            },
+          },
+          application_step_states: {
+            include: {
+              workflow_steps: {
+                select: {
+                  title: true,
+                  step_index: true,
+                  deadline_at: true,
+                  instructions_rich: true,
+                  form_versions: { select: { schema: true } },
+                },
+              },
+            },
+            orderBy: { workflow_steps: { step_index: 'asc' } },
+          },
+          attendance_records: {
+            select: { status: true },
+          },
+        },
+      });
+      if (!app) return null;
+    }
+    return this.toDetail(app, {
+      maskDecisionIfUnpublished: true,
+      hideInternalNotes: true,
+      hideAssignedReviewer: true,
+    });
+  }
+
+  /**
+   * Set decision for an application
+   */
+  async setDecision(
+    eventId: string,
+    applicationId: string,
+    status: DecisionStatus,
+    draft: boolean,
+  ): Promise<ApplicationDetail> {
+    const event = await this.prisma.events.findUnique({
+      where: { id: eventId },
+      select: { decision_config: true },
+    });
+    const decisionConfig =
+      (event?.decision_config as Record<string, unknown>) ?? {};
+    const autoPublish = this.readBoolean(decisionConfig.autoPublish, false);
+    const shouldPublish = autoPublish ? true : !draft;
+
+    const app = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+    });
+
+    if (!app) throw new NotFoundException('Application not found');
+
+    const now = new Date();
+    const data: any = {
+      decision_status: status,
+      updated_at: now,
+    };
+
+    if (!shouldPublish) {
+      // If drafting, ensure published_at is not set (unless it was already published?)
+      // Requirement: "If draft=true, sets decision_status but keeps decision_published_at null."
+      // Assuming we reset published_at if going back to draft? Or just don't touch it?
+      // "If draft=true ... sets decision_published_at null" implies unpublishing.
+      data.decision_published_at = null;
+    } else {
+      // Immediate publish
+      data.decision_published_at = now;
+    }
+
+    await this.prisma.applications.update({
+      where: { id: applicationId },
+      data,
+    });
+
+    if (shouldPublish) {
+      // Trigger unlock logic (for Confirmation step)
+      await this.stepStateService.recomputeAllStepStates(applicationId);
+    }
+
+    return this.findById(eventId, applicationId);
+  }
+
+  /**
+   * Replace application tags (staff)
+   */
+  async updateTags(
+    eventId: string,
+    applicationId: string,
+    tags: string[],
+  ): Promise<ApplicationDetail> {
+    const app = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+      select: { id: true },
+    });
+    if (!app) throw new NotFoundException('Application not found');
+
+    const normalizedTags = [
+      ...new Set(tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0)),
+    ];
+
+    await this.prisma.applications.update({
+      where: { id: applicationId },
+      data: {
+        tags: normalizedTags,
+        updated_at: new Date(),
+      },
+    });
+
+    return this.findById(eventId, applicationId);
+  }
+
+  /**
+   * Update internal notes blob (staff)
+   */
+  async updateInternalNotes(
+    eventId: string,
+    applicationId: string,
+    internalNotes: string | null,
+  ): Promise<ApplicationDetail> {
+    const app = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+      select: { id: true },
+    });
+    if (!app) throw new NotFoundException('Application not found');
+
+    await this.prisma.applications.update({
+      where: { id: applicationId },
+      data: {
+        internal_notes:
+          internalNotes && internalNotes.trim().length > 0
+            ? internalNotes
+            : null,
+        updated_at: new Date(),
+      },
+    });
+
+    return this.findById(eventId, applicationId);
+  }
+
+  /**
+   * Delete an application (organizer/admin)
+   */
+  async deleteById(eventId: string, applicationId: string): Promise<void> {
+    const app = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+      select: { id: true },
+    });
+    if (!app) throw new NotFoundException('Application not found');
+
+    await this.prisma.$transaction(async (tx) => {
+      // Keep check-in history rows but detach them from the deleted application.
+      await tx.checkin_records.updateMany({
+        where: { event_id: eventId, application_id: applicationId },
+        data: { application_id: null },
+      });
+
+      await tx.applications.delete({
+        where: { id: applicationId },
+      });
+    });
+  }
+
+  /**
+   * List messages delivered to the applicant for this application/event
+   */
+  async getApplicationMessages(eventId: string, applicationId: string) {
+    const app = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+      select: { applicant_user_id: true },
+    });
+    if (!app) throw new NotFoundException('Application not found');
+
+    const recipients = await this.prisma.message_recipients.findMany({
+      where: {
+        recipient_user_id: app.applicant_user_id,
+        messages: { event_id: eventId },
+      },
+      include: {
+        messages: {
+          include: {
+            users: {
+              select: {
+                email: true,
+                applicant_profiles: { select: { full_name: true } },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { created_at: 'desc' },
+    });
+
+    return recipients.map((r) => ({
+      id: r.id,
+      messageId: r.message_id,
+      title: r.messages.title,
+      type: r.messages.type,
+      bodyRich: r.messages.body_rich,
+      bodyText: (r.messages as any).body_text ?? null,
+      actionButtons: r.messages.action_buttons ?? [],
+      createdAt: r.messages.created_at,
+      readAt: r.read_at,
+      senderEmail: r.messages.users?.email ?? null,
+      senderName:
+        r.messages.users?.applicant_profiles?.full_name ??
+        r.messages.users?.email ??
+        'Staff',
+    }));
+  }
+
+  /**
+   * List audit log entries related to an application
+   */
+  async getApplicationAuditLog(
+    eventId: string,
+    applicationId: string,
+    limit = 100,
+  ) {
+    const app = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+      select: { id: true },
+    });
+    if (!app) throw new NotFoundException('Application not found');
+
+    const [stepStates, submissions, needsInfo, patches] =
+      await this.prisma.$transaction([
+        this.prisma.application_step_states.findMany({
+          where: { application_id: applicationId },
+          select: { id: true },
+        }),
+        this.prisma.step_submission_versions.findMany({
+          where: { application_id: applicationId },
+          select: { id: true },
+        }),
+        this.prisma.needs_info_requests.findMany({
+          where: { application_id: applicationId },
+          select: { id: true },
+        }),
+        this.prisma.admin_change_patches.findMany({
+          where: { application_id: applicationId },
+          select: { id: true },
+        }),
+      ]);
+
+    const submissionIds = submissions.map((s) => s.id);
+    const reviewRecords = submissionIds.length
+      ? await this.prisma.review_records.findMany({
+          where: { submission_version_id: { in: submissionIds } },
+          select: { id: true },
+        })
+      : [];
+
+    const entityFilters: any[] = [
+      { entity_type: 'applications', entity_id: applicationId },
+    ];
+
+    if (stepStates.length) {
+      entityFilters.push({
+        entity_type: 'application_step_states',
+        entity_id: { in: stepStates.map((s) => s.id) },
+      });
+    }
+    if (submissionIds.length) {
+      entityFilters.push({
+        entity_type: 'step_submission_versions',
+        entity_id: { in: submissionIds },
+      });
+    }
+    if (needsInfo.length) {
+      entityFilters.push({
+        entity_type: 'needs_info_requests',
+        entity_id: { in: needsInfo.map((r) => r.id) },
+      });
+    }
+    if (patches.length) {
+      entityFilters.push({
+        entity_type: 'admin_change_patches',
+        entity_id: { in: patches.map((p) => p.id) },
+      });
+    }
+    if (reviewRecords.length) {
+      entityFilters.push({
+        entity_type: 'review_records',
+        entity_id: { in: reviewRecords.map((r) => r.id) },
+      });
+    }
+
+    const logs = await this.prisma.audit_logs.findMany({
+      where: {
+        OR: [
+          {
+            event_id: eventId,
+            OR: entityFilters,
+          },
+          {
+            event_id: null,
+            OR: entityFilters,
+          },
+        ],
+      },
+      orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+      take: limit,
+      include: {
+        users: {
+          select: {
+            email: true,
+            applicant_profiles: { select: { full_name: true } },
+          },
+        },
+      },
+    });
+
+    return logs.map((log) => {
+      const afterData = log.after as Record<string, any> | null;
+      let details: string | undefined;
+      if (afterData?._diff && afterData?.changes) {
+        const changedKeys = Object.keys(afterData.changes);
+        details = `Changed: ${changedKeys.join(', ')}`;
+      }
+      if (
+        !details &&
+        log.action === 'create' &&
+        log.entity_type === 'admin_change_patches' &&
+        afterData
+      ) {
+        const ops = Array.isArray(afterData.ops) ? afterData.ops : [];
+        const changedFields = Array.from(
+          new Set(
+            ops
+              .map((op) =>
+                typeof op?.path === 'string'
+                  ? op.path.replace(/^\//, '')
+                  : undefined,
+              )
+              .filter((path): path is string => Boolean(path)),
+          ),
+        );
+        const reason =
+          typeof afterData.reason === 'string'
+            ? afterData.reason.trim()
+            : undefined;
+        const detailParts: string[] = [];
+        if (changedFields.length > 0) {
+          detailParts.push(`Fields: ${changedFields.join(', ')}`);
+        }
+        if (reason) {
+          detailParts.push(`Reason: ${reason}`);
+        }
+        details = detailParts.join(' | ') || 'Patch created';
+      }
+
+      return {
+        id: log.id,
+        action: log.action,
+        entityType: log.entity_type,
+        entityId: log.entity_id,
+        actorEmail: log.users?.email ?? 'system',
+        actorName:
+          (log.users as any)?.applicant_profiles?.full_name ?? undefined,
+        details,
+        createdAt: log.created_at,
+        redactionApplied: log.redaction_applied,
+      };
+    });
+  }
+
+  /**
+   * Bulk publish decisions
+   */
+  async publishDecisions(
+    eventId: string,
+    applicationIds?: string[],
+  ): Promise<{ count: number }> {
+    // Find all applications for this event that have a decision set (not NONE) but are not published
+    // If applicationIds provided, filter by them
+    const where: any = {
+      event_id: eventId,
+      decision_status: { not: DecisionStatus.NONE },
+      decision_published_at: null,
+    };
+
+    if (applicationIds && applicationIds.length > 0) {
+      where.id = { in: applicationIds };
+    }
+
+    const toPublish = await this.prisma.applications.findMany({
+      where,
+      select: { id: true },
+    });
+
+    if (toPublish.length === 0) return { count: 0 };
+
+    const now = new Date();
+
+    // Update in DB
+    await this.prisma.applications.updateMany({
+      where: { id: { in: toPublish.map((a) => a.id) } },
+      data: { decision_published_at: now, updated_at: now },
+    });
+
+    // Trigger unlock logic in bounded parallel batches.
+    const recomputeBatchSize = 25;
+    for (let i = 0; i < toPublish.length; i += recomputeBatchSize) {
+      const batch = toPublish.slice(i, i + recomputeBatchSize);
+      await Promise.all(
+        batch.map((app) =>
+          this.stepStateService.recomputeAllStepStates(app.id),
+        ),
+      );
+    }
+
+    return { count: toPublish.length };
+  }
+
+  /**
+   * Transform DB application to summary
+   */
+  private toSummary(
+    app: any,
+    options?: { maskDecisionIfUnpublished?: boolean },
+  ): ApplicationSummary {
+    const user = app.users_applications_applicant_user_idTousers;
+    const stepStates = app.application_step_states || [];
+    const decisionPublished = app.decision_published_at != null;
+    const decisionStatus =
+      options?.maskDecisionIfUnpublished && !decisionPublished
+        ? DecisionStatus.NONE
+        : (app.decision_status as DecisionStatus);
+    const appForDerivedStatus = {
+      ...app,
+      decision_status: decisionStatus,
+    };
+
+    return {
+      id: app.id,
+      eventId: app.event_id,
+      applicantUserId: app.applicant_user_id,
+      applicantEmail: user?.email,
+      applicantName: user?.applicant_profiles?.full_name,
+      decisionStatus,
+      decisionPublishedAt: decisionPublished ? app.decision_published_at : null,
+      tags: app.tags,
+      derivedStatus: this.calculateDerivedStatus(
+        appForDerivedStatus,
+        stepStates,
+      ),
+      createdAt: app.created_at,
+      updatedAt: app.updated_at,
+      stepsSummary: {
+        total: stepStates.length,
+        completed: stepStates.filter(
+          (s: any) =>
+            s.status === StepStatus.APPROVED ||
+            s.status === StepStatus.SUBMITTED,
+        ).length,
+        needsRevision: stepStates.filter(
+          (s: any) => s.status === StepStatus.NEEDS_REVISION,
+        ).length,
+      },
+    };
+  }
+
+  private mapApplicantProfile(profile: any): ApplicantProfile | null {
+    if (!profile) return null;
+    const rawLinks = profile.links;
+    const links = Array.isArray(rawLinks)
+      ? rawLinks
+          .filter((v): v is string => typeof v === 'string')
+          .map((link) => link.trim())
+          .filter((link) => link.length > 0)
+      : [];
+
+    return {
+      fullName: profile.full_name ?? undefined,
+      phone: profile.phone ?? undefined,
+      education: profile.education_level ?? undefined,
+      institution: profile.institution ?? undefined,
+      city: profile.city ?? undefined,
+      country: profile.country ?? undefined,
+      links,
+    };
+  }
+
+  private toApplicantProfile(user: any): ApplicantProfile | null {
+    return this.mapApplicantProfile(user?.applicant_profiles);
+  }
+
+  /**
+   * Calculate derived status based on steps and decision
+   */
+  private calculateDerivedStatus(app: any, stepStates: any[]): string {
+    const decisionStatus = app.decision_status as DecisionStatus;
+    const decisionPublished = app.decision_published_at != null;
+
+    if (decisionStatus === DecisionStatus.REJECTED) {
+      return decisionPublished
+        ? 'DECISION_REJECTED_PUBLISHED'
+        : 'DECISION_REJECTED_DRAFT';
+    }
+
+    if (stepStates.some((s) => s.status === StepStatus.REJECTED_FINAL)) {
+      return 'BLOCKED_REJECTED';
+    }
+
+    if (
+      app.attendance_records &&
+      app.attendance_records.status === 'CONFIRMED'
+    ) {
+      return 'CONFIRMED';
+    }
+
+    if (decisionStatus === DecisionStatus.ACCEPTED) {
+      return decisionPublished
+        ? 'DECISION_ACCEPTED_PUBLISHED'
+        : 'DECISION_ACCEPTED_DRAFT';
+    }
+
+    if (decisionStatus === DecisionStatus.WAITLISTED) {
+      return decisionPublished
+        ? 'DECISION_WAITLISTED_PUBLISHED'
+        : 'DECISION_WAITLISTED_DRAFT';
+    }
+
+    // Check steps
+    // Sort steps by index just in case
+    const sortedSteps = [...stepStates].sort(
+      (a, b) =>
+        (a.workflow_steps?.step_index ?? 0) -
+        (b.workflow_steps?.step_index ?? 0),
+    );
+
+    const blockingStep = sortedSteps.find(
+      (s) => s.status !== StepStatus.APPROVED,
+    );
+
+    if (!blockingStep) {
+      return 'ALL_REQUIRED_STEPS_APPROVED';
+    }
+
+    const stepIndex = blockingStep.workflow_steps?.step_index ?? 0;
+
+    if (blockingStep.status === StepStatus.SUBMITTED) {
+      return `WAITING_FOR_REVIEW_STEP_${stepIndex}`;
+    }
+
+    if (blockingStep.status === StepStatus.NEEDS_REVISION) {
+      return `REVISION_REQUIRED_STEP_${stepIndex}`;
+    }
+
+    return `WAITING_FOR_APPLICANT_STEP_${stepIndex}`;
+  }
+
+  private toDetail(
+    app: any,
+    options?: {
+      answersByStepId?: Record<string, Record<string, any>>;
+      maskDecisionIfUnpublished?: boolean;
+      hideInternalNotes?: boolean;
+      hideAssignedReviewer?: boolean;
+    },
+  ): ApplicationDetail {
+    const summary = this.toSummary(app, {
+      maskDecisionIfUnpublished: options?.maskDecisionIfUnpublished,
+    });
+    const user = app.users_applications_applicant_user_idTousers;
+    const applicantProfile = this.toApplicantProfile(user);
+    const stepStates = app.application_step_states || [];
+    const answersByStepId = options?.answersByStepId ?? {};
+
+    return {
+      ...summary,
+      internalNotes: options?.hideInternalNotes ? null : app.internal_notes,
+      assignedReviewerId: options?.hideAssignedReviewer
+        ? null
+        : app.assigned_reviewer_id,
+      applicantProfile: applicantProfile ?? undefined,
+      stepStates: stepStates.map((ss: any) => ({
+        id: `${ss.application_id}:${ss.step_id}`,
+        stepId: ss.step_id,
+        stepTitle: ss.workflow_steps?.title || 'Unknown Step',
+        stepIndex: ss.workflow_steps?.step_index ?? 0,
+        status: ss.status as StepStatus,
+        deadlineAt: ss.workflow_steps?.deadline_at ?? null,
+        instructions:
+          typeof ss.workflow_steps?.instructions_rich === 'string'
+            ? ss.workflow_steps.instructions_rich
+            : ss.workflow_steps?.instructions_rich?.html || undefined,
+        formDefinition: ss.workflow_steps?.form_versions?.schema || undefined,
+        answers: answersByStepId[ss.step_id]
+          ? this.normalizeAnswersShape(answersByStepId[ss.step_id])
+          : undefined,
+        currentDraftId: ss.current_draft_id,
+        latestSubmissionVersionId: ss.latest_submission_version_id,
+        revisionCycleCount: ss.revision_cycle_count,
+        unlockedAt: ss.unlocked_at,
+        lastActivityAt: ss.last_activity_at,
+      })),
+    };
+  }
+
+  private async getEffectiveAnswersByStepId(
+    stepStates: Array<{
+      step_id: string;
+      latest_submission_version_id?: string | null;
+    }>,
+  ): Promise<Record<string, Record<string, any>>> {
+    const latestSubmissionIds = Array.from(
+      new Set(
+        stepStates
+          .map((s) => s.latest_submission_version_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    if (latestSubmissionIds.length === 0) return {};
+
+    const [submissions, patches] = await this.prisma.$transaction([
+      this.prisma.step_submission_versions.findMany({
+        where: { id: { in: latestSubmissionIds } },
+        select: { id: true, answers_snapshot: true },
+      }),
+      this.prisma.admin_change_patches.findMany({
+        where: {
+          submission_version_id: { in: latestSubmissionIds },
+          is_active: true,
+        },
+        orderBy: { created_at: 'asc' },
+      }),
+    ]);
+
+    const submissionsById = new Map(
+      submissions.map((s) => [
+        s.id,
+        this.normalizeAnswersShape(s.answers_snapshot as Record<string, any>),
+      ]),
+    );
+
+    const patchesByVersionId = new Map<string, any[]>();
+    for (const patch of patches) {
+      const list = patchesByVersionId.get(patch.submission_version_id) ?? [];
+      list.push(patch);
+      patchesByVersionId.set(patch.submission_version_id, list);
+    }
+
+    const answersByStepId: Record<string, Record<string, any>> = {};
+    for (const state of stepStates) {
+      const versionId = state.latest_submission_version_id;
+      if (!versionId) continue;
+      const baseAnswers = submissionsById.get(versionId) ?? {};
+      const effectiveAnswers = this.applyPatches(
+        baseAnswers,
+        patchesByVersionId.get(versionId) ?? [],
+      );
+      answersByStepId[state.step_id] = effectiveAnswers;
+    }
+
+    return answersByStepId;
+  }
+
+  private async getEffectiveAnswersBySubmissionVersionIds(
+    submissionVersionIds: string[],
+  ): Promise<Map<string, Record<string, any>>> {
+    if (submissionVersionIds.length === 0) return new Map();
+
+    const [submissions, patches] = await this.prisma.$transaction([
+      this.prisma.step_submission_versions.findMany({
+        where: { id: { in: submissionVersionIds } },
+        select: { id: true, answers_snapshot: true },
+      }),
+      this.prisma.admin_change_patches.findMany({
+        where: {
+          submission_version_id: { in: submissionVersionIds },
+          is_active: true,
+        },
+        select: {
+          submission_version_id: true,
+          ops: true,
+        },
+        orderBy: { created_at: 'asc' },
+      }),
+    ]);
+
+    const patchesByVersionId = new Map<string, Array<{ ops: any }>>();
+    for (const patch of patches) {
+      const list = patchesByVersionId.get(patch.submission_version_id) ?? [];
+      list.push({ ops: patch.ops });
+      patchesByVersionId.set(patch.submission_version_id, list);
+    }
+
+    const effectiveByVersionId = new Map<string, Record<string, any>>();
+    for (const submission of submissions) {
+      const baseAnswers = this.normalizeAnswersShape(
+        submission.answers_snapshot as Record<string, any>,
+      );
+      const effectiveAnswers = this.applyPatches(
+        baseAnswers,
+        patchesByVersionId.get(submission.id) ?? [],
+      );
+      effectiveByVersionId.set(submission.id, effectiveAnswers);
+    }
+
+    return effectiveByVersionId;
+  }
+
+  private collectFileObjectIds(value: unknown, target: Set<string>): void {
+    if (value === null || value === undefined) return;
+
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        this.collectFileObjectIds(entry, target);
+      }
+      return;
+    }
+
+    if (typeof value === 'string') {
+      if (this.isUuidV4(value)) target.add(value);
+      return;
+    }
+
+    if (typeof value !== 'object') return;
+
+    const record = value as Record<string, unknown>;
+    const maybeFileObjectId = record.fileObjectId;
+    if (typeof maybeFileObjectId === 'string') {
+      target.add(maybeFileObjectId);
+    }
+
+    const maybeFileObjectIds = record.fileObjectIds;
+    if (Array.isArray(maybeFileObjectIds)) {
+      for (const fileId of maybeFileObjectIds) {
+        if (typeof fileId === 'string') target.add(fileId);
+      }
+    }
+
+    for (const nestedValue of Object.values(record)) {
+      this.collectFileObjectIds(nestedValue, target);
+    }
+  }
+
+  private isUuidV4(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    );
+  }
+
+  private formatProfileLinks(rawLinks: unknown): string {
+    if (Array.isArray(rawLinks)) {
+      return rawLinks
+        .filter((link): link is string => typeof link === 'string')
+        .map((link) => link.trim())
+        .filter((link) => link.length > 0)
+        .join(' | ');
+    }
+
+    if (typeof rawLinks === 'string') return rawLinks;
+    if (!rawLinks) return '';
+
+    try {
+      return JSON.stringify(rawLinks);
+    } catch {
+      return '';
+    }
+  }
+
+  private buildResponseHeaderLabel(
+    stepTitle: string | null | undefined,
+    stepIndex: number | null | undefined,
+    fieldKey: string,
+  ): string {
+    const cleanedStepTitle = (stepTitle ?? '').trim();
+    const fieldLabel = this.humanizeAnswerFieldKey(fieldKey);
+    const numericStepIndex =
+      typeof stepIndex === 'number' && Number.isFinite(stepIndex)
+        ? Math.max(0, stepIndex)
+        : undefined;
+    const stepLabel =
+      numericStepIndex !== undefined
+        ? `Step ${String(numericStepIndex + 1)}`
+        : 'Step';
+
+    if (cleanedStepTitle) {
+      return `${stepLabel} - ${cleanedStepTitle} - ${fieldLabel}`;
+    }
+    return `${stepLabel} - ${fieldLabel}`;
+  }
+
+  private humanizeAnswerFieldKey(fieldKey: string): string {
+    const cleaned = fieldKey
+      .replace(/\./g, ' ')
+      .replace(/[_-]+/g, ' ')
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .trim();
+    if (!cleaned) return fieldKey;
+
+    return cleaned.replace(/\b([a-z])/g, (letter) => letter.toUpperCase());
+  }
+
+  private serializeAnswerValueForCsv(value: unknown): string {
+    if (value === null || value === undefined) return '';
+    if (value instanceof Date) return value.toISOString();
+    if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean' ||
+      typeof value === 'bigint'
+    ) {
+      return String(value);
+    }
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  private toIsoString(value: unknown): string {
+    if (!value) return '';
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value === 'string') return value;
+    return '';
+  }
+
+  private getAppBaseUrl(): string {
+    const baseUrl = process.env.APP_BASE_URL || 'http://localhost:3000';
+    return baseUrl.replace(/\/+$/, '');
+  }
+
+  private toFilenameSafePart(value: string): string {
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-');
+    const compact = normalized.replace(/-+/g, '-').replace(/^-|-$/g, '');
+    return compact || 'event';
+  }
+
+  private csvEscape(value: unknown): string {
+    const normalized =
+      value === null || value === undefined ? '' : String(value);
+    return `"${normalized.replace(/"/g, '""')}"`;
+  }
+
+  private buildCsv(headers: string[], rows: unknown[][]): string {
+    const headerLine = headers
+      .map((header) => this.csvEscape(header))
+      .join(',');
+    const rowLines = rows.map((row) =>
+      row.map((cell) => this.csvEscape(cell)).join(','),
+    );
+    return [headerLine, ...rowLines].join('\n');
+  }
+
+  private applyPatches(
+    baseAnswers: Record<string, any>,
+    patches: Array<{ ops: any }>,
+  ): Record<string, any> {
+    const effective = { ...this.normalizeAnswersShape(baseAnswers) };
+
+    for (const patch of patches) {
+      const ops = Array.isArray(patch.ops) ? patch.ops : [];
+      for (const op of ops) {
+        if (!op || op.op !== 'replace' || typeof op.path !== 'string') {
+          continue;
+        }
+        const fieldPath = op.path.replace(/^\//, '');
+        if (!fieldPath) continue;
+        effective[fieldPath] = op.value;
+      }
+    }
+
+    return this.normalizeAnswersShape(effective);
+  }
+
+  /**
+   * Backward-compat: unwrap legacy answer envelopes shaped as { data: {...} }.
+   */
+  private normalizeAnswersShape(
+    answers: Record<string, any> | null | undefined,
+  ): Record<string, any> {
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+      return {};
+    }
+
+    const normalized = { ...answers };
+    const nestedData = normalized.data;
+    if (
+      nestedData &&
+      typeof nestedData === 'object' &&
+      !Array.isArray(nestedData)
+    ) {
+      Object.assign(normalized, nestedData as Record<string, any>);
+    }
+    if (
+      'data' in normalized &&
+      Object.keys(normalized).some((key) => key !== 'data')
+    ) {
+      delete normalized.data;
+    }
+
+    return normalized;
+  }
+
+  private readBoolean(value: unknown, fallback: boolean): boolean {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'true') return true;
+      if (normalized === 'false') return false;
+    }
+    if (typeof value === 'number') return value !== 0;
+    return fallback;
+  }
+
+  /**
+   * Confirm attendance for an application (Applicant or Admin)
+   */
+  async confirmAttendance(
+    eventId: string,
+    applicationId: string,
+  ): Promise<{ qrToken: string }> {
+    const event = await this.prisma.events.findUnique({
+      where: { id: eventId },
+      select: { checkin_config: true },
+    });
+    const checkinConfig =
+      (event?.checkin_config as Record<string, unknown>) ?? {};
+    if (!this.readBoolean(checkinConfig.enabled, false)) {
+      throw new ForbiddenException('Check-in is disabled for this event');
+    }
+
+    const app = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+      include: { attendance_records: true },
+    });
+
+    if (!app) throw new NotFoundException('Application not found');
+
+    const allowSelfCheckin = this.readBoolean(
+      checkinConfig.allowSelfCheckin,
+      false,
+    );
+    const actorId = this.cls.get('actorId');
+    if (actorId && actorId === app.applicant_user_id && !allowSelfCheckin) {
+      throw new ForbiddenException('Self check-in is disabled for this event');
+    }
+
+    // Check decision status
+    if (
+      app.decision_status !== DecisionStatus.ACCEPTED ||
+      app.decision_published_at === null
+    ) {
+      throw new ForbiddenException('Application not accepted');
+    }
+
+    const now = new Date();
+    // Generate JTI if not exists
+    let jti = app.attendance_records?.qr_token_hash;
+
+    if (!jti) {
+      jti = crypto.randomUUID();
+
+      // Upsert attendance record
+      await this.prisma.attendance_records.upsert({
+        where: { application_id: applicationId },
+        create: {
+          application_id: applicationId,
+          confirmed_at: now,
+          qr_token_hash: jti, // Storing JTI as the "hash" logic
+          status: 'CONFIRMED',
+        },
+        update: {
+          confirmed_at: now, // Re-confirming updates timestamp?
+          qr_token_hash: jti,
+          status: 'CONFIRMED',
+        },
+      });
+    } else {
+      // Ensure confirmed_at is set if it was somehow null but JTI existed
+      if (!app.attendance_records?.confirmed_at) {
+        await this.prisma.attendance_records.update({
+          where: { application_id: applicationId },
+          data: { confirmed_at: now, status: 'CONFIRMED' },
+        });
+      }
+    }
+
+    // Generate Token
+    // Payload: { sub: appId, eventId, jti, type: 'checkin' }
+    return {
+      qrToken: this.signQrToken(
+        applicationId,
+        eventId,
+        jti,
+        this.getJwtSecret(),
+      ),
+    };
+  }
+
+  /**
+   * Get existing ticket (QR Token)
+   */
+  async getTicket(
+    eventId: string,
+    applicationId: string,
+  ): Promise<{ qrToken: string }> {
+    const record = await this.prisma.attendance_records.findUnique({
+      where: { application_id: applicationId },
+    });
+
+    if (!record || !record.qr_token_hash) {
+      throw new NotFoundException('Ticket not confirmed');
+    }
+
+    return {
+      qrToken: this.signQrToken(
+        applicationId,
+        eventId,
+        record.qr_token_hash,
+        this.getJwtSecret(),
+      ),
+    };
+  }
+
+  private getJwtSecret(): string {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      throw new Error('JWT_SECRET environment variable must be configured');
+    }
+    return secret;
+  }
+
+  private signQrToken(
+    appId: string,
+    eventId: string,
+    jti: string,
+    secret: string,
+  ): string {
+    return jwt.sign(
+      { sub: appId, eventId, jti, type: 'checkin' },
+      secret,
+      { expiresIn: '30d' }, // Long expiry for convenience
+    );
+  }
+}
