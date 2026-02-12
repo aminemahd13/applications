@@ -70,7 +70,7 @@ pnpm --filter web dev
 
 ### Database Changes
 
-We use **Prisma** for schema management and **dbmate** (or Prisma Migrate) for migrations.
+We use **Prisma** for both schema management and migrations.
 
 1.  **Modify Schema**: Edit `packages/db/prisma/schema.prisma`.
 2.  **Create Migration**:

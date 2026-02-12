@@ -82,8 +82,9 @@ To update the application code:
 3. **Run Migrations**:
    Run the migration command inside the API container.
    ```bash
-   docker exec -it app-mm-api-1 npx prisma migrate deploy
+   docker exec -it app-mm-api-1 npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
    ```
+   The API container startup script also runs this flow automatically and includes a legacy-baseline compatibility check for older DBs.
 
 ## 4. Security Measures
 
