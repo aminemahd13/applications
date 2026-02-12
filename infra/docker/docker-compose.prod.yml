@@ -72,6 +72,7 @@ services:
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_USE_SSL: "false"
       MINIO_BUCKET_NAME: "uploads"
+      STORAGE_PUBLIC_ENDPOINT: ${STORAGE_PUBLIC_ENDPOINT:-}
       JWT_SECRET: ${JWT_SECRET:-changeme_in_prod}
       SESSION_SECRET: ${SESSION_SECRET:-changeme_in_prod}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-localhost}
@@ -91,14 +92,16 @@ services:
       dockerfile: infra/docker/web.Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1} # Client-side URL (via Nginx)
-        NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST:-http://localhost/uploads}
+        NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST:-/uploads}
+        NEXT_PUBLIC_DIRECT_ASSET_HOST: ${NEXT_PUBLIC_DIRECT_ASSET_HOST:-}
         NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-localhost}
         NEXT_PUBLIC_ROUTING_MODE: ${NEXT_PUBLIC_ROUTING_MODE:-subdomain}
     restart: always
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
       INTERNAL_API_URL: ${INTERNAL_API_URL:-http://api:3001/api/v1}
-      NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST:-http://localhost/uploads}
+      NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST:-/uploads}
+      NEXT_PUBLIC_DIRECT_ASSET_HOST: ${NEXT_PUBLIC_DIRECT_ASSET_HOST:-}
       NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-localhost}
       NEXT_PUBLIC_ROUTING_MODE: ${NEXT_PUBLIC_ROUTING_MODE:-subdomain}
       SESSION_VALIDATION_MAX_AGE_SECONDS: ${SESSION_VALIDATION_MAX_AGE_SECONDS:-900}

@@ -9,7 +9,7 @@ import { SKIP_CSRF_KEY } from '../decorators/skip-csrf.decorator';
 
 @Injectable()
 export class CsrfGuard implements CanActivate {
-  constructor(private reflector: Reflector) { }
+  constructor(private reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
     // Check for SkipCsrf decorator

@@ -252,7 +252,7 @@ export class MicrositesController {
     // The page object (version) has `version` field!
     const page = await this.service.getPublicPage(slug, pageSlug);
 
-    const etag = `"${slug}:${(page as any).version}"`;
+    const etag = `"${slug}:${page.version}"`;
     res.set('ETag', etag);
     res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
 

@@ -95,7 +95,9 @@ export class ReviewQueueService {
       new Set(
         queueStepStates
           .map((stepState) => stepState.latest_submission_version_id)
-          .filter((id): id is string => typeof id === 'string' && id.length > 0),
+          .filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+          ),
       ),
     );
 
@@ -120,7 +122,9 @@ export class ReviewQueueService {
       new Set(
         submissionVersions
           .map((version) => version.form_version_id)
-          .filter((id): id is string => typeof id === 'string' && id.length > 0),
+          .filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+          ),
       ),
     );
     const formVersions =
@@ -130,7 +134,10 @@ export class ReviewQueueService {
             where: { id: { in: formVersionIds } },
             select: { id: true, schema: true },
           });
-    const formDefinitionByVersionId = new Map<string, Record<string, unknown>>();
+    const formDefinitionByVersionId = new Map<
+      string,
+      Record<string, unknown>
+    >();
     for (const formVersion of formVersions) {
       formDefinitionByVersionId.set(
         formVersion.id,
@@ -145,8 +152,9 @@ export class ReviewQueueService {
 
       for (const stepState of app.application_step_states) {
         const submissionVersion = stepState.latest_submission_version_id
-          ? submissionVersionById.get(stepState.latest_submission_version_id) ??
-            null
+          ? (submissionVersionById.get(
+              stepState.latest_submission_version_id,
+            ) ?? null)
           : null;
         const formDefinition =
           (submissionVersion?.form_version_id

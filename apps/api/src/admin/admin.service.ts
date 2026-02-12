@@ -764,23 +764,21 @@ export class AdminService {
     for (const application of applications) {
       const responseValues = new Map<string, string>();
       const fileIds = new Set<string>();
-      const sortedStepStates = [...(application.application_step_states ?? [])]
-        .sort(
-          (a, b) =>
-            (a.workflow_steps?.step_index ?? 0) -
-              (b.workflow_steps?.step_index ?? 0) ||
-            a.step_id.localeCompare(b.step_id),
-        );
+      const sortedStepStates = [
+        ...(application.application_step_states ?? []),
+      ].sort(
+        (a, b) =>
+          (a.workflow_steps?.step_index ?? 0) -
+            (b.workflow_steps?.step_index ?? 0) ||
+          a.step_id.localeCompare(b.step_id),
+      );
       for (const stepState of sortedStepStates) {
         const versionId = stepState.latest_submission_version_id;
         if (!versionId) continue;
         const effectiveAnswers = this.normalizeAnswersShape(
           effectiveAnswersBySubmissionVersionId.get(versionId),
         );
-        this.collectFileObjectIds(
-          effectiveAnswers,
-          fileIds,
-        );
+        this.collectFileObjectIds(effectiveAnswers, fileIds);
 
         const stepIndex = stepState.workflow_steps?.step_index ?? 0;
         const stepId = stepState.step_id;
@@ -804,7 +802,9 @@ export class AdminService {
             const usageCount = responseHeaderUsageCount.get(baseHeader) ?? 0;
             responseHeaderUsageCount.set(baseHeader, usageCount + 1);
             const finalHeader =
-              usageCount === 0 ? baseHeader : `${baseHeader} (${usageCount + 1})`;
+              usageCount === 0
+                ? baseHeader
+                : `${baseHeader} (${usageCount + 1})`;
             responseHeaderByColumnKey.set(responseColumnKey, finalHeader);
           }
 
@@ -1031,7 +1031,9 @@ export class AdminService {
 
         const staffApplicationPath = `/staff/${application.event_id}/applications/${application.id}`;
         const adminApplicationPath = `/admin/events/${application.event_id}/applications/${application.id}`;
-        const responseValues = responseValuesByApplicationId.get(application.id);
+        const responseValues = responseValuesByApplicationId.get(
+          application.id,
+        );
 
         rows.push([
           ...sharedUserColumns,
@@ -1312,8 +1314,7 @@ export class AdminService {
         action: log.action,
         category: logCategory,
         actorEmail: log.users?.email ?? 'system',
-        actorName:
-          (log.users as any)?.applicant_profiles?.full_name ?? undefined,
+        actorName: log.users?.applicant_profiles?.full_name ?? undefined,
         targetType: log.entity_type,
         targetId: log.entity_id,
         details,
@@ -1381,7 +1382,7 @@ export class AdminService {
       members.push({
         id: a.id,
         email: a.users?.email ?? 'unknown',
-        fullName: (a.users as any)?.applicant_profiles?.full_name ?? undefined,
+        fullName: a.users?.applicant_profiles?.full_name ?? undefined,
         role: a.role.toLowerCase(),
         eventName: a.events?.title ?? undefined,
         eventId: a.events?.id ?? undefined,

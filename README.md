@@ -113,6 +113,7 @@ The `docker-compose.prod.yml` is pre-configured to use the internal `minio` cont
 - `MINIO_ACCESS_KEY`: Defined by `MINIO_ROOT_USER`
 - `MINIO_SECRET_KEY`: Defined by `MINIO_ROOT_PASSWORD`
 - `MINIO_BUCKET_NAME`: `uploads`
+- `STORAGE_PUBLIC_ENDPOINT`: Optional browser-facing origin for presigned URLs (e.g., `https://apply.mathmaroc.org`) when `MINIO_ENDPOINT` is internal.
 
 **Using AWS S3 (Production Alternative):**
 To use real AWS S3, update your `.env`:

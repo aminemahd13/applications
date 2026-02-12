@@ -4,6 +4,8 @@ export const config = {
   matcher: ["/((?!api/|_next/|_static/|_vercel|[\\w-]+\\.\\w+).*)"],
 };
 
+const PUBLIC_FILE_RE = /\.[^/]+$/;
+
 const ROUTING_MODE = (process.env.NEXT_PUBLIC_ROUTING_MODE || "path") as
   | "path"
   | "subdomain";
@@ -196,6 +198,11 @@ export default async function proxy(req: NextRequest) {
 
   if (pathname.startsWith("/site")) {
     return new NextResponse(null, { status: 404 });
+  }
+
+  // Keep static/public assets out of microsite rewrites.
+  if (pathname.startsWith("/uploads/") || PUBLIC_FILE_RE.test(pathname)) {
+    return NextResponse.next();
   }
 
   let refreshSessionValidationMarker: string | null = null;

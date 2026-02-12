@@ -72,6 +72,11 @@
 **"SignatureDoesNotMatch"**:
 - The keys in the API env vars don't match the MinIO container env vars.
 
+**"Mixed Content" (`https` page requesting `http://minio:9000/...`)**:
+- Browser-facing presigned URLs are using an internal MinIO endpoint.
+- Set `APP_BASE_URL` to your HTTPS origin and (recommended) `STORAGE_PUBLIC_ENDPOINT` to the same public origin.
+- If using the provided Nginx config, keep `NEXT_PUBLIC_ASSET_HOST=/uploads` so public assets stay same-origin.
+
 ## Diagnostic Commands
 
 ### Check Logs
