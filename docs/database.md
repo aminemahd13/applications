@@ -38,7 +38,7 @@ The schema is defined in `packages/db/prisma/schema.prisma`. It is normalized an
 
 ## Migrations Workflow
 
-We use a hybrid approach or standard Prisma Migrate.
+Use Prisma Migrate as the single source of truth.
 
 1.  **Edit Schema**: Modify `schema.prisma`.
 2.  **Generate Migration**:
@@ -47,6 +47,13 @@ We use a hybrid approach or standard Prisma Migrate.
     ```
     This creates a SQL file in `packages/db/prisma/migrations`.
 3.  **Apply Migration**: This happens automatically with the above command for dev. In production, use `pnpm db:migrate:deploy`.
+
+### Legacy Baseline Note
+
+- `infra/migrations` contains historical SQL migrations from an older dbmate-based flow.
+- Databases created from that old flow already have app tables (`users`, `events`, `file_objects`, etc.) before Prisma migration `20260205173053_add_expires_at_to_files`.
+- The API startup script now auto-detects that shape and resolves that Prisma migration as applied so `prisma migrate deploy` can continue safely.
+- Do not run `infra/migrations` for new environments; use Prisma migrations in `packages/db/prisma/migrations`.
 
 ## Seeding
 

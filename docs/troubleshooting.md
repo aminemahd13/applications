@@ -32,6 +32,11 @@
 - You added a new model but didn't generate the client.
 - Run `pnpm db:generate`.
 
+**"P3009 migrate found failed migrations"**:
+- This usually means a migration failed earlier and Prisma blocked new ones.
+- If the failed migration is `20260205173053_add_expires_at_to_files`, your DB likely came from historical SQL files in `infra/migrations` (legacy baseline).
+- Current API startup auto-resolves that baseline migration when it detects legacy tables, then retries deploy.
+
 ### 3. Build Errors
 
 **"Type error: Property 'x' does not exist on type 'y'"**:

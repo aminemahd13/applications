@@ -44,12 +44,14 @@ RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nestjs
 
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
+COPY --from=builder /app/apps/api/scripts ./apps/api/scripts
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=builder /app/apps/api/package.json ./apps/api/package.json
 COPY --from=builder /app/packages/db ./packages/db
 COPY --from=builder /app/packages/shared ./packages/shared
 COPY --from=builder /app/packages/schemas ./packages/schemas
+RUN sed -i 's/\r$//' ./apps/api/scripts/start-api.sh && chmod +x ./apps/api/scripts/start-api.sh
 
 # Fail the image build early if runtime module resolution is broken
 # from the same resolution base as `node apps/api/dist/main`.
@@ -61,4 +63,4 @@ EXPOSE 3000
 
 ENV PORT 3000
 
-CMD ["sh", "-c", "attempt=0; until ./node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma; do attempt=$((attempt+1)); if [ \"$attempt\" -ge 30 ]; then echo \"Prisma migrate failed after 30 attempts\"; exit 1; fi; echo \"Prisma migrate failed, retrying in 5s ($attempt/30)\"; sleep 5; done; exec node apps/api/dist/main"]
+CMD ["sh", "./apps/api/scripts/start-api.sh"]
