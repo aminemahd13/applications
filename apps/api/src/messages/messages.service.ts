@@ -8,6 +8,7 @@ import { ClsService } from 'nestjs-cls';
 import { EmailService } from '../common/email/email.service';
 import {
   RecipientFilter,
+  RecipientFilterSchema,
   CreateMessageDto,
   InboxQueryDto,
   MessageSummary,
@@ -15,6 +16,7 @@ import {
   InboxItem,
   InboxDetail,
   MessageType,
+  MessageStatus,
   EmailDeliveryStatus,
   MessageListQueryDto,
   MessageRecipientsQueryDto,
@@ -318,7 +320,7 @@ export class MessagesService {
       eventId: m.event_id,
       type: m.type as MessageType,
       title: m.title,
-      status: m.status || 'SENT',
+      status: this.normalizeMessageStatus(m.status),
       recipientCount: m._count.message_recipients,
       readCount: readCountByMessageId.get(m.id) ?? 0,
       createdAt: m.created_at,
@@ -357,7 +359,7 @@ export class MessagesService {
       eventId: message.event_id,
       type: message.type as MessageType,
       title: message.title,
-      status: message.status || 'SENT',
+      status: this.normalizeMessageStatus(message.status),
       recipientCount: message._count.message_recipients,
       readCount,
       createdAt: message.created_at,
@@ -365,7 +367,7 @@ export class MessagesService {
       bodyRich: message.body_rich,
       bodyText: message.body_text,
       actionButtons: message.action_buttons as any[],
-      recipientFilter: message.recipient_filter_json,
+      recipientFilter: this.normalizeRecipientFilter(message.recipient_filter_json),
       resolvedAt: message.resolved_at,
     };
   }
@@ -645,6 +647,27 @@ export class MessagesService {
     const parsed = new Date(cursor);
     if (Number.isNaN(parsed.getTime())) return null;
     return parsed;
+  }
+
+  private normalizeMessageStatus(value: unknown): MessageStatus {
+    const normalized = String(value ?? '')
+      .trim()
+      .toUpperCase();
+    if (
+      normalized === MessageStatus.DRAFT ||
+      normalized === MessageStatus.SENT ||
+      normalized === MessageStatus.SCHEDULED
+    ) {
+      return normalized as MessageStatus;
+    }
+    return MessageStatus.SENT;
+  }
+
+  private normalizeRecipientFilter(value: unknown): RecipientFilter | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const parsed = RecipientFilterSchema.safeParse(value);
+    if (!parsed.success) return null;
+    return parsed.data;
   }
 
   async processQueuedEmails(

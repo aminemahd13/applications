@@ -11,7 +11,7 @@ import { OrgSettingsService } from '../admin/org-settings.service';
 import { RateLimiterService } from '../common/services/rate-limiter.service';
 import { LoginDto, SignupDto } from '@event-platform/shared';
 import * as argon2 from 'argon2';
-import { v4 as uuidv4 } from 'uuid';
+import * as crypto from 'crypto';
 
 interface UpdateProfileDto {
   fullName?: string;
@@ -130,7 +130,7 @@ export class AuthService {
     }
 
     const hashedPassword = await argon2.hash(dto.password);
-    const userId = uuidv4();
+    const userId = crypto.randomUUID();
 
     // Transaction to create User and Profile
     const user = await this.prisma.$transaction(async (tx) => {
@@ -218,7 +218,7 @@ export class AuthService {
         };
 
         // Issue New CSRF Token
-        const csrfToken = uuidv4();
+        const csrfToken = crypto.randomUUID();
         session.csrfToken = csrfToken;
         session.createdAt = Date.now(); // Reset absolute TTL
 
