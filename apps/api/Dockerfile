@@ -61,4 +61,4 @@ EXPOSE 3000
 
 ENV PORT 3000
 
-CMD ["node", "apps/api/dist/main"]
+CMD ["sh", "-c", "attempt=0; until ./node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma; do attempt=$((attempt+1)); if [ \"$attempt\" -ge 30 ]; then echo \"Prisma migrate failed after 30 attempts\"; exit 1; fi; echo \"Prisma migrate failed, retrying in 5s ($attempt/30)\"; sleep 5; done; exec node apps/api/dist/main"]
