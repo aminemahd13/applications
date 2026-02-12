@@ -44,14 +44,34 @@ The easiest way to run the project in production is using Docker Compose. This s
     - `SESSION_SECRET`: Generate a random string.
     - `SMTP_*`: Configure your email provider (see "Mail Configuration" below).
 
-3.  **Build and Run**
+3.  **Build Images**
     ```bash
-    docker-compose -f docker-compose.prod.yml up -d --build
+    docker-compose -f docker-compose.prod.yml build api web
     ```
 
-4.  **Verify Deployment**
+4.  **Start Infrastructure First**
+    ```bash
+    docker-compose -f docker-compose.prod.yml up -d postgres redis minio
+    ```
+
+5.  **Run Production Migrations Manually**
+    ```bash
+    docker-compose -f docker-compose.prod.yml run --rm api sh -lc "./node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma"
+    ```
+
+6.  **Run Seed Manually (Optional, Only If Needed)**
+    ```bash
+    docker-compose -f docker-compose.prod.yml run --rm api sh -lc "npm run -w packages/db seed"
+    ```
+
+7.  **Start Application Services**
+    ```bash
+    docker-compose -f docker-compose.prod.yml up -d api web
+    ```
+
+8.  **Verify Deployment**
     - **Frontend**: `http://<your-server-ip>`
-    - **API Health**: `http://<your-server-ip>/api/v1/health` (if implemented) or check logs.
+    - **API**: `http://<your-server-ip>/api/v1/auth/me` (should return JSON, even when unauthenticated)
     - **MinIO Console**: `http://<your-server-ip>:9001` (If exposed in docker-compose, currently commented out for security).
 
 ---
