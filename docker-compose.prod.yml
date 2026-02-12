@@ -45,6 +45,8 @@ services:
       - postgres
       - redis
       - minio
+    ports:
+      - "127.0.0.1:3311:3000"
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -108,6 +110,8 @@ services:
       
       # API & Assets
       NEXT_PUBLIC_API_URL: /api/v1
+      # Server-side Next.js calls (RSC/middleware) should use internal Docker network.
+      INTERNAL_API_URL: http://api:3000/api/v1
       # If using external S3/CDN directly, set this. Otherwise leave empty for proxying or relative paths.
       NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST}
       NEXT_PUBLIC_DIRECT_ASSET_HOST: ${NEXT_PUBLIC_DIRECT_ASSET_HOST}
