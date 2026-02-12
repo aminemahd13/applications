@@ -14,7 +14,7 @@ COPY apps/api/package.json ./apps/api/
 COPY packages/db/package.json ./packages/db/
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/schemas/package.json ./packages/schemas/
-COPY packages/config/package.json ./packages/config/
+
 
 RUN pnpm install --frozen-lockfile
 
