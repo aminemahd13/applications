@@ -24,7 +24,9 @@ COPY . .
 # Generate Prisma Client
 RUN cd packages/db && npx prisma generate
 
-# Build shared packages
+# Build workspace packages needed by API at runtime
+# (@event-platform/db and @event-platform/shared are imported from apps/api/dist)
+RUN cd packages/db && npm run build
 RUN cd packages/shared && npm run build
 RUN cd packages/schemas && npm run build
 # config package might not have a build script, check if needed. Assuming it's just json/ts config.
@@ -44,9 +46,9 @@ RUN adduser --system --uid 1001 nestjs
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/api/package.json ./apps/api/package.json
-# Copy shared packages if they are needed at runtime (e.g. for peer deps or if not bundled)
-# Since we are using a monorepo, node_modules at root should cover it if hoisted.
-# However, NestJS build usually bundles everything in dist/main.js except node_modules.
+COPY --from=builder /app/packages/db ./packages/db
+COPY --from=builder /app/packages/shared ./packages/shared
+COPY --from=builder /app/packages/schemas ./packages/schemas
 
 USER nestjs
 
