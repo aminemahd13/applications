@@ -198,7 +198,7 @@ export class SubmissionsService {
       const result = answerSchema.safeParse(normalizedAnswers);
       if (!result.success) {
         throw new BadRequestException(
-          `Validation failed: ${result.error.errors.map((e) => e.message).join(', ')}`,
+          `Validation failed: ${result.error.issues.map((e) => e.message).join(', ')}`,
         );
       }
     }
