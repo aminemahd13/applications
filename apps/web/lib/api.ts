@@ -3,8 +3,12 @@ import { toast } from "sonner";
 
 /* ---------- Config ---------- */
 
-const API_URL =
+const PUBLIC_API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
+const INTERNAL_API_URL =
+  process.env.INTERNAL_API_URL || "http://localhost:3001/api/v1";
+const API_URL =
+  typeof window === "undefined" ? INTERNAL_API_URL : PUBLIC_API_URL;
 
 /* ---------- Server-side types ---------- */
 
