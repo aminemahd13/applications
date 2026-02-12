@@ -1,5 +1,6 @@
 import { Block, MicrositeSettings } from "@event-platform/shared";
 import { toast } from "sonner";
+import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
 
 /* ---------- Config ---------- */
 
@@ -7,7 +8,7 @@ function isAbsoluteHttpUrl(value: string): boolean {
   return value.startsWith("http://") || value.startsWith("https://");
 }
 
-const PUBLIC_API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "/api/v1").trim();
+const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 const INTERNAL_API_URL =
   (process.env.INTERNAL_API_URL ?? "").trim() ||
   (isAbsoluteHttpUrl(PUBLIC_API_URL)

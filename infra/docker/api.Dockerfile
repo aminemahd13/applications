@@ -34,8 +34,11 @@ ENV NODE_ENV production
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
+COPY --from=builder /app/apps/api/scripts ./apps/api/scripts
 COPY --from=builder /app/packages ./packages
+
+RUN sed -i 's/\r$//' ./apps/api/scripts/start-api.sh && chmod +x ./apps/api/scripts/start-api.sh
 
 EXPOSE 3001
 
-CMD ["node", "apps/api/dist/main"]
+CMD ["sh", "./apps/api/scripts/start-api.sh"]

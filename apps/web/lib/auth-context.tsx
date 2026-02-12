@@ -15,6 +15,7 @@ import {
   ROLE_PERMISSIONS,
 } from "@event-platform/shared";
 import { toast } from "sonner";
+import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
 
 /* ---------- Types ---------- */
 
@@ -51,8 +52,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 /* ---------- Constants ---------- */
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
+const API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 
 /* ---------- Provider ---------- */
 

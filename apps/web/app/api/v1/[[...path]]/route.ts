@@ -21,18 +21,26 @@ const HOP_BY_HOP_HEADERS = new Set([
   "content-length",
 ]);
 
-function resolveInternalApiBaseUrl(): string {
-  const fromInternal = process.env.INTERNAL_API_URL?.trim();
-  if (fromInternal?.startsWith("http://") || fromInternal?.startsWith("https://")) {
-    return fromInternal.replace(/\/+$/, "");
+function normalizeAbsoluteApiUrl(value: string | undefined): string | null {
+  const raw = (value ?? "").trim().replace(/\/+$/, "");
+  if (!raw) return null;
+  if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
+    return null;
   }
+  return raw;
+}
 
-  const fromPublic = process.env.NEXT_PUBLIC_API_URL?.trim();
-  if (fromPublic?.startsWith("http://") || fromPublic?.startsWith("https://")) {
-    return fromPublic.replace(/\/+$/, "");
-  }
-
-  return "http://localhost:3001/api/v1";
+function resolveInternalApiBaseUrls(): string[] {
+  return Array.from(
+    new Set(
+      [
+        normalizeAbsoluteApiUrl(process.env.INTERNAL_API_URL),
+        normalizeAbsoluteApiUrl(process.env.NEXT_PUBLIC_API_URL),
+        "http://localhost:3001/api/v1",
+        "http://api:3001/api/v1",
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  );
 }
 
 function buildTargetUrl(baseUrl: string, path: string[], search: string): string {
@@ -79,33 +87,40 @@ function copyResponseHeaders(source: Headers, target: Headers): void {
 
 async function proxy(req: NextRequest, context: RouteContext): Promise<Response> {
   const { path = [] } = await context.params;
-  const targetUrl = buildTargetUrl(
-    resolveInternalApiBaseUrl(),
-    path,
-    req.nextUrl.search,
-  );
-
   const method = req.method.toUpperCase();
-  const init: RequestInit = {
-    method,
-    headers: buildForwardHeaders(req),
-    redirect: "manual",
-    cache: "no-store",
-  };
+  const forwardHeaders = buildForwardHeaders(req);
+  const body =
+    method !== "GET" && method !== "HEAD" ? await req.arrayBuffer() : undefined;
 
-  if (method !== "GET" && method !== "HEAD") {
-    init.body = await req.arrayBuffer();
+  for (const baseUrl of resolveInternalApiBaseUrls()) {
+    const targetUrl = buildTargetUrl(baseUrl, path, req.nextUrl.search);
+    const init: RequestInit = {
+      method,
+      headers: new Headers(forwardHeaders),
+      redirect: "manual",
+      cache: "no-store",
+      body,
+    };
+
+    try {
+      const upstream = await fetch(targetUrl, init);
+      const responseHeaders = new Headers();
+      copyResponseHeaders(upstream.headers, responseHeaders);
+
+      return new NextResponse(upstream.body, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers: responseHeaders,
+      });
+    } catch {
+      continue;
+    }
   }
 
-  const upstream = await fetch(targetUrl, init);
-  const responseHeaders = new Headers();
-  copyResponseHeaders(upstream.headers, responseHeaders);
-
-  return new NextResponse(upstream.body, {
-    status: upstream.status,
-    statusText: upstream.statusText,
-    headers: responseHeaders,
-  });
+  return NextResponse.json(
+    { message: "Upstream API unavailable" },
+    { status: 502 },
+  );
 }
 
 export async function GET(req: NextRequest, context: RouteContext): Promise<Response> {

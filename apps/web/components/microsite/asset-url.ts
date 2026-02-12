@@ -1,5 +1,6 @@
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
+import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
+
+const API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 const PUBLIC_ASSET_HOST = (process.env.NEXT_PUBLIC_ASSET_HOST ?? "").trim();
 const DIRECT_ASSET_HOST = (
   process.env.NEXT_PUBLIC_DIRECT_ASSET_HOST ?? ""

@@ -41,7 +41,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { EmptyState, PageHeader, TableSkeleton } from "@/components/shared";
 import { apiClient } from "@/lib/api";
+import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
 import { toast } from "sonner";
+
+const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 
 interface AdminStats {
   totals: {
@@ -268,7 +271,7 @@ export default function AdminPeoplePage() {
       if (userFilter !== "all") params.set("filter", userFilter);
       const queryString = params.toString();
       const endpoint =
-        `${process.env.NEXT_PUBLIC_API_URL ?? "/api/v1"}/admin/users/export` +
+        `${PUBLIC_API_URL}/admin/users/export` +
         (queryString ? `?${queryString}` : "");
 
       const res = await fetch(endpoint, { credentials: "include" });
