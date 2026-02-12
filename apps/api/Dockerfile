@@ -20,6 +20,7 @@ FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/ ./
 COPY . .
+RUN mkdir -p apps/api/node_modules
 
 # Generate Prisma Client
 RUN cd packages/db && npx prisma generate
@@ -50,6 +51,10 @@ COPY --from=builder /app/apps/api/package.json ./apps/api/package.json
 COPY --from=builder /app/packages/db ./packages/db
 COPY --from=builder /app/packages/shared ./packages/shared
 COPY --from=builder /app/packages/schemas ./packages/schemas
+
+# Fail the image build early if runtime module resolution is broken
+# from the same resolution base as `node apps/api/dist/main`.
+RUN node -e "const { createRequire } = require('module'); const r = createRequire('/app/apps/api/dist/main.js'); ['connect-redis','express','zod','@event-platform/db','@event-platform/shared','@event-platform/schemas'].forEach((m)=>r.resolve(m)); console.log('api runtime deps ok')"
 
 USER nestjs
 
