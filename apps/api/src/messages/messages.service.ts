@@ -726,6 +726,7 @@ export class MessagesService {
           select: {
             title: true,
             body_rich: true,
+            body_text: true,
             action_buttons: true,
           },
         },
@@ -752,7 +753,10 @@ export class MessagesService {
       if (!bodyHtmlByMessageId.has(recipient.message_id)) {
         bodyHtmlByMessageId.set(
           recipient.message_id,
-          this.richToHtml(recipient.messages.body_rich),
+          this.resolveEmailBodyHtml(
+            recipient.messages.body_rich,
+            recipient.messages.body_text,
+          ),
         );
       }
       if (!buttonsByMessageId.has(recipient.message_id)) {
@@ -880,6 +884,26 @@ export class MessagesService {
         };
       })
       .filter((button): button is { label: string; url: string } => !!button);
+  }
+
+  private resolveEmailBodyHtml(bodyRich: unknown, bodyText: unknown): string {
+    const richHtml = this.richToHtml(bodyRich);
+    if (richHtml.trim().length > 0) return richHtml;
+
+    const plainText =
+      typeof bodyText === 'string' ? bodyText.trim() : '';
+    if (plainText.length === 0) return '';
+
+    return `<p>${this.escapeHtml(plainText).replace(/\r?\n/g, '<br />')}</p>`;
+  }
+
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   private richToHtml(richContent: any): string {
