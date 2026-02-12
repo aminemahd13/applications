@@ -9,7 +9,9 @@ const ROUTING_MODE = (process.env.NEXT_PUBLIC_ROUTING_MODE || "path") as
   | "subdomain";
 const ROOT_DOMAIN = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost:3000";
 const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
+  process.env.INTERNAL_API_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:3001/api/v1";
 const SESSION_VALIDATION_COOKIE = "session_validated";
 const SESSION_VALIDATION_MAX_AGE_SECONDS = Number(
   process.env.SESSION_VALIDATION_MAX_AGE_SECONDS || "900",
