@@ -50,9 +50,12 @@ import {
   ConfirmDialog,
 } from "@/components/shared";
 import { apiClient } from "@/lib/api";
+import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
 import { toast } from "sonner";
 import { useAuth, usePermissions } from "@/lib/auth-context";
 import { Permission } from "@event-platform/shared";
+
+const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 
 interface Application {
   id: string;
@@ -203,7 +206,7 @@ export default function ApplicationsListPage() {
     setIsExporting(true);
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL ?? "/api/v1"}/events/${eventId}/applications/export`,
+        `${PUBLIC_API_URL}/events/${eventId}/applications/export`,
         { credentials: "include" },
       );
       if (!res.ok) throw new Error("Export failed");

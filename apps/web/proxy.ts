@@ -8,14 +8,27 @@ const ROUTING_MODE = (process.env.NEXT_PUBLIC_ROUTING_MODE || "path") as
   | "path"
   | "subdomain";
 const ROOT_DOMAIN = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost:3000";
-const INTERNAL_API_URL = (process.env.INTERNAL_API_URL ?? "").trim();
-const PUBLIC_API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").trim();
-const API_URL =
-  INTERNAL_API_URL ||
-  (PUBLIC_API_URL.startsWith("http://") ||
-  PUBLIC_API_URL.startsWith("https://")
-    ? PUBLIC_API_URL
-    : "http://localhost:3001/api/v1");
+
+function normalizeAbsoluteApiUrl(value: string | undefined): string | null {
+  const raw = (value ?? "").trim().replace(/\/+$/, "");
+  if (!raw) return null;
+  if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
+    return null;
+  }
+  return raw;
+}
+
+const API_URL_CANDIDATES = Array.from(
+  new Set(
+    [
+      normalizeAbsoluteApiUrl(process.env.INTERNAL_API_URL),
+      normalizeAbsoluteApiUrl(process.env.NEXT_PUBLIC_API_URL),
+      "http://localhost:3001/api/v1",
+      "http://api:3001/api/v1",
+    ].filter((value): value is string => Boolean(value)),
+  ),
+);
+
 const SESSION_VALIDATION_COOKIE = "session_validated";
 const SESSION_VALIDATION_MAX_AGE_SECONDS = Number(
   process.env.SESSION_VALIDATION_MAX_AGE_SECONDS || "900",
@@ -147,21 +160,31 @@ function isProtectedRoute(pathname: string): boolean {
 }
 
 async function validateSession(req: NextRequest): Promise<boolean> {
-  try {
-    const cookie = req.headers.get("cookie") ?? "";
-    const res = await fetch(`${API_URL}/auth/me`, {
-      method: "GET",
-      headers: {
-        cookie,
-        accept: "application/json",
-      },
-      cache: "no-store",
-    });
-    return res.ok;
-  } catch {
-    // If the auth service is temporarily unreachable, fail closed  require re-login.
-    return false;
+  const cookie = req.headers.get("cookie") ?? "";
+
+  for (const apiUrl of API_URL_CANDIDATES) {
+    try {
+      const res = await fetch(`${apiUrl}/auth/me`, {
+        method: "GET",
+        headers: {
+          cookie,
+          accept: "application/json",
+        },
+        cache: "no-store",
+      });
+
+      if (res.status === 404 || res.status >= 500) {
+        continue;
+      }
+
+      return res.ok;
+    } catch {
+      continue;
+    }
   }
+
+  // If the auth service is temporarily unreachable, fail closed: require re-login.
+  return false;
 }
 
 function sidMarker(sidValue: string): string {
