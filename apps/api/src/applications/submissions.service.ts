@@ -23,6 +23,7 @@ import {
   getFormFields,
   FieldType,
 } from '@event-platform/schemas';
+import { isDeepStrictEqual } from 'node:util';
 
 @Injectable()
 export class SubmissionsService {
@@ -181,6 +182,13 @@ export class SubmissionsService {
       throw new BadRequestException('Form version not found');
     }
 
+    await this.ensureNeedsInfoTargetFieldEditsAllowed(
+      applicationId,
+      stepId,
+      state.status,
+      normalizedAnswers,
+    );
+
     // Strict Validation
     const definition = formVersion.schema as unknown as FormDefinition;
     if (definition) {
@@ -211,6 +219,7 @@ export class SubmissionsService {
       step.form_version_id,
       normalizedAnswers,
       applicationId,
+      stepId,
       userId,
       eventId,
     );
@@ -428,12 +437,72 @@ export class SubmissionsService {
   }
 
   /**
+   * Enforce targeted-field revision mode when open needs-info requests specify targets.
+   */
+  private async ensureNeedsInfoTargetFieldEditsAllowed(
+    applicationId: string,
+    stepId: string,
+    currentStepStatus: StepStatus,
+    submittedAnswers: Record<string, any>,
+  ): Promise<void> {
+    if (currentStepStatus !== StepStatus.NEEDS_REVISION) return;
+
+    const openRequests = await this.prisma.needs_info_requests.findMany({
+      where: {
+        application_id: applicationId,
+        step_id: stepId,
+        status: 'OPEN',
+      },
+      select: { target_field_ids: true },
+    });
+    if (openRequests.length === 0) return;
+
+    const targetedFieldIds = new Set(
+      openRequests.flatMap((request) =>
+        (request.target_field_ids ?? [])
+          .filter((fieldId): fieldId is string => typeof fieldId === 'string')
+          .map((fieldId) => fieldId.trim())
+          .filter((fieldId) => fieldId.length > 0),
+      ),
+    );
+    if (targetedFieldIds.size === 0) return;
+
+    const latestSubmission = await this.prisma.step_submission_versions.findFirst({
+      where: { application_id: applicationId, step_id: stepId },
+      orderBy: { version_number: 'desc' },
+      select: { answers_snapshot: true },
+    });
+    if (!latestSubmission) return;
+
+    const previousAnswers = this.normalizeAnswersShape(
+      latestSubmission.answers_snapshot as Record<string, any>,
+    );
+    const changedFieldIds = Object.keys(submittedAnswers)
+      .map((fieldId) => fieldId.trim())
+      .filter((fieldId) => fieldId.length > 0)
+      .filter(
+        (fieldId) =>
+          !isDeepStrictEqual(submittedAnswers[fieldId], previousAnswers[fieldId]),
+      );
+
+    const disallowedChanges = changedFieldIds.filter(
+      (fieldId) => !targetedFieldIds.has(fieldId),
+    );
+    if (disallowedChanges.length === 0) return;
+
+    throw new BadRequestException(
+      `Only requested fields can be changed for this revision. Allowed fields: ${Array.from(targetedFieldIds).join(', ')}.`,
+    );
+  }
+
+  /**
    * Validate and commit file answers
    */
   private async validateFiles(
     formVersionId: string,
     answers: Record<string, any>,
     applicationId: string,
+    stepId: string,
     userId: string,
     eventId: string,
   ): Promise<void> {
@@ -444,16 +513,54 @@ export class SubmissionsService {
       version?.schema as FormDefinition | undefined,
     );
 
-    const fileIds = new Set<string>();
+    const references: Array<{
+      fileId: string;
+      fieldId: string;
+      allowedMimeTypes: string[];
+      maxFileSizeBytes?: number;
+    }> = [];
     for (const field of allFields) {
       if (field.type !== 'file_upload') continue;
       const fieldKey = field.key || field.id;
       const value = answers[fieldKey];
-      this.extractFileObjectIds(value).forEach((id) => fileIds.add(id));
+      const fileIds = this.extractFileObjectIds(value);
+      if (fileIds.length === 0) continue;
+
+      const allowedMimeTypes = Array.isArray(
+        field.ui?.allowedMimeTypes ?? field.validation?.allowedTypes,
+      )
+        ? Array.from(
+            new Set(
+              (field.ui?.allowedMimeTypes ?? field.validation?.allowedTypes ?? [])
+                .filter((entry): entry is string => typeof entry === 'string')
+                .map((entry) => entry.trim().toLowerCase())
+                .filter((entry) => entry.length > 0),
+            ),
+          )
+        : [];
+      const maxFileSizeMB = Number(field.ui?.maxFileSizeMB);
+      const maxFileSizeBytes =
+        Number.isFinite(maxFileSizeMB) && maxFileSizeMB > 0
+          ? Math.floor(maxFileSizeMB * 1024 * 1024)
+          : undefined;
+
+      for (const fileId of fileIds) {
+        const normalizedFileId = String(fileId).trim();
+        if (!normalizedFileId) continue;
+        references.push({
+          fileId: normalizedFileId,
+          fieldId: fieldKey,
+          allowedMimeTypes,
+          maxFileSizeBytes,
+        });
+      }
     }
 
-    if (fileIds.size > 0) {
-      await this.filesService.validateAndCommit([...fileIds], eventId, userId);
+    if (references.length > 0) {
+      await this.filesService.validateAndCommit(references, eventId, userId, {
+        applicationId,
+        stepId,
+      });
     }
   }
 

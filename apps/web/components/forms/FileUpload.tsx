@@ -16,6 +16,9 @@ interface FileUploadProps {
     value?: FileUploadSelection;
     onChange: (value: FileUploadSelection) => void;
     eventId: string;
+    applicationId?: string;
+    stepId?: string;
+    fieldId?: string;
     readOnly?: boolean;
     accept?: string;
     multiple?: boolean;
@@ -66,6 +69,9 @@ export function FileUpload({
     value,
     onChange,
     eventId,
+    applicationId,
+    stepId,
+    fieldId,
     readOnly,
     accept,
     multiple,
@@ -82,10 +88,22 @@ export function FileUpload({
             ? maxFileSizeMB
             : 50;
     const effectiveMaxFileSizeBytes = Math.floor(effectiveMaxFileSizeMB * 1024 * 1024);
+    const hasUploadContext =
+        typeof applicationId === 'string' &&
+        applicationId.length > 0 &&
+        typeof stepId === 'string' &&
+        stepId.length > 0 &&
+        typeof fieldId === 'string' &&
+        fieldId.length > 0;
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files ?? []);
         if (files.length === 0) return;
+        if (!hasUploadContext) {
+            setError('Upload context missing. Reload the page and try again.');
+            e.target.value = '';
+            return;
+        }
 
         const existing = normalizeValue(value);
         const limit = typeof maxFiles === 'number' ? maxFiles : multiple ? undefined : 1;
@@ -140,6 +158,7 @@ export function FileUpload({
             const uploaded: FileUploadValue[] = [];
 
             for (const file of acceptedFiles) {
+                const fileMimeType = file.type || 'application/octet-stream';
                 // 1. Register Upload
                 const { uploadUrl, id } = await apiClient<{ uploadUrl: string; id: string; storageKey: string }>(
                     `/events/${eventId}/uploads`,
@@ -147,8 +166,11 @@ export function FileUpload({
                         method: 'POST',
                         body: {
                             originalFilename: file.name,
-                            mimeType: file.type,
+                            mimeType: fileMimeType,
                             sizeBytes: file.size,
+                            applicationId,
+                            stepId,
+                            fieldId,
                             sensitivity: 'normal',
                         },
                         csrfToken: csrfToken ?? undefined,
@@ -162,7 +184,7 @@ export function FileUpload({
                     method: 'PUT',
                     body: file,
                     headers: {
-                        'Content-Type': file.type,
+                        'Content-Type': fileMimeType,
                     },
                 });
 
@@ -175,6 +197,11 @@ export function FileUpload({
                 // 3. Commit Upload
                 await apiClient(`/events/${eventId}/uploads/${id}/commit`, {
                     method: 'POST',
+                    body: {
+                        applicationId,
+                        stepId,
+                        fieldId,
+                    },
                     csrfToken: csrfToken ?? undefined,
                 });
 
@@ -209,7 +236,9 @@ export function FileUpload({
     const current = normalizeValue(value);
     const limit = typeof maxFiles === 'number' ? maxFiles : multiple ? undefined : 1;
     const canUploadMore =
-        !readOnly && (typeof limit !== 'number' || current.length < limit);
+        !readOnly &&
+        hasUploadContext &&
+        (typeof limit !== 'number' || current.length < limit);
 
     return (
         <div className="bg-muted/30 border-border rounded-lg border p-4">
@@ -271,6 +300,11 @@ export function FileUpload({
                             .join(' | ')}
                     </p>
                     {uploading && <p className="text-primary mt-2 text-xs">Uploading... {progress}%</p>}
+                    {!hasUploadContext && (
+                        <p className="text-muted-foreground mt-2 text-xs">
+                            Upload unavailable until application step context is loaded.
+                        </p>
+                    )}
                     {error && <p className="text-destructive mt-2 text-xs">{error}</p>}
                 </div>
             )}

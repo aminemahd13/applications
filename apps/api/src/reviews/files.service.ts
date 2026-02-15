@@ -13,9 +13,34 @@ import {
   FileDownloadUrlResponse,
   FileVerificationResponse,
   Permission,
+  StepStatus,
 } from '@event-platform/shared';
 import { StorageService } from '../common/storage/storage.service';
 import { FormDefinition, getFormFields } from '@event-platform/schemas';
+
+interface UploadFieldContext {
+  applicationId: string;
+  stepId: string;
+  fieldId: string;
+}
+
+interface FileFieldConstraints {
+  fieldId: string;
+  allowedMimeTypes: string[];
+  maxFileSizeBytes?: number;
+}
+
+interface CommitUploadOptions extends UploadFieldContext {
+  expectedAllowedMimeTypes?: string[];
+  expectedMaxFileSizeBytes?: number;
+}
+
+interface FileValidationReference {
+  fileId: string;
+  fieldId: string;
+  allowedMimeTypes?: string[];
+  maxFileSizeBytes?: number;
+}
 
 @Injectable()
 export class FilesService {
@@ -36,9 +61,41 @@ export class FilesService {
       sizeBytes: number;
       storageKey: string;
       sensitivity: FileSensitivity;
+      applicationId: string;
+      stepId: string;
+      fieldId: string;
     },
   ): Promise<FileUploadResponse> {
     const userId = this.cls.get('actorId');
+    const constraints = await this.resolveUploadFieldContext(
+      eventId,
+      userId,
+      {
+        applicationId: fileData.applicationId,
+        stepId: fileData.stepId,
+        fieldId: fileData.fieldId,
+      },
+    );
+
+    const originalFilename = String(fileData.originalFilename ?? '').trim();
+    const mimeType = String(fileData.mimeType ?? '').trim().toLowerCase();
+    const declaredSizeBytes = Number(fileData.sizeBytes);
+    if (!originalFilename) {
+      throw new BadRequestException('originalFilename is required');
+    }
+    if (!mimeType) {
+      throw new BadRequestException('mimeType is required');
+    }
+    if (!Number.isFinite(declaredSizeBytes) || declaredSizeBytes <= 0) {
+      throw new BadRequestException('sizeBytes must be a positive number');
+    }
+    this.assertMimeNotBlocked(mimeType);
+    this.assertMatchesFieldConstraints(
+      mimeType,
+      declaredSizeBytes,
+      constraints,
+      'declared',
+    );
 
     // Expiry: 24h for STAGED files
     const expiresAt = new Date();
@@ -49,9 +106,9 @@ export class FilesService {
         id: crypto.randomUUID(),
         event_id: eventId,
         storage_key: fileData.storageKey,
-        original_filename: fileData.originalFilename,
-        mime_type: fileData.mimeType,
-        size_bytes: BigInt(fileData.sizeBytes),
+        original_filename: originalFilename,
+        mime_type: mimeType,
+        size_bytes: BigInt(declaredSizeBytes),
         sensitivity: fileData.sensitivity,
         status: 'STAGED', // Enforce staged initially
         expires_at: expiresAt,
@@ -62,7 +119,7 @@ export class FilesService {
     // Generate Presigned PUT
     const uploadUrl = await this.storageService.getPresignedPutUrl(
       fileData.storageKey,
-      fileData.mimeType,
+      mimeType,
     );
 
     return {
@@ -80,8 +137,31 @@ export class FilesService {
    * Commit uploaded file (Mark as COMMITTED)
    * Validates S3 metadata matches expected values.
    */
-  async commitUpload(fileId: string, eventId: string): Promise<void> {
+  async commitUpload(
+    fileId: string,
+    eventId: string,
+    options?: CommitUploadOptions,
+  ): Promise<void> {
     const userId = this.cls.get('actorId');
+    let fieldConstraints: FileFieldConstraints | null = null;
+    if (options) {
+      fieldConstraints = await this.resolveUploadFieldContext(eventId, userId, {
+        applicationId: options.applicationId,
+        stepId: options.stepId,
+        fieldId: options.fieldId,
+      });
+      fieldConstraints = {
+        fieldId: fieldConstraints.fieldId,
+        allowedMimeTypes:
+          options.expectedAllowedMimeTypes !== undefined
+            ? this.normalizeMimeTypes(options.expectedAllowedMimeTypes)
+            : fieldConstraints.allowedMimeTypes,
+        maxFileSizeBytes:
+          options.expectedMaxFileSizeBytes !== undefined
+            ? options.expectedMaxFileSizeBytes
+            : fieldConstraints.maxFileSizeBytes,
+      };
+    }
 
     const file = await this.prisma.file_objects.findUnique({
       where: { id: fileId },
@@ -93,7 +173,20 @@ export class FilesService {
     if (file.created_by !== userId)
       throw new ForbiddenException('Access denied');
 
-    if (file.status === 'COMMITTED') return;
+    if (file.status === 'COMMITTED') {
+      const committedMime = String(file.mime_type ?? '').toLowerCase();
+      const committedSize = Number(file.size_bytes ?? 0);
+      this.assertMimeNotBlocked(committedMime);
+      if (fieldConstraints) {
+        this.assertMatchesFieldConstraints(
+          committedMime,
+          committedSize,
+          fieldConstraints,
+          'stored',
+        );
+      }
+      return;
+    }
 
     // Verify existence and metadata in S3
     let head;
@@ -109,10 +202,11 @@ export class FilesService {
     if (!head) throw new BadRequestException('File not found in storage.');
 
     const actualSize = head.ContentLength || 0;
-    const actualMime = head.ContentType || 'application/octet-stream';
+    const actualMime = (head.ContentType || 'application/octet-stream')
+      .toLowerCase()
+      .trim();
 
     // 1. Size Check (Max 50MB global limit as safety net)
-    // Ideally this matches field config, but we don't have field context here yet.
     const MAX_SIZE = 50 * 1024 * 1024;
     if (actualSize > MAX_SIZE) {
       await this.cleanupFailedUpload(file.storage_key, fileId);
@@ -120,23 +214,31 @@ export class FilesService {
     }
 
     // 2. Mime Type Check (Must match what was registered)
-    if (actualMime !== file.mime_type) {
+    if (actualMime !== String(file.mime_type ?? '').toLowerCase()) {
       await this.cleanupFailedUpload(file.storage_key, fileId);
       throw new BadRequestException(
-        `File type mismatch. Expected ${file.mime_type}, got ${actualMime}`,
+        `File type mismatch. Expected ${String(file.mime_type).toLowerCase()}, got ${actualMime}`,
       );
     }
 
     // 3. Blocklist (Extra safety)
-    const blockedTypes = [
-      'application/x-msdownload',
-      'application/x-sh',
-      'application/x-php',
-      'application/x-dosexec',
-    ];
-    if (blockedTypes.includes(actualMime)) {
+    if (this.isBlockedMimeType(actualMime)) {
       await this.cleanupFailedUpload(file.storage_key, fileId);
       throw new BadRequestException('File type not allowed.');
+    }
+
+    if (fieldConstraints) {
+      try {
+        this.assertMatchesFieldConstraints(
+          actualMime,
+          actualSize,
+          fieldConstraints,
+          'uploaded',
+        );
+      } catch (error) {
+        await this.cleanupFailedUpload(file.storage_key, fileId);
+        throw error;
+      }
     }
 
     const sha256 = await this.storageService.computeSha256(file.storage_key);
@@ -416,39 +518,51 @@ export class FilesService {
    * Validate files exist and belong to event (and "commit" them)
    */
   async validateAndCommit(
-    fileIds: string[],
+    references: FileValidationReference[],
     eventId: string,
     userId: string,
+    context: { applicationId: string; stepId: string },
   ): Promise<void> {
-    if (fileIds.length === 0) return;
+    if (references.length === 0) return;
 
     const actorId = this.cls.get('actorId');
     if (actorId && userId && actorId !== userId) {
       throw new ForbiddenException('Access denied');
     }
 
+    const uniqueFileIds = Array.from(new Set(references.map((ref) => ref.fileId)));
+
     const files = await this.prisma.file_objects.findMany({
       where: {
-        id: { in: fileIds },
+        id: { in: uniqueFileIds },
         event_id: eventId,
         created_by: userId,
       },
     });
 
-    if (files.length !== fileIds.length) {
+    if (files.length !== uniqueFileIds.length) {
       // Find missing or unauthorized files
       const foundIds = new Set(files.map((f) => f.id));
-      const missingIds = fileIds.filter((id) => !foundIds.has(id));
+      const missingIds = uniqueFileIds.filter((id) => !foundIds.has(id));
       throw new NotFoundException(
         `Files not found or access denied: ${missingIds.join(', ')}`,
       );
     }
 
-    // Commit any staged files (verifies storage metadata)
-    for (const file of files) {
-      if (file.status !== 'COMMITTED') {
-        await this.commitUpload(file.id, eventId);
-      }
+    // Enforce field constraints for each referenced field/file pair.
+    const seenReferenceKeys = new Set<string>();
+    for (const ref of references) {
+      const key = `${ref.fileId}:${ref.fieldId}`;
+      if (seenReferenceKeys.has(key)) continue;
+      seenReferenceKeys.add(key);
+
+      await this.commitUpload(ref.fileId, eventId, {
+        applicationId: context.applicationId,
+        stepId: context.stepId,
+        fieldId: ref.fieldId,
+        expectedAllowedMimeTypes: ref.allowedMimeTypes,
+        expectedMaxFileSizeBytes: ref.maxFileSizeBytes,
+      });
     }
   }
 
@@ -483,6 +597,166 @@ export class FilesService {
     }
 
     return true;
+  }
+
+  private async resolveUploadFieldContext(
+    eventId: string,
+    userId: string,
+    context: UploadFieldContext,
+  ): Promise<FileFieldConstraints> {
+    const application = await this.prisma.applications.findFirst({
+      where: { id: context.applicationId, event_id: eventId },
+      select: { id: true, applicant_user_id: true },
+    });
+    if (!application) {
+      throw new NotFoundException('Application not found');
+    }
+
+    const permissions = (this.cls.get('permissions') || []) as string[];
+    const isStaffActor =
+      permissions.includes(Permission.EVENT_STEP_PATCH) ||
+      permissions.includes(Permission.ADMIN_EVENTS_MANAGE);
+    if (!isStaffActor && application.applicant_user_id !== userId) {
+      throw new ForbiddenException('Cannot upload files for another applicant');
+    }
+
+    const [step, stepState] = await Promise.all([
+      this.prisma.workflow_steps.findFirst({
+        where: { id: context.stepId, event_id: eventId },
+        select: { id: true, form_version_id: true, deadline_at: true },
+      }),
+      this.prisma.application_step_states.findFirst({
+        where: {
+          application_id: context.applicationId,
+          step_id: context.stepId,
+        },
+        select: { status: true },
+      }),
+    ]);
+
+    if (!step) throw new NotFoundException('Step not found');
+    if (!stepState) throw new NotFoundException('Step state not found');
+    if (!step.form_version_id) {
+      throw new BadRequestException('Step has no form attached');
+    }
+
+    if (!isStaffActor) {
+      if (
+        stepState.status !== StepStatus.UNLOCKED &&
+        stepState.status !== StepStatus.NEEDS_REVISION
+      ) {
+        throw new ForbiddenException('Step is not open for file uploads');
+      }
+      if (step.deadline_at && new Date() > new Date(step.deadline_at)) {
+        throw new ForbiddenException('Step deadline has passed');
+      }
+    }
+
+    const formVersion = await this.prisma.form_versions.findUnique({
+      where: { id: step.form_version_id },
+      select: { schema: true },
+    });
+    if (!formVersion) throw new NotFoundException('Form version not found');
+
+    const fields = getFormFields(
+      formVersion.schema as FormDefinition | undefined,
+    );
+    const field = fields.find(
+      (candidate) =>
+        candidate.key === context.fieldId || candidate.id === context.fieldId,
+    );
+    if (!field) {
+      throw new BadRequestException('Field not found in form schema');
+    }
+    if (field.type !== 'file_upload') {
+      throw new BadRequestException('Field is not a file_upload field');
+    }
+
+    return this.toFieldConstraints(field, context.fieldId);
+  }
+
+  private toFieldConstraints(
+    field: any,
+    fallbackFieldId: string,
+  ): FileFieldConstraints {
+    const allowedMimeTypes = this.normalizeMimeTypes(
+      field?.ui?.allowedMimeTypes ?? field?.validation?.allowedTypes,
+    );
+    const maxFileSizeMB = Number(field?.ui?.maxFileSizeMB);
+    const maxFileSizeBytes =
+      Number.isFinite(maxFileSizeMB) && maxFileSizeMB > 0
+        ? Math.floor(maxFileSizeMB * 1024 * 1024)
+        : undefined;
+
+    return {
+      fieldId:
+        typeof field?.key === 'string' && field.key.trim().length > 0
+          ? field.key
+          : typeof field?.id === 'string' && field.id.trim().length > 0
+            ? field.id
+            : fallbackFieldId,
+      allowedMimeTypes,
+      maxFileSizeBytes,
+    };
+  }
+
+  private normalizeMimeTypes(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return Array.from(
+      new Set(
+        value
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((entry) => entry.trim().toLowerCase())
+          .filter((entry) => entry.length > 0),
+      ),
+    );
+  }
+
+  private assertMatchesFieldConstraints(
+    mimeType: string,
+    sizeBytes: number,
+    constraints: FileFieldConstraints,
+    sourceLabel: 'declared' | 'uploaded' | 'stored',
+  ): void {
+    if (
+      typeof constraints.maxFileSizeBytes === 'number' &&
+      Number.isFinite(constraints.maxFileSizeBytes) &&
+      constraints.maxFileSizeBytes > 0 &&
+      sizeBytes > constraints.maxFileSizeBytes
+    ) {
+      const maxSizeMB = (
+        constraints.maxFileSizeBytes /
+        (1024 * 1024)
+      ).toFixed(2);
+      throw new BadRequestException(
+        `File too large for field "${constraints.fieldId}" (${sourceLabel} size ${sizeBytes} bytes, max ${maxSizeMB}MB).`,
+      );
+    }
+
+    if (
+      constraints.allowedMimeTypes.length > 0 &&
+      !constraints.allowedMimeTypes.includes(String(mimeType).toLowerCase())
+    ) {
+      throw new BadRequestException(
+        `File type "${mimeType}" is not allowed for field "${constraints.fieldId}".`,
+      );
+    }
+  }
+
+  private assertMimeNotBlocked(mimeType: string): void {
+    if (this.isBlockedMimeType(mimeType)) {
+      throw new BadRequestException('File type not allowed.');
+    }
+  }
+
+  private isBlockedMimeType(mimeType: string): boolean {
+    const blockedTypes = [
+      'application/x-msdownload',
+      'application/x-sh',
+      'application/x-php',
+      'application/x-dosexec',
+    ];
+    return blockedTypes.includes(String(mimeType).toLowerCase());
   }
 
   private extractFileObjectIds(value: any): string[] {

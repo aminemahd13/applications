@@ -280,6 +280,9 @@ export class CheckinService {
     });
 
     if (!app) throw new NotFoundException('Application not found');
+    if (app.event_id !== eventId) {
+      throw new NotFoundException('Application not found');
+    }
 
     // Verify JTI matches stored hash (security check against old/revoked tokens)
     if (app.attendance_records?.qr_token_hash !== jti) {

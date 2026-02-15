@@ -6,16 +6,12 @@ import {
   Param,
   Query,
   UseGuards,
-  UseInterceptors,
-  UploadedFile,
-  ParseFilePipe,
-  MaxFileSizeValidator,
+  BadRequestException,
 } from '@nestjs/common';
 import { FilesService } from './files.service';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { Permission, FileSensitivity } from '@event-platform/shared';
-import { FileInterceptor } from '@nestjs/platform-express';
 import { ClsService } from 'nestjs-cls';
 
 @Controller('events/:eventId')
@@ -42,9 +38,17 @@ export class FilesController {
       originalFilename: string;
       mimeType: string;
       sizeBytes: number;
+      applicationId: string;
+      stepId: string;
+      fieldId: string;
       sensitivity?: FileSensitivity;
     },
   ) {
+    if (!body.applicationId || !body.stepId || !body.fieldId) {
+      throw new BadRequestException(
+        'applicationId, stepId, and fieldId are required',
+      );
+    }
     const sensitivity = body.sensitivity || FileSensitivity.NORMAL;
     // Storage key: events/:eventId/uploads/:uuid-:filename
     const storageKey = `events/${eventId}/uploads/${crypto.randomUUID()}-${body.originalFilename}`;
@@ -55,6 +59,9 @@ export class FilesController {
       sizeBytes: body.sizeBytes,
       storageKey,
       sensitivity,
+      applicationId: body.applicationId,
+      stepId: body.stepId,
+      fieldId: body.fieldId,
     });
   }
 
@@ -66,8 +73,23 @@ export class FilesController {
   async commitUpload(
     @Param('eventId') eventId: string,
     @Param('fileId') fileId: string,
+    @Body()
+    body: {
+      applicationId: string;
+      stepId: string;
+      fieldId: string;
+    },
   ) {
-    await this.filesService.commitUpload(fileId, eventId);
+    if (!body.applicationId || !body.stepId || !body.fieldId) {
+      throw new BadRequestException(
+        'applicationId, stepId, and fieldId are required',
+      );
+    }
+    await this.filesService.commitUpload(fileId, eventId, {
+      applicationId: body.applicationId,
+      stepId: body.stepId,
+      fieldId: body.fieldId,
+    });
     return { status: 'COMMITTED' };
   }
 

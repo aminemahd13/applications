@@ -123,6 +123,41 @@ function unwrapApiRecord(
   return isRecord(value.data) ? value.data : value;
 }
 
+function normalizeNeedsInfo(
+  value: unknown,
+): Array<{
+  id: string;
+  targetFieldIds: string[];
+  message: string;
+  deadlineAt?: string;
+}> {
+  const rawItems = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.data)
+      ? value.data
+      : [];
+
+  return rawItems
+    .filter(isRecord)
+    .filter((entry) => String(entry.status ?? "").toUpperCase() === "OPEN")
+    .map((entry) => ({
+      id: String(entry.id ?? ""),
+      targetFieldIds: Array.isArray(entry.targetFieldIds)
+        ? entry.targetFieldIds
+            .filter((fieldId): fieldId is string => typeof fieldId === "string")
+            .map((fieldId) => fieldId.trim())
+            .filter((fieldId) => fieldId.length > 0)
+        : [],
+      message:
+        typeof entry.message === "string" && entry.message.trim().length > 0
+          ? entry.message
+          : "Please update the requested information.",
+      deadlineAt:
+        typeof entry.deadlineAt === "string" ? entry.deadlineAt : undefined,
+    }))
+    .filter((entry) => entry.id.length > 0);
+}
+
 function normalizeConditionOperator(value: unknown): ConditionOperator {
   const normalized = String(value ?? "").trim().toLowerCase();
   switch (normalized) {
@@ -641,6 +676,9 @@ export default function StepFormPage() {
   const needsInfoFieldIds = new Set(
     step?.needsInfo?.flatMap((ni) => ni.targetFieldIds) ?? []
   );
+  const hasTargetedNeedsInfo = needsInfoFieldIds.size > 0;
+  const isRevisionTargetedMode =
+    step?.status === "NEEDS_REVISION" && hasTargetedNeedsInfo;
 
   const validationIssues = useMemo(
     () => collectValidationIssues(step?.formDefinition, watchedValues ?? {}),
@@ -730,6 +768,12 @@ export default function StepFormPage() {
           `/events/${eventId}/applications/me/steps/${stepId}/draft`
         ).catch(() => null);
         const draft = unwrapApiRecord(draftRes);
+        const needsInfoRes = await apiClient<
+          Record<string, unknown> | { data: Array<Record<string, unknown>> }
+        >(`/events/${eventId}/applications/${applicationId}/needs-info?stepId=${stepId}`).catch(
+          () => null
+        );
+        const needsInfo = normalizeNeedsInfo(needsInfoRes);
 
         // Build a step detail object (the API doesn't have a dedicated "get step detail" for applicants)
         // We get step info from the full application
@@ -772,7 +816,7 @@ export default function StepFormPage() {
           formDefinition: normalizeFormDefinition(stepState?.formDefinition),
           draft: draftAnswers,
           submission: undefined,
-          needsInfo: undefined,
+          needsInfo,
         };
         setStep(stepDetail);
         setSubmitError(null);
@@ -1038,6 +1082,8 @@ export default function StepFormPage() {
               }
               const isFieldRequired = isFieldRequiredByLogic(field, currentValues);
               const hasNeedsInfo = needsInfoFieldIds.has(field.fieldId);
+              const isLockedForRevision = isRevisionTargetedMode && !hasNeedsInfo;
+              const fieldReadOnly = isReadOnly || isLockedForRevision;
               const fieldIssue = validationIssues[field.fieldId];
               const fieldState = form.getFieldState(field.fieldId);
               const showFieldIssue =
@@ -1050,6 +1096,8 @@ export default function StepFormPage() {
                   className={
                     hasNeedsInfo
                       ? "rounded-lg border-2 border-warning/50 bg-warning/5 p-3 -m-3"
+                      : isLockedForRevision
+                        ? "rounded-lg border border-muted/50 bg-muted/20 p-3 -m-3"
                       : ""
                   }
                 >
@@ -1072,7 +1120,7 @@ export default function StepFormPage() {
                         id={field.fieldId}
                         type={field.type === "NUMBER" ? "number" : field.type === "EMAIL" ? "email" : "text"}
                         placeholder={field.placeholder}
-                        disabled={isReadOnly}
+                        disabled={fieldReadOnly}
                         className={showFieldIssue ? "border-destructive" : undefined}
                         {...form.register(field.fieldId)}
                       />
@@ -1083,7 +1131,7 @@ export default function StepFormPage() {
                         id={field.fieldId}
                         placeholder={field.placeholder}
                         rows={4}
-                        disabled={isReadOnly}
+                        disabled={fieldReadOnly}
                         className={showFieldIssue ? "border-destructive" : undefined}
                         {...form.register(field.fieldId)}
                       />
@@ -1091,7 +1139,7 @@ export default function StepFormPage() {
 
                     {field.type === "SELECT" && (
                       <Select
-                        disabled={isReadOnly}
+                        disabled={fieldReadOnly}
                         value={(form.watch(field.fieldId) as string) ?? ""}
                         onValueChange={(v) =>
                           form.setValue(field.fieldId, v, {
@@ -1146,7 +1194,7 @@ export default function StepFormPage() {
                                       onCheckedChange={(v) =>
                                         toggleValue(opt.value, v === true)
                                       }
-                                      disabled={isReadOnly}
+                                      disabled={fieldReadOnly}
                                     />
                                     <span>{opt.label}</span>
                                   </label>
@@ -1166,7 +1214,7 @@ export default function StepFormPage() {
                       <div className="flex items-center gap-2">
                         <Checkbox
                           id={field.fieldId}
-                          disabled={isReadOnly}
+                          disabled={fieldReadOnly}
                           checked={!!form.watch(field.fieldId)}
                           onCheckedChange={(v) =>
                             form.setValue(field.fieldId, v === true, {
@@ -1185,7 +1233,7 @@ export default function StepFormPage() {
                       <Input
                         id={field.fieldId}
                         type="date"
-                        disabled={isReadOnly}
+                        disabled={fieldReadOnly}
                         className={showFieldIssue ? "border-destructive" : undefined}
                         {...form.register(field.fieldId)}
                       />
@@ -1216,7 +1264,10 @@ export default function StepFormPage() {
                                   })
                                 }
                                 eventId={resolvedEventId}
-                                readOnly={isReadOnly}
+                                applicationId={applicationId}
+                                stepId={stepId}
+                                fieldId={field.fieldId}
+                                readOnly={fieldReadOnly}
                                 accept={field.allowedMimeTypes?.join(",")}
                                 multiple={multiple}
                                 maxFiles={typeof maxFiles === "number" ? maxFiles : undefined}
@@ -1273,6 +1324,11 @@ export default function StepFormPage() {
                       <p className="text-xs text-warning font-medium flex items-center gap-1 mt-1">
                         <AlertTriangle className="h-3 w-3" />
                         This field needs revision
+                      </p>
+                    )}
+                    {isLockedForRevision && (
+                      <p className="text-xs text-muted-foreground font-medium mt-1">
+                        Locked for this revision request.
                       </p>
                     )}
                   </div>

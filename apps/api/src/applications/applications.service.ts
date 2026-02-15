@@ -18,6 +18,8 @@ import {
   CreateDecisionTemplateDto,
   DecisionStatus,
   DecisionTemplateResponse,
+  EmailDeliveryStatus,
+  MessageType,
   StepStatus,
   UpdateDecisionTemplateDto,
   PaginatedResponse,
@@ -1463,6 +1465,19 @@ export class ApplicationsService {
     eventId: string,
     applicationIds?: string[],
   ): Promise<{ count: number }> {
+    const actorId = this.cls.get('actorId');
+    if (!actorId) {
+      throw new ForbiddenException('Actor context missing');
+    }
+
+    const event = await this.prisma.events.findUnique({
+      where: { id: eventId },
+      select: { id: true, title: true },
+    });
+    if (!event) {
+      throw new NotFoundException('Event not found');
+    }
+
     // Find all applications for this event that have a decision set (not NONE) but are not published
     // If applicationIds provided, filter by them
     const where: any = {
@@ -1477,7 +1492,12 @@ export class ApplicationsService {
 
     const toPublish = await this.prisma.applications.findMany({
       where,
-      select: { id: true },
+      select: {
+        id: true,
+        applicant_user_id: true,
+        decision_status: true,
+        decision_draft: true,
+      },
     });
 
     if (toPublish.length === 0) return { count: 0 };
@@ -1489,6 +1509,8 @@ export class ApplicationsService {
       where: { id: { in: toPublish.map((a) => a.id) } },
       data: { decision_published_at: now, updated_at: now },
     });
+
+    await this.createDecisionPublishNotifications(event, toPublish, actorId, now);
 
     // Trigger unlock logic in bounded parallel batches.
     const recomputeBatchSize = 25;
@@ -1502,6 +1524,129 @@ export class ApplicationsService {
     }
 
     return { count: toPublish.length };
+  }
+
+  private async createDecisionPublishNotifications(
+    event: { id: string; title: string },
+    applications: Array<{
+      id: string;
+      applicant_user_id: string;
+      decision_status: string;
+      decision_draft: Prisma.JsonValue;
+    }>,
+    actorId: string,
+    now: Date,
+  ): Promise<void> {
+    if (applications.length === 0) return;
+
+    const messages = applications.map((application) => {
+      const { title, bodyText } = this.buildDecisionPublishMessage(
+        event.title,
+        application.decision_status as DecisionStatus,
+        application.decision_draft,
+      );
+      const id = crypto.randomUUID();
+      const bodyRich: Prisma.InputJsonValue = {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: bodyText }],
+          },
+        ],
+      };
+
+      return {
+        id,
+        event_id: event.id,
+        created_by: actorId,
+        type: MessageType.TRANSACTIONAL,
+        title,
+        body_rich: bodyRich,
+        body_text: bodyText,
+        action_buttons: [
+          {
+            kind: 'OPEN_APPLICATION',
+            eventId: event.id,
+            label: 'View decision',
+          },
+        ] as Prisma.InputJsonValue,
+        resolved_recipient_count: 1,
+        resolved_at: now,
+        status: 'SENT',
+        recipientUserId: application.applicant_user_id,
+      };
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.messages.createMany({
+        data: messages.map((message) => ({
+          id: message.id,
+          event_id: message.event_id,
+          created_by: message.created_by,
+          type: message.type,
+          title: message.title,
+          body_rich: message.body_rich,
+          body_text: message.body_text,
+          action_buttons: message.action_buttons,
+          resolved_recipient_count: message.resolved_recipient_count,
+          resolved_at: message.resolved_at,
+          status: message.status,
+        })),
+      });
+
+      await tx.message_recipients.createMany({
+        data: messages.map((message) => ({
+          id: crypto.randomUUID(),
+          message_id: message.id,
+          recipient_user_id: message.recipientUserId,
+          delivery_inbox_status: 'DELIVERED',
+          delivery_email_status: EmailDeliveryStatus.QUEUED,
+        })),
+        skipDuplicates: true,
+      });
+    });
+  }
+
+  private buildDecisionPublishMessage(
+    eventTitle: string,
+    status: DecisionStatus,
+    decisionDraft: Prisma.JsonValue | null,
+  ): { title: string; bodyText: string } {
+    const decisionDraftRecord =
+      decisionDraft && typeof decisionDraft === 'object' && !Array.isArray(decisionDraft)
+        ? (decisionDraft as Record<string, unknown>)
+        : {};
+    const rendered =
+      decisionDraftRecord.rendered &&
+      typeof decisionDraftRecord.rendered === 'object' &&
+      !Array.isArray(decisionDraftRecord.rendered)
+        ? (decisionDraftRecord.rendered as Record<string, unknown>)
+        : {};
+    const renderedSubject =
+      typeof rendered.subject === 'string' ? rendered.subject.trim() : '';
+    const renderedBody = typeof rendered.body === 'string' ? rendered.body.trim() : '';
+
+    if (renderedSubject && renderedBody) {
+      return { title: renderedSubject, bodyText: renderedBody };
+    }
+
+    const normalizedStatus =
+      status === DecisionStatus.ACCEPTED
+        ? 'accepted'
+        : status === DecisionStatus.WAITLISTED
+          ? 'waitlisted'
+          : status === DecisionStatus.REJECTED
+            ? 'rejected'
+            : 'updated';
+
+    return {
+      title:
+        renderedSubject || `Application decision published for ${eventTitle}`,
+      bodyText:
+        renderedBody ||
+        `Your application decision for ${eventTitle} is now published. Current status: ${normalizedStatus}.`,
+    };
   }
 
   /**
