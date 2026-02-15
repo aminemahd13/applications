@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -84,6 +85,105 @@ interface SavedView {
   };
 }
 
+interface RequestFieldOption {
+  id: string;
+  label: string;
+  section?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseFormDefinition(
+  definition: unknown,
+): Record<string, unknown> | null {
+  if (!definition) return null;
+  if (typeof definition === "string") {
+    try {
+      const parsed = JSON.parse(definition);
+      return isRecord(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  if (!isRecord(definition)) return null;
+  if (isRecord(definition.schema)) {
+    return definition.schema;
+  }
+  return definition;
+}
+
+function extractRequestFieldOptions(
+  definition?: Record<string, unknown> | null,
+  answers?: Record<string, unknown>,
+): RequestFieldOption[] {
+  const options: RequestFieldOption[] = [];
+  const seen = new Set<string>();
+
+  const addOption = (candidate: unknown, section: string) => {
+    if (!isRecord(candidate)) return;
+    const type =
+      typeof candidate.type === "string" ? candidate.type.toLowerCase() : "";
+    if (type === "info_text") return;
+
+    const id = [candidate.key, candidate.fieldId, candidate.id]
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .find((value) => value.length > 0);
+    if (!id || seen.has(id)) return;
+
+    seen.add(id);
+    options.push({
+      id,
+      label:
+        typeof candidate.label === "string" && candidate.label.trim().length > 0
+          ? candidate.label.trim()
+          : id,
+      section,
+    });
+  };
+
+  const schema = parseFormDefinition(definition);
+  const sections = Array.isArray(schema?.sections)
+    ? schema.sections
+    : Array.isArray(schema?.pages)
+      ? schema.pages
+      : [];
+
+  sections.forEach((section, index) => {
+    const sectionRecord = isRecord(section) ? section : {};
+    const sectionTitle =
+      typeof sectionRecord.title === "string" &&
+      sectionRecord.title.trim().length > 0
+        ? sectionRecord.title.trim()
+        : `Section ${index + 1}`;
+    const fields = Array.isArray(sectionRecord.fields)
+      ? sectionRecord.fields
+      : [];
+    fields.forEach((field) => addOption(field, sectionTitle));
+  });
+
+  const rootFields = Array.isArray(schema?.fields) ? schema.fields : [];
+  rootFields.forEach((field) => addOption(field, "General"));
+
+  if (answers) {
+    Object.keys(answers)
+      .filter((key) => key !== "data")
+      .forEach((key) =>
+        addOption(
+          {
+            key,
+            label: key,
+          },
+          "Response",
+        ),
+      );
+  }
+
+  return options;
+}
+
 type ReviewVerdict = "APPROVE" | "REJECT" | "REQUEST_INFO";
 type QueueStatusFilter = "all" | "pending" | "needs_info" | "resubmitted";
 
@@ -110,7 +210,7 @@ export default function ReviewsPage() {
   const [showReviewDialog, setShowReviewDialog] = useState(false);
   const [reviewVerdict, setReviewVerdict] = useState<ReviewVerdict | null>(null);
   const [reviewComment, setReviewComment] = useState("");
-  const [requestInfoFields, setRequestInfoFields] = useState("");
+  const [requestInfoFieldIds, setRequestInfoFieldIds] = useState<string[]>([]);
   const [requestInfoDeadline, setRequestInfoDeadline] = useState("");
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
 
@@ -199,6 +299,14 @@ export default function ReviewsPage() {
 
   const current = queue[currentIndex];
   const requiredFieldKeys = getRequiredFieldKeySet(current?.formDefinition);
+  const requestFieldOptions = useMemo(
+    () => extractRequestFieldOptions(current?.formDefinition, current?.answers),
+    [current?.formDefinition, current?.answers],
+  );
+  const requestFieldIdSet = useMemo(
+    () => new Set(requestFieldOptions.map((option) => option.id)),
+    [requestFieldOptions],
+  );
 
   async function saveCurrentView() {
     if (!saveViewName.trim()) {
@@ -261,7 +369,7 @@ export default function ReviewsPage() {
   function openReviewDialog(verdict: ReviewVerdict) {
     setReviewVerdict(verdict);
     setReviewComment("");
-    setRequestInfoFields("");
+    setRequestInfoFieldIds([]);
     setRequestInfoDeadline("");
     setShowReviewDialog(true);
   }
@@ -275,6 +383,16 @@ export default function ReviewsPage() {
     }
     setIsSubmittingReview(true);
     try {
+      const selectedTargetFieldIds =
+        reviewVerdict === "REQUEST_INFO"
+          ? Array.from(
+              new Set(
+                requestInfoFieldIds.filter((fieldId) =>
+                  requestFieldIdSet.has(fieldId),
+                ),
+              ),
+            )
+          : [];
       await apiClient(
         `/events/${eventId}/applications/${current.applicationId}/steps/${current.stepId}/versions/${versionId}/reviews`,
         {
@@ -283,8 +401,9 @@ export default function ReviewsPage() {
             outcome: reviewVerdict,
             messageToApplicant: reviewComment || undefined,
             targetFieldIds:
-              reviewVerdict === "REQUEST_INFO" && requestInfoFields
-                ? requestInfoFields.split(",").map((s) => s.trim())
+              reviewVerdict === "REQUEST_INFO" &&
+              selectedTargetFieldIds.length > 0
+                ? selectedTargetFieldIds
                 : undefined,
             deadline: requestInfoDeadline || undefined,
           },
@@ -611,12 +730,69 @@ export default function ReviewsPage() {
             {reviewVerdict === "REQUEST_INFO" && (
               <>
                 <div className="space-y-2">
-                  <Label className="text-sm">Field IDs to revise</Label>
-                  <Input
-                    value={requestInfoFields}
-                    onChange={(e) => setRequestInfoFields(e.target.value)}
-                    placeholder="field_a, field_b"
-                  />
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm">Fields to revise</Label>
+                    {requestFieldOptions.length > 0 && (
+                      <div className="flex gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setRequestInfoFieldIds(
+                              requestFieldOptions.map((field) => field.id),
+                            )
+                          }
+                        >
+                          Select all
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setRequestInfoFieldIds([])}
+                        >
+                          Clear
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-muted/40 p-3">
+                    {requestFieldOptions.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        No fields available for this step. Leave this empty to
+                        request a full-step revision.
+                      </p>
+                    ) : (
+                      requestFieldOptions.map((field) => (
+                        <label
+                          key={field.id}
+                          className="flex items-start gap-2 text-sm"
+                        >
+                          <Checkbox
+                            checked={requestInfoFieldIds.includes(field.id)}
+                            onCheckedChange={(checked) => {
+                              const isChecked = checked === true;
+                              setRequestInfoFieldIds((prev) =>
+                                isChecked
+                                  ? Array.from(new Set([...prev, field.id]))
+                                  : prev.filter((id) => id !== field.id),
+                              );
+                            }}
+                          />
+                          <span>
+                            {field.label}
+                            {field.section && (
+                              <span className="block text-xs text-muted-foreground">
+                                {field.section}
+                              </span>
+                            )}
+                          </span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Leave empty to request a full-step revision.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label className="text-sm">Deadline (optional)</Label>
