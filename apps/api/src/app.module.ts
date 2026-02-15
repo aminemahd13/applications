@@ -33,7 +33,8 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
       middleware: {
         mount: true,
         generateId: true,
-        idGenerator: (req) => req.headers['x-request-id'] ?? crypto.randomUUID(),
+        idGenerator: (req) =>
+          req.headers['x-request-id'] ?? crypto.randomUUID(),
       },
     }),
     ThrottlerModule.forRoot([

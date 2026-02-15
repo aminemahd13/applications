@@ -136,7 +136,7 @@ export class MessagesService {
     const hasExplicitTargets =
       (filter.applicationIds?.length ?? 0) > 0 ||
       (filter.userIds?.length ?? 0) > 0 ||
-      ((filterAny.emails?.length ?? 0) > 0);
+      (filterAny.emails?.length ?? 0) > 0;
     const includeBaseEventAudience =
       hasSegmentedCriteria || !hasExplicitTargets;
 
@@ -380,7 +380,9 @@ export class MessagesService {
       bodyRich: message.body_rich,
       bodyText: message.body_text,
       actionButtons: message.action_buttons as any[],
-      recipientFilter: this.normalizeRecipientFilter(message.recipient_filter_json),
+      recipientFilter: this.normalizeRecipientFilter(
+        message.recipient_filter_json,
+      ),
       resolvedAt: message.resolved_at,
     };
   }
@@ -690,7 +692,8 @@ export class MessagesService {
   }
 
   private normalizeRecipientFilter(value: unknown): RecipientFilter | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return null;
     const parsed = RecipientFilterSchema.safeParse(value);
     if (!parsed.success) return null;
     return parsed.data;
@@ -903,8 +906,7 @@ export class MessagesService {
     const richHtml = this.richToHtml(bodyRich);
     if (richHtml.trim().length > 0) return richHtml;
 
-    const plainText =
-      typeof bodyText === 'string' ? bodyText.trim() : '';
+    const plainText = typeof bodyText === 'string' ? bodyText.trim() : '';
     if (plainText.length === 0) return '';
 
     return `<p>${this.escapeHtml(plainText).replace(/\r?\n/g, '<br />')}</p>`;
