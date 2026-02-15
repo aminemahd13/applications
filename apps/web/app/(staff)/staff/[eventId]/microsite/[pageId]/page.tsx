@@ -506,7 +506,6 @@ function getDefaultData(type: BlockType): BlockData {
         description: "",
         columns: ["Ranking", "Full Name", "School/University", "Education Level", "P1", "P2", "P3", "P4", "Total", "Prize"],
         rows: [
-          ["1", "Zakine Akram", "Lycée Louis-le-Grand", "Bac +1", "10", "4", "10", "1", "25", "First Prize"],
           ["2", "Doe Jane", "MIT", "Bac +2", "9", "7", "8", "6", "30", "Second Prize"],
         ],
         highlightPrizes: true,

@@ -6,6 +6,7 @@ import {
   ForbiddenException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { Prisma } from '@event-platform/db';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { OrgSettingsService } from '../admin/org-settings.service';
 import { RateLimiterService } from '../common/services/rate-limiter.service';
@@ -355,6 +356,79 @@ export class AuthService {
     });
 
     return { message: 'Password changed successfully.' };
+  }
+
+  async deleteMyAccount(userId: string, currentPassword: string) {
+    if (!currentPassword) {
+      throw new BadRequestException('Current password is required');
+    }
+
+    const user = await this.prisma.users.findUnique({
+      where: { id: userId },
+      select: { id: true, password_hash: true },
+    });
+    if (!user) throw new UnauthorizedException('Invalid session');
+
+    const ok = await argon2.verify(user.password_hash, currentPassword);
+    if (!ok) throw new UnauthorizedException('Current password is incorrect');
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // Clear nullable historical references before deleting user row.
+        await tx.audit_logs.updateMany({
+          where: { actor_user_id: userId },
+          data: { actor_user_id: null },
+        });
+        await tx.attendance_records.updateMany({
+          where: { checked_in_by: userId },
+          data: { checked_in_by: null },
+        });
+        await tx.applications.updateMany({
+          where: { assigned_reviewer_id: userId },
+          data: { assigned_reviewer_id: null },
+        });
+        await tx.microsite_page_versions.updateMany({
+          where: { created_by: userId },
+          data: { created_by: null },
+        });
+        await tx.microsite_versions.updateMany({
+          where: { created_by: userId },
+          data: { created_by: null },
+        });
+
+        // Remove user-owned data that should not survive account deletion.
+        await tx.applications.deleteMany({
+          where: { applicant_user_id: userId },
+        });
+        await tx.file_objects.deleteMany({
+          where: { created_by: userId },
+        });
+        await tx.event_role_assignments.deleteMany({
+          where: { user_id: userId },
+        });
+
+        await tx.users.delete({ where: { id: userId } });
+      });
+    } catch (error) {
+      const errorCode =
+        typeof error === 'object' && error && 'code' in error
+          ? String((error as { code?: string }).code)
+          : undefined;
+      if (
+        (error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2003') ||
+        errorCode === 'P2003'
+      ) {
+        throw new BadRequestException(
+          'Account cannot be deleted while linked to staff activity. Contact support.',
+        );
+      }
+      throw error;
+    }
+
+    this.rateLimiterService.revokeUserSessions(userId).catch(() => undefined);
+
+    return { message: 'Account deleted successfully.' };
   }
 
   async getUserEventRoles(userId: string) {

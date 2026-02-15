@@ -1455,6 +1455,7 @@ export class AdminService {
       where: { email: normalizedEmail },
       include: { applicant_profiles: { select: { full_name: true } } },
     });
+    let hadStaffAccessBefore = false;
 
     if (!user) {
       createdUser = true;
@@ -1470,10 +1471,21 @@ export class AdminService {
         },
         include: { applicant_profiles: { select: { full_name: true } } },
       });
+    } else {
+      const existingStaffAssignment =
+        await this.prisma.event_role_assignments.findFirst({
+          where: { user_id: user.id },
+          select: { id: true },
+        });
+      hadStaffAccessBefore = Boolean(
+        user.is_global_admin || existingStaffAssignment,
+      );
     }
 
-    const sendInviteIfNeeded = async (): Promise<boolean | undefined> => {
-      if (!createdUser) return undefined;
+    const sendInviteIfNeeded = async (
+      shouldSend: boolean,
+    ): Promise<boolean | undefined> => {
+      if (!shouldSend) return undefined;
       const inviteResult =
         await this.passwordResetService.sendPasswordSetupInvite({
           userId: user.id,
@@ -1486,11 +1498,14 @@ export class AdminService {
     };
 
     if (!eventId) {
+      const roleGrantedNow = !user.is_global_admin;
       await this.prisma.users.update({
         where: { id: user.id },
         data: { is_global_admin: true },
       });
-      const invitationSent = await sendInviteIfNeeded();
+      const invitationSent = await sendInviteIfNeeded(
+        createdUser || (!hadStaffAccessBefore && roleGrantedNow),
+      );
       return {
         id: `global-admin-${user.id}`,
         email: user.email,
@@ -1507,7 +1522,7 @@ export class AdminService {
       where: { event_id: eventId, user_id: user.id, role: normalizedRole },
     });
     if (existing) {
-      const invitationSent = await sendInviteIfNeeded();
+      const invitationSent = await sendInviteIfNeeded(createdUser);
       return {
         id: existing.id,
         email: user.email,
@@ -1530,7 +1545,9 @@ export class AdminService {
       },
     });
 
-    const invitationSent = await sendInviteIfNeeded();
+    const invitationSent = await sendInviteIfNeeded(
+      createdUser || !hadStaffAccessBefore,
+    );
     return {
       id: assignment.id,
       email: user.email,
