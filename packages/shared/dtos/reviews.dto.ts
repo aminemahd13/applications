@@ -69,9 +69,69 @@ export const ReviewQueueFilterSchema = z.object({
     stepId: z.string().uuid().optional(),
     assignedTo: z.enum(['me', 'any', 'unassigned']).optional(),
     status: z.enum(['pending', 'needs_info', 'resubmitted']).optional(),
+    tags: z
+        .preprocess((value) => {
+            if (typeof value === 'string') {
+                const items = value
+                    .split(',')
+                    .map((entry) => entry.trim())
+                    .filter((entry) => entry.length > 0);
+                return items;
+            }
+            if (Array.isArray(value)) {
+                return value
+                    .map((entry) =>
+                        typeof entry === 'string' ? entry.trim() : '',
+                    )
+                    .filter((entry) => entry.length > 0);
+            }
+            return undefined;
+        }, z.array(z.string().trim().min(1)).max(20))
+        .optional(),
 });
 
 export type ReviewQueueFilterDto = z.infer<typeof ReviewQueueFilterSchema>;
+
+export const ReviewQueueSavedViewFilterSchema = z.object({
+    stepId: z.string().uuid().optional(),
+    assignedTo: z.enum(['me', 'any', 'unassigned']).optional(),
+    status: z.enum(['pending', 'needs_info', 'resubmitted']).optional(),
+    tags: z.array(z.string().trim().min(1)).max(20).optional(),
+});
+
+export type ReviewQueueSavedViewFilterDto = z.infer<
+    typeof ReviewQueueSavedViewFilterSchema
+>;
+
+export const CreateReviewQueueSavedViewSchema = z.object({
+    name: z.string().trim().min(1).max(100),
+    isDefault: z.boolean().optional().default(false),
+    filters: ReviewQueueSavedViewFilterSchema.default({}),
+});
+
+export type CreateReviewQueueSavedViewDto = z.infer<
+    typeof CreateReviewQueueSavedViewSchema
+>;
+
+export const UpdateReviewQueueSavedViewSchema = z.object({
+    name: z.string().trim().min(1).max(100).optional(),
+    isDefault: z.boolean().optional(),
+    filters: ReviewQueueSavedViewFilterSchema.optional(),
+});
+
+export type UpdateReviewQueueSavedViewDto = z.infer<
+    typeof UpdateReviewQueueSavedViewSchema
+>;
+
+export interface ReviewQueueSavedView {
+    id: string;
+    eventId: string;
+    name: string;
+    isDefault: boolean;
+    filters: ReviewQueueSavedViewFilterDto;
+    createdAt: Date;
+    updatedAt: Date;
+}
 
 // ============================================================
 // ADMIN PATCH DTOs
@@ -142,6 +202,7 @@ export interface ReviewQueueItem {
     answers?: Record<string, unknown>;
     formDefinition?: Record<string, unknown> | null;
     assignedReviewerId: string | null;
+    tags?: string[];
     hasOpenNeedsInfo: boolean;
     isResubmission: boolean;
 }

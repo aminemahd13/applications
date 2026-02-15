@@ -2,6 +2,7 @@
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Body,
   Param,
@@ -120,9 +121,31 @@ export class AdminController {
   @Post('roles')
   @RequirePermission(Permission.ADMIN_ROLES_MANAGE)
   async assignRole(
-    @Body() body: { email: string; role: string; eventId?: string },
+    @Body()
+    body: {
+      email: string;
+      role: string;
+      eventId?: string;
+      startAt?: string | null;
+      endAt?: string | null;
+    },
   ) {
     return this.adminService.assignRole(body);
+  }
+
+  @Patch('roles/:id/access')
+  @RequirePermission(Permission.ADMIN_ROLES_MANAGE)
+  async updateRoleAccess(
+    @Param('id') id: string,
+    @Body() body: { startAt?: string | null; endAt?: string | null },
+  ) {
+    return this.adminService.updateRoleAccess(id, body);
+  }
+
+  @Post('roles/:id/resend-invite')
+  @RequirePermission(Permission.ADMIN_ROLES_MANAGE)
+  async resendRoleInvite(@Param('id') id: string) {
+    return this.adminService.resendRoleInvite(id);
   }
 
   @Delete('roles/:id')

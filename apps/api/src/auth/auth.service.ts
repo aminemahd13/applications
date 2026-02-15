@@ -190,9 +190,16 @@ export class AuthService {
     const emailVerified = Boolean(user.email_verified_at);
     const mustVerifyEmail =
       security.emailVerificationRequired && !emailVerified;
+    const now = new Date();
     const hasStaffRole = Boolean(
       await this.prisma.event_role_assignments.findFirst({
-        where: { user_id: user.id },
+        where: {
+          user_id: user.id,
+          AND: [
+            { OR: [{ access_start_at: null }, { access_start_at: { lte: now } }] },
+            { OR: [{ access_end_at: null }, { access_end_at: { gte: now } }] },
+          ],
+        },
         select: { id: true },
       }),
     );
@@ -432,8 +439,15 @@ export class AuthService {
   }
 
   async getUserEventRoles(userId: string) {
+    const now = new Date();
     const assignments = await this.prisma.event_role_assignments.findMany({
-      where: { user_id: userId },
+      where: {
+        user_id: userId,
+        AND: [
+          { OR: [{ access_start_at: null }, { access_start_at: { lte: now } }] },
+          { OR: [{ access_end_at: null }, { access_end_at: { gte: now } }] },
+        ],
+      },
       select: { event_id: true, role: true },
     });
     return assignments.map((a) => ({
@@ -468,8 +482,15 @@ export class AuthService {
   }
 
   async getMyStaffEvents(userId: string): Promise<StaffEventSummary[]> {
+    const now = new Date();
     const assignments = await this.prisma.event_role_assignments.findMany({
-      where: { user_id: userId },
+      where: {
+        user_id: userId,
+        AND: [
+          { OR: [{ access_start_at: null }, { access_start_at: { lte: now } }] },
+          { OR: [{ access_end_at: null }, { access_end_at: { gte: now } }] },
+        ],
+      },
       select: {
         event_id: true,
         role: true,

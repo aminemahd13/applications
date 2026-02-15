@@ -4,120 +4,327 @@ import {
     FieldType,
     FieldDefinition,
     normalizeFormDefinition,
+    isFieldVisible,
+    isFieldRequired,
 } from './form-definition';
 
-export function generateFormSchema(definition: FormDefinition) {
-    const shape: Record<string, z.ZodTypeAny> = {};
-    const normalized = normalizeFormDefinition(definition);
+type FormValueMap = Record<string, unknown>;
 
-    normalized.sections.forEach((section) => {
-        section.fields.forEach((field) => {
-            let schema: z.ZodTypeAny;
+interface NormalizedFileValue {
+    fileObjectId: string;
+    mimeType?: string;
+    sizeBytes?: number;
+}
 
-            // Base Type
-            switch (field.type) {
-                case FieldType.EMAIL:
-                    schema = z.string().email({ message: 'Invalid email address' });
-                    break;
-                case FieldType.NUMBER:
-                    // Backend receives numbers as numbers usually, but might optionally handle string
-                    // Frontend Zod handles string->number transform.
-                    // For shared, we can be lenient or strict.
-                    // Let's allow both for robustness.
-                    schema = z.union([z.string(), z.number()])
-                        .transform((val) => (val === '' ? undefined : Number(val)))
-                        .refine((val: number | undefined) => val === undefined || !Number.isNaN(val), { message: 'Must be a number' });
-                    break;
-                case FieldType.CHECKBOX:
-                    schema = z.boolean();
-                    break;
-                case FieldType.MULTISELECT:
-                    schema = z.array(z.string());
-                    break;
-                case FieldType.FILE_UPLOAD:
-                    // Expect a single file object, an array of file objects, or raw IDs (legacy)
-                    const fileObjectSchema = z.object({
-                        fileObjectId: z.string(),
-                        originalFilename: z.string(),
-                        sizeBytes: z.number(),
-                    });
-                    const fileValueSchema = z.union([
-                        fileObjectSchema,
-                        z.array(fileObjectSchema),
-                        z.string(),
-                        z.array(z.string()),
-                    ]);
-                    schema = fileValueSchema.nullable();
-                    break;
-                case FieldType.INFO_TEXT:
-                    return; // Skip validation for static text
-                case FieldType.TEXT:
-                case FieldType.TEXTAREA:
-                case FieldType.SELECT:
-                case FieldType.DATE:
-                default:
-                    schema = z.string();
-                    break;
-            }
+function isEmptyValue(value: unknown): boolean {
+    if (value === null || value === undefined) return true;
+    if (typeof value === 'string') return value.trim().length === 0;
+    if (Array.isArray(value)) return value.length === 0;
+    return false;
+}
 
-            // Validation Rules
-            const rules = field.validation || {};
+function toOptionalNumber(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim().length > 0) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+}
 
-            if (rules.required) {
-                if (field.type === FieldType.CHECKBOX) {
-                    schema = (schema as z.ZodBoolean).refine((val: boolean) => val === true, { message: 'Required' });
-                } else if (field.type === FieldType.MULTISELECT) {
-                    schema = (schema as z.ZodArray<any>).min(1, { message: 'Required' });
-                } else if (field.type === FieldType.FILE_UPLOAD) {
-                    schema = schema.refine((val: any) => {
-                        if (val === null || val === undefined) return false;
-                        if (Array.isArray(val)) return val.length > 0;
-                        if (typeof val === 'string') return val.length > 0;
-                        return true;
-                    }, { message: 'Required' });
-                } else if (field.type === FieldType.NUMBER) {
-                    schema = schema.refine((val: unknown) => val !== undefined, { message: 'Required' });
-                } else {
-                    schema = (schema as z.ZodString).min(1, { message: 'Required' });
-                }
-            } else {
-                schema = schema.optional();
-            }
+function normalizeFileValues(value: unknown): NormalizedFileValue[] {
+    if (value === null || value === undefined) return [];
 
-            if (rules.min !== undefined) {
-                if (field.type === FieldType.NUMBER) {
-                    schema = schema.refine(
-                        (val: unknown) => val === undefined || (typeof val === 'number' && val >= rules.min!),
-                        { message: `Min ${rules.min}` },
-                    );
-                } else if (field.type === FieldType.TEXT || field.type === FieldType.TEXTAREA) {
-                    schema = (schema as z.ZodString).min(rules.min, { message: `Min ${rules.min} characters` });
-                }
-            }
+    if (Array.isArray(value)) {
+        return value.flatMap((entry) => normalizeFileValues(entry));
+    }
 
-            if (rules.max !== undefined) {
-                if (field.type === FieldType.NUMBER) {
-                    schema = schema.refine(
-                        (val: unknown) => val === undefined || (typeof val === 'number' && val <= rules.max!),
-                        { message: `Max ${rules.max}` },
-                    );
-                } else if (field.type === FieldType.TEXT || field.type === FieldType.TEXTAREA) {
-                    schema = (schema as z.ZodString).max(rules.max, { message: `Max ${rules.max} characters` });
-                }
-            }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed.length > 0 ? [{ fileObjectId: trimmed }] : [];
+    }
 
-            if (rules.pattern) {
-                if (field.type === FieldType.TEXT) {
-                    schema = (schema as z.ZodString).regex(new RegExp(rules.pattern), { message: rules.customMessage || 'Invalid format' });
-                }
-            }
+    if (typeof value === 'object') {
+        const candidate = value as Record<string, unknown>;
+        const fileObjectId =
+            typeof candidate.fileObjectId === 'string'
+                ? candidate.fileObjectId.trim()
+                : '';
+        if (!fileObjectId) return [];
+        return [
+            {
+                fileObjectId,
+                mimeType:
+                    typeof candidate.mimeType === 'string'
+                        ? candidate.mimeType
+                        : undefined,
+                sizeBytes:
+                    typeof candidate.sizeBytes === 'number'
+                        ? candidate.sizeBytes
+                        : undefined,
+            },
+        ];
+    }
 
-            // USE KEY INSTEAD OF ID
-            // Fallback to id if key missing (for legacy compatibility during dev)
-            const key = field.key || field.id;
-            shape[key] = schema;
-        });
+    return [];
+}
+
+function addIssue(
+    ctx: z.RefinementCtx,
+    fieldKey: string,
+    message: string,
+): void {
+    ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [fieldKey],
+        message,
     });
+}
 
-    return z.object(shape);
+function validateFieldValue(
+    field: FieldDefinition,
+    value: unknown,
+    values: FormValueMap,
+    ctx: z.RefinementCtx,
+): void {
+    const fieldKey = field.key || field.id;
+
+    if (!isFieldVisible(field, values)) {
+        return;
+    }
+
+    const required = isFieldRequired(field, values);
+    const rules = field.validation || {};
+
+    switch (field.type) {
+        case FieldType.CHECKBOX: {
+            if (value === undefined || value === null) {
+                if (required) addIssue(ctx, fieldKey, 'Required');
+                return;
+            }
+            if (typeof value !== 'boolean') {
+                addIssue(ctx, fieldKey, 'Must be true or false');
+                return;
+            }
+            if (required && value !== true) {
+                addIssue(ctx, fieldKey, 'Required');
+            }
+            return;
+        }
+
+        case FieldType.MULTISELECT: {
+            if (value === undefined || value === null) {
+                if (required) addIssue(ctx, fieldKey, 'Required');
+                return;
+            }
+            if (!Array.isArray(value)) {
+                addIssue(ctx, fieldKey, 'Must be a list of values');
+                return;
+            }
+            const entries = value.filter(
+                (entry): entry is string =>
+                    typeof entry === 'string' && entry.trim().length > 0,
+            );
+            if (required && entries.length === 0) {
+                addIssue(ctx, fieldKey, 'Required');
+                return;
+            }
+            if (
+                typeof rules.min === 'number' &&
+                entries.length > 0 &&
+                entries.length < rules.min
+            ) {
+                addIssue(ctx, fieldKey, `Min ${rules.min}`);
+            }
+            if (
+                typeof rules.max === 'number' &&
+                entries.length > 0 &&
+                entries.length > rules.max
+            ) {
+                addIssue(ctx, fieldKey, `Max ${rules.max}`);
+            }
+            return;
+        }
+
+        case FieldType.NUMBER: {
+            if (isEmptyValue(value)) {
+                if (required) addIssue(ctx, fieldKey, 'Required');
+                return;
+            }
+            const numericValue = toOptionalNumber(value);
+            if (numericValue === null) {
+                addIssue(ctx, fieldKey, 'Must be a number');
+                return;
+            }
+            if (typeof rules.min === 'number' && numericValue < rules.min) {
+                addIssue(ctx, fieldKey, `Min ${rules.min}`);
+            }
+            if (typeof rules.max === 'number' && numericValue > rules.max) {
+                addIssue(ctx, fieldKey, `Max ${rules.max}`);
+            }
+            return;
+        }
+
+        case FieldType.FILE_UPLOAD: {
+            const files = normalizeFileValues(value);
+            if (required && files.length === 0) {
+                addIssue(ctx, fieldKey, 'Required');
+                return;
+            }
+            if (files.length === 0) return;
+
+            const maxFiles = field.ui?.maxFiles;
+            if (
+                typeof maxFiles === 'number' &&
+                Number.isFinite(maxFiles) &&
+                files.length > maxFiles
+            ) {
+                addIssue(ctx, fieldKey, `Max ${maxFiles} files`);
+            }
+
+            const maxFileSizeMB = field.ui?.maxFileSizeMB;
+            if (
+                typeof maxFileSizeMB === 'number' &&
+                Number.isFinite(maxFileSizeMB) &&
+                maxFileSizeMB > 0
+            ) {
+                const maxBytes = Math.floor(maxFileSizeMB * 1024 * 1024);
+                const tooLarge = files.some(
+                    (file) =>
+                        typeof file.sizeBytes === 'number' &&
+                        file.sizeBytes > maxBytes,
+                );
+                if (tooLarge) {
+                    addIssue(ctx, fieldKey, `Max file size ${maxFileSizeMB}MB`);
+                }
+            }
+
+            const allowedTypes = field.ui?.allowedMimeTypes ?? rules.allowedTypes;
+            if (allowedTypes?.length) {
+                const invalidType = files.some(
+                    (file) =>
+                        typeof file.mimeType === 'string' &&
+                        !allowedTypes.includes(file.mimeType),
+                );
+                if (invalidType) {
+                    addIssue(
+                        ctx,
+                        fieldKey,
+                        'Contains file type not allowed by this field',
+                    );
+                }
+            }
+            return;
+        }
+
+        case FieldType.INFO_TEXT:
+            return;
+
+        case FieldType.EMAIL:
+        case FieldType.TEXT:
+        case FieldType.TEXTAREA:
+        case FieldType.SELECT:
+        case FieldType.DATE:
+        default: {
+            const textValue =
+                typeof value === 'string'
+                    ? value
+                    : value === undefined || value === null
+                        ? ''
+                        : String(value);
+            const trimmed = textValue.trim();
+
+            if (trimmed.length === 0) {
+                if (required) addIssue(ctx, fieldKey, 'Required');
+                return;
+            }
+
+            if (field.type === FieldType.EMAIL) {
+                const emailResult = z.string().email().safeParse(trimmed);
+                if (!emailResult.success) {
+                    addIssue(ctx, fieldKey, 'Invalid email address');
+                    return;
+                }
+            }
+
+            if (
+                (field.type === FieldType.TEXT ||
+                    field.type === FieldType.TEXTAREA) &&
+                typeof rules.min === 'number' &&
+                textValue.length < rules.min
+            ) {
+                addIssue(ctx, fieldKey, `Min ${rules.min} characters`);
+            }
+
+            if (
+                (field.type === FieldType.TEXT ||
+                    field.type === FieldType.TEXTAREA) &&
+                typeof rules.max === 'number' &&
+                textValue.length > rules.max
+            ) {
+                addIssue(ctx, fieldKey, `Max ${rules.max} characters`);
+            }
+
+            if (
+                field.type === FieldType.TEXT &&
+                typeof rules.pattern === 'string' &&
+                rules.pattern.length > 0
+            ) {
+                try {
+                    const pattern = new RegExp(rules.pattern);
+                    if (!pattern.test(textValue)) {
+                        addIssue(
+                            ctx,
+                            fieldKey,
+                            rules.customMessage || 'Invalid format',
+                        );
+                    }
+                } catch {
+                    // Ignore invalid legacy patterns to keep drafts usable.
+                }
+            }
+
+            if (
+                field.type === FieldType.SELECT &&
+                Array.isArray(field.ui?.options) &&
+                field.ui.options.length > 0
+            ) {
+                const allowed = new Set(
+                    field.ui.options.map((option) => option.value),
+                );
+                if (!allowed.has(textValue)) {
+                    addIssue(ctx, fieldKey, 'Select a valid option');
+                }
+            }
+
+            if (field.type === FieldType.DATE) {
+                const parsed = new Date(textValue);
+                if (Number.isNaN(parsed.getTime())) {
+                    addIssue(ctx, fieldKey, 'Invalid date');
+                }
+            }
+            return;
+        }
+    }
+}
+
+export function generateFormSchema(definition: FormDefinition) {
+    const normalized = normalizeFormDefinition(definition);
+    const fields = normalized.sections.flatMap((section) => section.fields);
+    const shape: Record<string, z.ZodTypeAny> = {};
+
+    for (const field of fields) {
+        if (field.type === FieldType.INFO_TEXT) continue;
+        const key = field.key || field.id;
+        shape[key] = z.any().optional();
+    }
+
+    return z.object(shape).superRefine((values, ctx) => {
+        const valueMap = values as FormValueMap;
+        for (const field of fields) {
+            if (field.type === FieldType.INFO_TEXT) continue;
+            const key = field.key || field.id;
+            validateFieldValue(field, valueMap[key], valueMap, ctx);
+        }
+    });
 }

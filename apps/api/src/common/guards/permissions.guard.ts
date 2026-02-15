@@ -144,7 +144,23 @@ export class PermissionsGuard implements CanActivate {
           }),
           sessionHasStaffRole === undefined
             ? this.prisma.event_role_assignments.findFirst({
-                where: { user_id: userId },
+                where: {
+                  user_id: userId,
+                  AND: [
+                    {
+                      OR: [
+                        { access_start_at: null },
+                        { access_start_at: { lte: new Date() } },
+                      ],
+                    },
+                    {
+                      OR: [
+                        { access_end_at: null },
+                        { access_end_at: { gte: new Date() } },
+                      ],
+                    },
+                  ],
+                },
                 select: { id: true },
               })
             : Promise.resolve(null),
@@ -213,7 +229,18 @@ export class PermissionsGuard implements CanActivate {
 
     // Event Scope: Resolve user roles
     const assignments = await this.prisma.event_role_assignments.findMany({
-      where: { user_id: userId, event_id: eventId },
+      where: {
+        user_id: userId,
+        event_id: eventId,
+        AND: [
+          {
+            OR: [{ access_start_at: null }, { access_start_at: { lte: new Date() } }],
+          },
+          {
+            OR: [{ access_end_at: null }, { access_end_at: { gte: new Date() } }],
+          },
+        ],
+      },
       select: { role: true },
     });
 

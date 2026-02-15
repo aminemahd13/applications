@@ -34,6 +34,15 @@ import { ApiError, apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { sanitizeHtml } from "@/lib/sanitize";
 import { FileUpload, type FileUploadValue } from "@/components/forms/FileUpload";
+import {
+  ConditionMode,
+  ConditionOperator,
+  FieldType,
+  isFieldRequired as evaluateFieldRequired,
+  isFieldVisible as evaluateFieldVisible,
+  type ConditionGroup,
+  type FieldDefinition,
+} from "@event-platform/schemas";
 import { toast } from "sonner";
 
 interface StepFieldValidation {
@@ -56,6 +65,10 @@ interface StepField {
   maxFiles?: number;
   maxFileSizeMB?: number;
   validation?: StepFieldValidation;
+  logic?: {
+    showWhen?: ConditionGroup;
+    requireWhen?: ConditionGroup;
+  };
 }
 
 interface StepDetail {
@@ -110,6 +123,151 @@ function unwrapApiRecord(
   return isRecord(value.data) ? value.data : value;
 }
 
+function normalizeConditionOperator(value: unknown): ConditionOperator {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  switch (normalized) {
+    case "eq":
+    case "=":
+    case "==":
+      return ConditionOperator.EQ;
+    case "neq":
+    case "!=":
+    case "<>":
+      return ConditionOperator.NEQ;
+    case "contains":
+      return ConditionOperator.CONTAINS;
+    case "not_contains":
+    case "notcontains":
+      return ConditionOperator.NOT_CONTAINS;
+    case "gt":
+    case ">":
+      return ConditionOperator.GT;
+    case "gte":
+    case ">=":
+      return ConditionOperator.GTE;
+    case "lt":
+    case "<":
+      return ConditionOperator.LT;
+    case "lte":
+    case "<=":
+      return ConditionOperator.LTE;
+    case "exists":
+      return ConditionOperator.EXISTS;
+    case "not_exists":
+    case "notexists":
+      return ConditionOperator.NOT_EXISTS;
+    case "in":
+      return ConditionOperator.IN;
+    case "not_in":
+    case "notin":
+      return ConditionOperator.NOT_IN;
+    default:
+      return ConditionOperator.EQ;
+  }
+}
+
+function parseConditionGroup(rawGroup: unknown): ConditionGroup | undefined {
+  if (!isRecord(rawGroup)) return undefined;
+  const rawRules = Array.isArray(rawGroup.rules)
+    ? rawGroup.rules
+    : Array.isArray(rawGroup.conditions)
+      ? rawGroup.conditions
+      : [];
+
+  const rules = rawRules
+    .filter(isRecord)
+    .map((rawRule) => {
+      const fieldKey =
+        typeof rawRule.fieldKey === "string"
+          ? rawRule.fieldKey.trim()
+          : typeof rawRule.key === "string"
+            ? rawRule.key.trim()
+            : "";
+      if (!fieldKey) return null;
+      return {
+        fieldKey,
+        operator: normalizeConditionOperator(rawRule.operator),
+        ...(rawRule.value !== undefined ? { value: rawRule.value } : {}),
+      };
+    })
+    .filter(
+      (
+        rule,
+      ): rule is { fieldKey: string; operator: ConditionOperator; value?: unknown } =>
+        rule !== null,
+    );
+
+  if (rules.length === 0) return undefined;
+  const mode =
+    String(rawGroup.mode ?? "").toLowerCase() === ConditionMode.ANY
+      ? ConditionMode.ANY
+      : ConditionMode.ALL;
+  return { mode, rules };
+}
+
+function toSchemaFieldType(fieldType: string): FieldType {
+  switch (fieldType) {
+    case "TEXTAREA":
+      return FieldType.TEXTAREA;
+    case "NUMBER":
+      return FieldType.NUMBER;
+    case "EMAIL":
+      return FieldType.EMAIL;
+    case "DATE":
+      return FieldType.DATE;
+    case "SELECT":
+      return FieldType.SELECT;
+    case "MULTISELECT":
+      return FieldType.MULTISELECT;
+    case "CHECKBOX":
+      return FieldType.CHECKBOX;
+    case "FILE":
+      return FieldType.FILE_UPLOAD;
+    case "INFO_TEXT":
+      return FieldType.INFO_TEXT;
+    case "TEXT":
+    default:
+      return FieldType.TEXT;
+  }
+}
+
+function toSchemaFieldDefinition(field: StepField): FieldDefinition {
+  const validation: Record<string, unknown> = {
+    ...(field.validation?.required !== undefined
+      ? { required: field.validation.required }
+      : {}),
+    ...(typeof field.validation?.min === "number" ? { min: field.validation.min } : {}),
+    ...(typeof field.validation?.max === "number" ? { max: field.validation.max } : {}),
+    ...(field.validation?.pattern ? { pattern: field.validation.pattern } : {}),
+    ...(field.validation?.customMessage
+      ? { customMessage: field.validation.customMessage }
+      : {}),
+  };
+
+  return {
+    id: field.fieldId,
+    key: field.fieldId,
+    type: toSchemaFieldType(field.type),
+    label: field.label,
+    ...(Object.keys(validation).length > 0 ? { validation } : {}),
+    ...(field.logic ? { logic: field.logic } : {}),
+  } as FieldDefinition;
+}
+
+function isFieldVisibleByLogic(
+  field: StepField,
+  values: Record<string, unknown>,
+): boolean {
+  return evaluateFieldVisible(toSchemaFieldDefinition(field), values);
+}
+
+function isFieldRequiredByLogic(
+  field: StepField,
+  values: Record<string, unknown>,
+): boolean {
+  return evaluateFieldRequired(toSchemaFieldDefinition(field), values);
+}
+
 function normalizeFormDefinition(raw: unknown): StepDetail["formDefinition"] {
   const root = isRecord(raw) ? raw : {};
   const rawSections = Array.isArray(root.sections)
@@ -137,11 +295,16 @@ function normalizeFormDefinition(raw: unknown): StepDetail["formDefinition"] {
           const validation = isRecord(fieldRecord.validation)
             ? fieldRecord.validation
             : {};
+          const logic = isRecord(fieldRecord.logic) ? fieldRecord.logic : {};
           const optionsSource = ui.options ?? fieldRecord.options;
           const allowedTypesSource =
             ui.allowedMimeTypes ??
             validation.allowedTypes ??
             fieldRecord.allowedTypes;
+          const showWhen = parseConditionGroup(logic.showWhen ?? fieldRecord.showWhen);
+          const requireWhen = parseConditionGroup(
+            logic.requireWhen ?? fieldRecord.requireWhen,
+          );
 
           return {
             fieldId: String(fieldRecord.key ?? fieldRecord.id ?? ""),
@@ -200,6 +363,13 @@ function normalizeFormDefinition(raw: unknown): StepDetail["formDefinition"] {
               typeof ui.maxFileSizeMB === "number"
                 ? ui.maxFileSizeMB
                 : undefined,
+            logic:
+              showWhen || requireWhen
+                ? {
+                    ...(showWhen ? { showWhen } : {}),
+                    ...(requireWhen ? { requireWhen } : {}),
+                  }
+                : undefined,
           };
         }),
       };
@@ -238,8 +408,13 @@ function normalizeFileValues(value: unknown): FileUploadValue[] {
   return [];
 }
 
-function validateFieldValue(field: StepField, value: unknown): string | null {
-  const required = Boolean(field.validation?.required ?? field.required);
+function validateFieldValue(
+  field: StepField,
+  value: unknown,
+  values: Record<string, unknown>,
+): string | null {
+  if (!isFieldVisibleByLogic(field, values)) return null;
+  const required = isFieldRequiredByLogic(field, values);
 
   if (field.type === "INFO_TEXT") return null;
 
@@ -387,7 +562,7 @@ function collectValidationIssues(
 
   for (const section of formDefinition.sections) {
     for (const field of section.fields) {
-      const issue = validateFieldValue(field, values[field.fieldId]);
+      const issue = validateFieldValue(field, values[field.fieldId], values);
       if (issue) {
         issues[field.fieldId] = issue;
       }
@@ -857,6 +1032,11 @@ export default function StepFormPage() {
           </CardHeader>
           <CardContent className="space-y-5">
             {section.fields.map((field) => {
+              const currentValues = watchedValues ?? {};
+              if (!isFieldVisibleByLogic(field, currentValues)) {
+                return null;
+              }
+              const isFieldRequired = isFieldRequiredByLogic(field, currentValues);
               const hasNeedsInfo = needsInfoFieldIds.has(field.fieldId);
               const fieldIssue = validationIssues[field.fieldId];
               const fieldState = form.getFieldState(field.fieldId);
@@ -876,7 +1056,7 @@ export default function StepFormPage() {
                   <div className="space-y-2">
                     <Label htmlFor={field.fieldId} className="text-sm font-medium">
                       {field.label}
-                      {field.validation?.required && (
+                      {isFieldRequired && (
                         <span className="text-destructive ml-1">*</span>
                       )}
                     </Label>

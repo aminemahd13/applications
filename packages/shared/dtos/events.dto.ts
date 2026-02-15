@@ -121,10 +121,23 @@ export type EventFilterDto = z.infer<typeof EventFilterSchema>;
 // Re-export for convenience (using string values for schema validation)
 const EventRoleValues = ['organizer', 'reviewer', 'content_editor', 'checkin_staff'] as const;
 
+export const RoleAccessWindowSchema = z
+    .object({
+        startAt: z.coerce.date().optional().nullable(),
+        endAt: z.coerce.date().optional().nullable(),
+    })
+    .refine(
+        (value) =>
+            !value.startAt ||
+            !value.endAt ||
+            value.startAt.getTime() <= value.endAt.getTime(),
+        { message: 'startAt must be earlier than or equal to endAt' },
+    );
+
 export const AssignRoleSchema = z.object({
     userId: z.string().uuid(),
     role: z.enum(EventRoleValues),
-});
+}).merge(RoleAccessWindowSchema);
 
 export type AssignRoleDto = z.infer<typeof AssignRoleSchema>;
 

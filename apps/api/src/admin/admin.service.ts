@@ -43,8 +43,15 @@ export interface StaffMember {
   eventName?: string;
   eventId?: string;
   assignedAt: string;
+  accessStartAt?: string | null;
+  accessEndAt?: string | null;
   isGlobalAdmin?: boolean;
   invitationSent?: boolean;
+  inviteStatus?: 'NONE' | 'SENT' | 'FAILED' | 'EXPIRED';
+  inviteFailureReason?: string | null;
+  inviteLastAttemptAt?: string | null;
+  inviteLastSentAt?: string | null;
+  inviteLastExpiresAt?: string | null;
 }
 
 export interface AdminStats {
@@ -153,6 +160,55 @@ function hasFilledValue(value: unknown): boolean {
     );
   }
   return false;
+}
+
+function parseOptionalDateInput(value: unknown): Date | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? undefined : value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = new Date(trimmed);
+    if (Number.isNaN(parsed.getTime())) return undefined;
+    return parsed;
+  }
+  return undefined;
+}
+
+function resolveInviteStatus(
+  inviteStatus: unknown,
+  inviteLastExpiresAt: Date | null,
+): 'NONE' | 'SENT' | 'FAILED' | 'EXPIRED' {
+  const normalized = String(inviteStatus ?? 'NONE')
+    .trim()
+    .toUpperCase();
+  if (normalized === 'FAILED') return 'FAILED';
+  if (normalized === 'SENT') {
+    if (
+      inviteLastExpiresAt instanceof Date &&
+      !Number.isNaN(inviteLastExpiresAt.getTime()) &&
+      inviteLastExpiresAt.getTime() <= Date.now()
+    ) {
+      return 'EXPIRED';
+    }
+    return 'SENT';
+  }
+  return 'NONE';
+}
+
+function isRoleAssignmentActiveNow(assignment: {
+  access_start_at: Date | null;
+  access_end_at: Date | null;
+}): boolean {
+  const now = Date.now();
+  if (assignment.access_start_at && assignment.access_start_at.getTime() > now) {
+    return false;
+  }
+  if (assignment.access_end_at && assignment.access_end_at.getTime() < now) {
+    return false;
+  }
+  return true;
 }
 
 @Injectable()
@@ -1373,7 +1429,10 @@ export class AdminService {
         eventName: undefined,
         eventId: undefined,
         assignedAt: admin.created_at.toISOString(),
+        accessStartAt: null,
+        accessEndAt: null,
         isGlobalAdmin: true,
+        inviteStatus: 'NONE',
       });
     }
 
@@ -1387,7 +1446,22 @@ export class AdminService {
         eventName: a.events?.title ?? undefined,
         eventId: a.events?.id ?? undefined,
         assignedAt: a.created_at.toISOString(),
+        accessStartAt: a.access_start_at
+          ? a.access_start_at.toISOString()
+          : null,
+        accessEndAt: a.access_end_at ? a.access_end_at.toISOString() : null,
         isGlobalAdmin: false,
+        inviteStatus: resolveInviteStatus(a.invite_status, a.invite_last_expires_at),
+        inviteFailureReason: a.invite_failure_reason ?? null,
+        inviteLastAttemptAt: a.invite_last_attempt_at
+          ? a.invite_last_attempt_at.toISOString()
+          : null,
+        inviteLastSentAt: a.invite_last_sent_at
+          ? a.invite_last_sent_at.toISOString()
+          : null,
+        inviteLastExpiresAt: a.invite_last_expires_at
+          ? a.invite_last_expires_at.toISOString()
+          : null,
       });
     }
 
@@ -1398,8 +1472,25 @@ export class AdminService {
     email: string;
     role: string;
     eventId?: string;
+    startAt?: string | Date | null;
+    endAt?: string | Date | null;
   }): Promise<StaffMember> {
     const { email, role, eventId } = params;
+    const parsedStartAt = parseOptionalDateInput(params.startAt);
+    const parsedEndAt = parseOptionalDateInput(params.endAt);
+    if (parsedStartAt === undefined) {
+      throw new BadRequestException('Invalid startAt date');
+    }
+    if (parsedEndAt === undefined) {
+      throw new BadRequestException('Invalid endAt date');
+    }
+    if (
+      parsedStartAt instanceof Date &&
+      parsedEndAt instanceof Date &&
+      parsedStartAt.getTime() > parsedEndAt.getTime()
+    ) {
+      throw new BadRequestException('startAt must be earlier than endAt');
+    }
     const normalizedEmail = String(email ?? '')
       .trim()
       .toLowerCase();
@@ -1429,6 +1520,11 @@ export class AdminService {
           'Event scope is required for event roles. Use role "global_admin" for global access.',
         );
       }
+      if (parsedStartAt !== null || parsedEndAt !== null) {
+        throw new BadRequestException(
+          'startAt/endAt are only supported for event-scoped staff roles',
+        );
+      }
     } else {
       if (isGlobalAdminRole) {
         throw new BadRequestException(
@@ -1456,6 +1552,7 @@ export class AdminService {
       include: { applicant_profiles: { select: { full_name: true } } },
     });
     let hadStaffAccessBefore = false;
+    const now = new Date();
 
     if (!user) {
       createdUser = true;
@@ -1474,7 +1571,13 @@ export class AdminService {
     } else {
       const existingStaffAssignment =
         await this.prisma.event_role_assignments.findFirst({
-          where: { user_id: user.id },
+          where: {
+            user_id: user.id,
+            AND: [
+              { OR: [{ access_start_at: null }, { access_start_at: { lte: now } }] },
+              { OR: [{ access_end_at: null }, { access_end_at: { gte: now } }] },
+            ],
+          },
           select: { id: true },
         });
       hadStaffAccessBefore = Boolean(
@@ -1484,8 +1587,16 @@ export class AdminService {
 
     const sendInviteIfNeeded = async (
       shouldSend: boolean,
-    ): Promise<boolean | undefined> => {
-      if (!shouldSend) return undefined;
+    ): Promise<{
+      invitationSent?: boolean;
+      inviteStatus?: 'NONE' | 'SENT' | 'FAILED' | 'EXPIRED';
+      inviteFailureReason?: string | null;
+      inviteLastAttemptAt?: Date | null;
+      inviteLastSentAt?: Date | null;
+      inviteLastExpiresAt?: Date | null;
+    }> => {
+      if (!shouldSend) return {};
+      const attemptedAt = new Date();
       const inviteResult =
         await this.passwordResetService.sendPasswordSetupInvite({
           userId: user.id,
@@ -1494,8 +1605,61 @@ export class AdminService {
           role: normalizedRole,
           eventName: event?.title,
         });
-      return inviteResult.invitationSent;
+      return {
+        invitationSent: inviteResult.invitationSent,
+        inviteStatus: inviteResult.invitationSent ? 'SENT' : 'FAILED',
+        inviteFailureReason: inviteResult.invitationSent
+          ? null
+          : 'Failed to send invitation email',
+        inviteLastAttemptAt: attemptedAt,
+        inviteLastSentAt: inviteResult.invitationSent ? attemptedAt : null,
+        inviteLastExpiresAt: inviteResult.invitationSent
+          ? inviteResult.expiresAt ??
+            new Date(attemptedAt.getTime() + 60 * 60 * 1000)
+          : null,
+      };
     };
+
+    const toStaffMemberFromAssignment = (assignment: {
+      id: string;
+      created_at: Date;
+      access_start_at: Date | null;
+      access_end_at: Date | null;
+      invite_status: string | null;
+      invite_failure_reason: string | null;
+      invite_last_attempt_at: Date | null;
+      invite_last_sent_at: Date | null;
+      invite_last_expires_at: Date | null;
+    }): StaffMember => ({
+      id: assignment.id,
+      email: user.email,
+      fullName: user.applicant_profiles?.full_name ?? undefined,
+      role: normalizedRole,
+      eventName: event?.title,
+      eventId: event?.id,
+      assignedAt: assignment.created_at.toISOString(),
+      accessStartAt: assignment.access_start_at
+        ? assignment.access_start_at.toISOString()
+        : null,
+      accessEndAt: assignment.access_end_at
+        ? assignment.access_end_at.toISOString()
+        : null,
+      isGlobalAdmin: false,
+      inviteStatus: resolveInviteStatus(
+        assignment.invite_status,
+        assignment.invite_last_expires_at,
+      ),
+      inviteFailureReason: assignment.invite_failure_reason ?? null,
+      inviteLastAttemptAt: assignment.invite_last_attempt_at
+        ? assignment.invite_last_attempt_at.toISOString()
+        : null,
+      inviteLastSentAt: assignment.invite_last_sent_at
+        ? assignment.invite_last_sent_at.toISOString()
+        : null,
+      inviteLastExpiresAt: assignment.invite_last_expires_at
+        ? assignment.invite_last_expires_at.toISOString()
+        : null,
+    });
 
     if (!eventId) {
       const roleGrantedNow = !user.is_global_admin;
@@ -1503,7 +1667,7 @@ export class AdminService {
         where: { id: user.id },
         data: { is_global_admin: true },
       });
-      const invitationSent = await sendInviteIfNeeded(
+      const inviteResult = await sendInviteIfNeeded(
         createdUser || (!hadStaffAccessBefore && roleGrantedNow),
       );
       return {
@@ -1512,52 +1676,315 @@ export class AdminService {
         fullName: user.applicant_profiles?.full_name ?? undefined,
         role: 'global_admin',
         assignedAt: new Date().toISOString(),
+        accessStartAt: null,
+        accessEndAt: null,
         isGlobalAdmin: true,
-        invitationSent,
+        invitationSent: inviteResult.invitationSent,
+        inviteStatus: inviteResult.inviteStatus ?? 'NONE',
+        inviteFailureReason: inviteResult.inviteFailureReason ?? null,
+        inviteLastAttemptAt: inviteResult.inviteLastAttemptAt
+          ? inviteResult.inviteLastAttemptAt.toISOString()
+          : null,
+        inviteLastSentAt: inviteResult.inviteLastSentAt
+          ? inviteResult.inviteLastSentAt.toISOString()
+          : null,
+        inviteLastExpiresAt: inviteResult.inviteLastExpiresAt
+          ? inviteResult.inviteLastExpiresAt.toISOString()
+          : null,
       };
     }
+
+    const roleAccessData = {
+      ...(parsedStartAt !== undefined ? { access_start_at: parsedStartAt } : {}),
+      ...(parsedEndAt !== undefined ? { access_end_at: parsedEndAt } : {}),
+    };
 
     // Check for existing assignment
     const existing = await this.prisma.event_role_assignments.findFirst({
       where: { event_id: eventId, user_id: user.id, role: normalizedRole },
     });
     if (existing) {
-      const invitationSent = await sendInviteIfNeeded(createdUser);
+      let assignment = existing;
+      if (Object.keys(roleAccessData).length > 0) {
+        assignment = await this.prisma.event_role_assignments.update({
+          where: { id: existing.id },
+          data: roleAccessData,
+        });
+      }
+
+      const inviteResult = await sendInviteIfNeeded(
+        createdUser ||
+          (!hadStaffAccessBefore &&
+            isRoleAssignmentActiveNow({
+              access_start_at: assignment.access_start_at,
+              access_end_at: assignment.access_end_at,
+            })),
+      );
+
+      if (inviteResult.invitationSent !== undefined) {
+        assignment = await this.prisma.event_role_assignments.update({
+          where: { id: assignment.id },
+          data: {
+            invite_status: inviteResult.inviteStatus,
+            invite_failure_reason: inviteResult.inviteFailureReason,
+            invite_last_attempt_at: inviteResult.inviteLastAttemptAt,
+            invite_last_sent_at: inviteResult.inviteLastSentAt,
+            invite_last_expires_at: inviteResult.inviteLastExpiresAt,
+            invite_resend_count: { increment: 1 },
+          },
+        });
+      }
+
       return {
-        id: existing.id,
-        email: user.email,
-        fullName: user.applicant_profiles?.full_name ?? undefined,
-        role: normalizedRole,
-        eventName: event?.title,
-        eventId: event?.id,
-        assignedAt: existing.created_at.toISOString(),
-        isGlobalAdmin: false,
-        invitationSent,
+        ...toStaffMemberFromAssignment(assignment),
+        invitationSent: inviteResult.invitationSent,
       };
     }
 
-    const assignment = await this.prisma.event_role_assignments.create({
+    let assignment = await this.prisma.event_role_assignments.create({
       data: {
         id: crypto.randomUUID(),
         event_id: eventId,
         user_id: user.id,
         role: normalizedRole,
+        access_start_at: parsedStartAt ?? null,
+        access_end_at: parsedEndAt ?? null,
       },
     });
 
-    const invitationSent = await sendInviteIfNeeded(
-      createdUser || !hadStaffAccessBefore,
+    const inviteResult = await sendInviteIfNeeded(
+      createdUser ||
+        (!hadStaffAccessBefore &&
+          isRoleAssignmentActiveNow({
+            access_start_at: assignment.access_start_at,
+            access_end_at: assignment.access_end_at,
+          })),
     );
+
+    if (inviteResult.invitationSent !== undefined) {
+      assignment = await this.prisma.event_role_assignments.update({
+        where: { id: assignment.id },
+        data: {
+          invite_status: inviteResult.inviteStatus,
+          invite_failure_reason: inviteResult.inviteFailureReason,
+          invite_last_attempt_at: inviteResult.inviteLastAttemptAt,
+          invite_last_sent_at: inviteResult.inviteLastSentAt,
+          invite_last_expires_at: inviteResult.inviteLastExpiresAt,
+          invite_resend_count: { increment: 1 },
+        },
+      });
+    }
+
     return {
-      id: assignment.id,
-      email: user.email,
-      fullName: user.applicant_profiles?.full_name ?? undefined,
-      role: normalizedRole,
-      eventName: event?.title,
-      eventId: event?.id,
-      assignedAt: assignment.created_at.toISOString(),
+      ...toStaffMemberFromAssignment(assignment),
+      invitationSent: inviteResult.invitationSent,
+    };
+  }
+
+  async updateRoleAccess(
+    id: string,
+    params: { startAt?: string | Date | null; endAt?: string | Date | null },
+  ): Promise<StaffMember> {
+    if (id.startsWith('global-admin-')) {
+      throw new BadRequestException(
+        'Global admin roles do not support event access windows',
+      );
+    }
+
+    const parsedStartAt = parseOptionalDateInput(params.startAt);
+    const parsedEndAt = parseOptionalDateInput(params.endAt);
+    if (parsedStartAt === undefined) {
+      throw new BadRequestException('Invalid startAt date');
+    }
+    if (parsedEndAt === undefined) {
+      throw new BadRequestException('Invalid endAt date');
+    }
+    if (
+      parsedStartAt instanceof Date &&
+      parsedEndAt instanceof Date &&
+      parsedStartAt.getTime() > parsedEndAt.getTime()
+    ) {
+      throw new BadRequestException('startAt must be earlier than endAt');
+    }
+
+    if (parsedStartAt === undefined && parsedEndAt === undefined) {
+      throw new BadRequestException('At least one access date must be provided');
+    }
+
+    const assignment = await this.prisma.event_role_assignments.findUnique({
+      where: { id },
+      include: {
+        users: {
+          select: {
+            email: true,
+            applicant_profiles: { select: { full_name: true } },
+          },
+        },
+        events: {
+          select: { id: true, title: true },
+        },
+      },
+    });
+    if (!assignment) throw new NotFoundException('Role assignment not found');
+
+    const updated = await this.prisma.event_role_assignments.update({
+      where: { id },
+      data: {
+        ...(parsedStartAt !== undefined ? { access_start_at: parsedStartAt } : {}),
+        ...(parsedEndAt !== undefined ? { access_end_at: parsedEndAt } : {}),
+      },
+    });
+
+    return {
+      id: updated.id,
+      email: assignment.users?.email ?? 'unknown',
+      fullName: assignment.users?.applicant_profiles?.full_name ?? undefined,
+      role: updated.role.toLowerCase(),
+      eventName: assignment.events?.title ?? undefined,
+      eventId: assignment.events?.id ?? undefined,
+      assignedAt: updated.created_at.toISOString(),
+      accessStartAt: updated.access_start_at
+        ? updated.access_start_at.toISOString()
+        : null,
+      accessEndAt: updated.access_end_at
+        ? updated.access_end_at.toISOString()
+        : null,
       isGlobalAdmin: false,
-      invitationSent,
+      inviteStatus: resolveInviteStatus(
+        updated.invite_status,
+        updated.invite_last_expires_at,
+      ),
+      inviteFailureReason: updated.invite_failure_reason ?? null,
+      inviteLastAttemptAt: updated.invite_last_attempt_at
+        ? updated.invite_last_attempt_at.toISOString()
+        : null,
+      inviteLastSentAt: updated.invite_last_sent_at
+        ? updated.invite_last_sent_at.toISOString()
+        : null,
+      inviteLastExpiresAt: updated.invite_last_expires_at
+        ? updated.invite_last_expires_at.toISOString()
+        : null,
+    };
+  }
+
+  async resendRoleInvite(id: string): Promise<StaffMember> {
+    if (id.startsWith('global-admin-')) {
+      const userId = id.replace('global-admin-', '');
+      const user = await this.prisma.users.findUnique({
+        where: { id: userId },
+        include: { applicant_profiles: { select: { full_name: true } } },
+      });
+      if (!user) throw new NotFoundException('User not found');
+
+      const inviteResult =
+        await this.passwordResetService.sendPasswordSetupInvite({
+          userId: user.id,
+          email: user.email,
+          userName: user.applicant_profiles?.full_name ?? undefined,
+          role: 'global_admin',
+        });
+      const attemptedAt = new Date();
+      return {
+        id: `global-admin-${user.id}`,
+        email: user.email,
+        fullName: user.applicant_profiles?.full_name ?? undefined,
+        role: 'global_admin',
+        assignedAt: user.created_at.toISOString(),
+        accessStartAt: null,
+        accessEndAt: null,
+        isGlobalAdmin: true,
+        invitationSent: inviteResult.invitationSent,
+        inviteStatus: inviteResult.invitationSent ? 'SENT' : 'FAILED',
+        inviteFailureReason: inviteResult.invitationSent
+          ? null
+          : 'Failed to send invitation email',
+        inviteLastAttemptAt: attemptedAt.toISOString(),
+        inviteLastSentAt: inviteResult.invitationSent
+          ? attemptedAt.toISOString()
+          : null,
+        inviteLastExpiresAt: inviteResult.invitationSent
+          ? (
+              inviteResult.expiresAt ??
+              new Date(attemptedAt.getTime() + 60 * 60 * 1000)
+            ).toISOString()
+          : null,
+      };
+    }
+
+    const assignment = await this.prisma.event_role_assignments.findUnique({
+      where: { id },
+      include: {
+        users: {
+          select: {
+            id: true,
+            email: true,
+            applicant_profiles: { select: { full_name: true } },
+          },
+        },
+        events: { select: { id: true, title: true } },
+      },
+    });
+    if (!assignment) throw new NotFoundException('Role assignment not found');
+    if (!assignment.users?.email) {
+      throw new BadRequestException('Cannot resend invite for assignment without user email');
+    }
+
+    const inviteResult = await this.passwordResetService.sendPasswordSetupInvite({
+      userId: assignment.user_id,
+      email: assignment.users.email,
+      userName: assignment.users?.applicant_profiles?.full_name ?? undefined,
+      role: assignment.role,
+      eventName: assignment.events?.title ?? undefined,
+    });
+    const attemptedAt = new Date();
+
+    const updated = await this.prisma.event_role_assignments.update({
+      where: { id: assignment.id },
+      data: {
+        invite_status: inviteResult.invitationSent ? 'SENT' : 'FAILED',
+        invite_failure_reason: inviteResult.invitationSent
+          ? null
+          : 'Failed to send invitation email',
+        invite_last_attempt_at: attemptedAt,
+        invite_last_sent_at: inviteResult.invitationSent ? attemptedAt : null,
+        invite_last_expires_at: inviteResult.invitationSent
+          ? inviteResult.expiresAt ??
+            new Date(attemptedAt.getTime() + 60 * 60 * 1000)
+          : null,
+        invite_resend_count: { increment: 1 },
+      },
+    });
+
+    return {
+      id: updated.id,
+      email: assignment.users?.email ?? 'unknown',
+      fullName: assignment.users?.applicant_profiles?.full_name ?? undefined,
+      role: updated.role.toLowerCase(),
+      eventName: assignment.events?.title ?? undefined,
+      eventId: assignment.events?.id ?? undefined,
+      assignedAt: updated.created_at.toISOString(),
+      accessStartAt: updated.access_start_at
+        ? updated.access_start_at.toISOString()
+        : null,
+      accessEndAt: updated.access_end_at
+        ? updated.access_end_at.toISOString()
+        : null,
+      isGlobalAdmin: false,
+      invitationSent: inviteResult.invitationSent,
+      inviteStatus: resolveInviteStatus(
+        updated.invite_status,
+        updated.invite_last_expires_at,
+      ),
+      inviteFailureReason: updated.invite_failure_reason ?? null,
+      inviteLastAttemptAt: updated.invite_last_attempt_at
+        ? updated.invite_last_attempt_at.toISOString()
+        : null,
+      inviteLastSentAt: updated.invite_last_sent_at
+        ? updated.invite_last_sent_at.toISOString()
+        : null,
+      inviteLastExpiresAt: updated.invite_last_expires_at
+        ? updated.invite_last_expires_at.toISOString()
+        : null,
     };
   }
 

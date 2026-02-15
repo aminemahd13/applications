@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
@@ -11,8 +12,14 @@ import {
   ApplicationSummary,
   ApplicationDetail,
   ApplicantProfile,
+  BulkApplicationTagsDto,
+  BulkAssignReviewerDto,
+  BulkDecisionDraftDto,
+  CreateDecisionTemplateDto,
   DecisionStatus,
+  DecisionTemplateResponse,
   StepStatus,
+  UpdateDecisionTemplateDto,
   PaginatedResponse,
 } from '@event-platform/shared';
 import { StepStateService } from './step-state.service';
@@ -720,11 +727,13 @@ export class ApplicationsService {
     applicationId: string,
     status: DecisionStatus,
     draft: boolean,
+    templateId?: string | null,
   ): Promise<ApplicationDetail> {
     const event = await this.prisma.events.findUnique({
       where: { id: eventId },
-      select: { decision_config: true },
+      select: { id: true, title: true, slug: true, decision_config: true },
     });
+    if (!event) throw new NotFoundException('Event not found');
     const decisionConfig =
       (event?.decision_config as Record<string, unknown>) ?? {};
     const autoPublish = this.readBoolean(decisionConfig.autoPublish, false);
@@ -732,6 +741,14 @@ export class ApplicationsService {
 
     const app = await this.prisma.applications.findFirst({
       where: { id: applicationId, event_id: eventId },
+      include: {
+        users_applications_applicant_user_idTousers: {
+          select: {
+            email: true,
+            applicant_profiles: { select: { full_name: true } },
+          },
+        },
+      },
     });
 
     if (!app) throw new NotFoundException('Application not found');
@@ -741,6 +758,67 @@ export class ApplicationsService {
       decision_status: status,
       updated_at: now,
     };
+
+    if (templateId !== undefined) {
+      if (templateId === null) {
+        data.decision_draft = {};
+      } else {
+        const template = await this.prisma.decision_templates.findFirst({
+          where: {
+            id: templateId,
+            event_id: eventId,
+            is_active: true,
+          },
+        });
+        if (!template) {
+          throw new NotFoundException('Decision template not found');
+        }
+        if (template.status !== status) {
+          throw new BadRequestException(
+            'Decision template status must match decision status',
+          );
+        }
+
+        const variables = this.buildDecisionTemplateVariables(
+          {
+            id: app.id,
+            applicantEmail:
+              app.users_applications_applicant_user_idTousers?.email ?? '',
+            applicantName:
+              app.users_applications_applicant_user_idTousers?.applicant_profiles
+                ?.full_name ??
+              app.users_applications_applicant_user_idTousers?.email ??
+              'Applicant',
+          },
+          {
+            id: event.id,
+            title: event.title,
+            slug: event.slug,
+          },
+          status,
+        );
+
+        data.decision_draft = {
+          templateId: template.id,
+          templateName: template.name,
+          status,
+          subjectTemplate: template.subject_template,
+          bodyTemplate: template.body_template,
+          rendered: {
+            subject: this.renderDecisionTemplateString(
+              template.subject_template,
+              variables,
+            ),
+            body: this.renderDecisionTemplateString(
+              template.body_template,
+              variables,
+            ),
+          },
+          variables,
+          updatedAt: now.toISOString(),
+        };
+      }
+    }
 
     if (!shouldPublish) {
       // If drafting, ensure published_at is not set (unless it was already published?)
@@ -764,6 +842,335 @@ export class ApplicationsService {
     }
 
     return this.findById(eventId, applicationId);
+  }
+
+  async bulkUpdateTags(
+    eventId: string,
+    dto: BulkApplicationTagsDto,
+  ): Promise<{ updated: number }> {
+    const applications = await this.prisma.applications.findMany({
+      where: {
+        event_id: eventId,
+        id: { in: dto.applicationIds },
+      },
+      select: { id: true, tags: true },
+    });
+    if (applications.length === 0) return { updated: 0 };
+
+    const addTags = Array.from(
+      new Set(
+        (dto.addTags ?? [])
+          .map((tag) => tag.trim())
+          .filter((tag) => tag.length > 0),
+      ),
+    );
+    const removeSet = new Set(
+      (dto.removeTags ?? [])
+        .map((tag) => tag.trim())
+        .filter((tag) => tag.length > 0),
+    );
+
+    await this.prisma.$transaction(
+      applications.map((application) => {
+        const nextTags = Array.from(
+          new Set([...(application.tags ?? []), ...addTags]),
+        ).filter((tag) => !removeSet.has(tag));
+        return this.prisma.applications.update({
+          where: { id: application.id },
+          data: { tags: nextTags, updated_at: new Date() },
+        });
+      }),
+    );
+
+    return { updated: applications.length };
+  }
+
+  async bulkAssignReviewer(
+    eventId: string,
+    dto: BulkAssignReviewerDto,
+  ): Promise<{ updated: number }> {
+    if (dto.reviewerId) {
+      const now = new Date();
+      const assignment = await this.prisma.event_role_assignments.findFirst({
+        where: {
+          event_id: eventId,
+          user_id: dto.reviewerId,
+          role: { in: ['reviewer', 'organizer'] },
+          AND: [
+            { OR: [{ access_start_at: null }, { access_start_at: { lte: now } }] },
+            { OR: [{ access_end_at: null }, { access_end_at: { gte: now } }] },
+          ],
+        },
+        select: { id: true },
+      });
+      if (!assignment) {
+        throw new BadRequestException(
+          'Reviewer must have an active reviewer/organizer role in this event',
+        );
+      }
+    }
+
+    const result = await this.prisma.applications.updateMany({
+      where: { event_id: eventId, id: { in: dto.applicationIds } },
+      data: {
+        assigned_reviewer_id: dto.reviewerId ?? null,
+        updated_at: new Date(),
+      },
+    });
+
+    return { updated: result.count };
+  }
+
+  async bulkDraftDecisions(
+    eventId: string,
+    dto: BulkDecisionDraftDto,
+  ): Promise<{ updated: number }> {
+    const event = await this.prisma.events.findUnique({
+      where: { id: eventId },
+      select: { id: true, title: true, slug: true },
+    });
+    if (!event) throw new NotFoundException('Event not found');
+
+    const applications = await this.prisma.applications.findMany({
+      where: {
+        event_id: eventId,
+        id: { in: dto.applicationIds },
+      },
+      include: {
+        users_applications_applicant_user_idTousers: {
+          select: {
+            email: true,
+            applicant_profiles: { select: { full_name: true } },
+          },
+        },
+      },
+    });
+    if (applications.length === 0) return { updated: 0 };
+
+    let template:
+      | {
+          id: string;
+          name: string;
+          status: string;
+          subject_template: string;
+          body_template: string;
+        }
+      | null = null;
+    if (dto.templateId) {
+      template = await this.prisma.decision_templates.findFirst({
+        where: {
+          id: dto.templateId,
+          event_id: eventId,
+          is_active: true,
+        },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          subject_template: true,
+          body_template: true,
+        },
+      });
+      if (!template) throw new NotFoundException('Decision template not found');
+      if (template.status !== dto.status) {
+        throw new BadRequestException(
+          'Decision template status must match bulk decision status',
+        );
+      }
+    }
+
+    const now = new Date();
+    await this.prisma.$transaction(
+      applications.map((application) => {
+        let decisionDraft: Prisma.InputJsonValue = {};
+        if (template) {
+          const variables = this.buildDecisionTemplateVariables(
+            {
+              id: application.id,
+              applicantEmail:
+                application.users_applications_applicant_user_idTousers?.email ??
+                '',
+              applicantName:
+                application.users_applications_applicant_user_idTousers
+                  ?.applicant_profiles?.full_name ??
+                application.users_applications_applicant_user_idTousers?.email ??
+                'Applicant',
+            },
+            event,
+            dto.status,
+          );
+          decisionDraft = {
+            templateId: template.id,
+            templateName: template.name,
+            status: dto.status,
+            subjectTemplate: template.subject_template,
+            bodyTemplate: template.body_template,
+            rendered: {
+              subject: this.renderDecisionTemplateString(
+                template.subject_template,
+                variables,
+              ),
+              body: this.renderDecisionTemplateString(
+                template.body_template,
+                variables,
+              ),
+            },
+            variables,
+            updatedAt: now.toISOString(),
+          } as Prisma.InputJsonValue;
+        }
+
+        return this.prisma.applications.update({
+          where: { id: application.id },
+          data: {
+            decision_status: dto.status,
+            decision_published_at: null,
+            decision_draft: decisionDraft as Prisma.InputJsonValue,
+            updated_at: now,
+          },
+        });
+      }),
+    );
+
+    return { updated: applications.length };
+  }
+
+  async listDecisionTemplates(
+    eventId: string,
+  ): Promise<DecisionTemplateResponse[]> {
+    const templates = await this.prisma.decision_templates.findMany({
+      where: { event_id: eventId },
+      orderBy: [{ is_active: 'desc' }, { created_at: 'desc' }],
+    });
+
+    return templates.map((template) => ({
+      id: template.id,
+      eventId: template.event_id,
+      name: template.name,
+      status: template.status as DecisionTemplateResponse['status'],
+      subjectTemplate: template.subject_template,
+      bodyTemplate: template.body_template,
+      isActive: template.is_active,
+      createdBy: template.created_by,
+      updatedBy: template.updated_by,
+      createdAt: template.created_at,
+      updatedAt: template.updated_at,
+    }));
+  }
+
+  async createDecisionTemplate(
+    eventId: string,
+    dto: CreateDecisionTemplateDto,
+  ): Promise<DecisionTemplateResponse> {
+    const actorId = this.cls.get('actorId');
+    const event = await this.prisma.events.findUnique({
+      where: { id: eventId },
+      select: { id: true },
+    });
+    if (!event) throw new NotFoundException('Event not found');
+
+    try {
+      const created = await this.prisma.decision_templates.create({
+        data: {
+          id: crypto.randomUUID(),
+          event_id: eventId,
+          name: dto.name,
+          status: dto.status,
+          subject_template: dto.subjectTemplate,
+          body_template: dto.bodyTemplate,
+          is_active: dto.isActive ?? true,
+          created_by: actorId,
+          updated_by: actorId,
+        },
+      });
+      return {
+        id: created.id,
+        eventId: created.event_id,
+        name: created.name,
+        status: created.status as DecisionTemplateResponse['status'],
+        subjectTemplate: created.subject_template,
+        bodyTemplate: created.body_template,
+        isActive: created.is_active,
+        createdBy: created.created_by,
+        updatedBy: created.updated_by,
+        createdAt: created.created_at,
+        updatedAt: created.updated_at,
+      };
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new BadRequestException(
+          'A decision template with this name already exists for this event',
+        );
+      }
+      throw error;
+    }
+  }
+
+  async updateDecisionTemplate(
+    eventId: string,
+    templateId: string,
+    dto: UpdateDecisionTemplateDto,
+  ): Promise<DecisionTemplateResponse> {
+    const actorId = this.cls.get('actorId');
+    const existing = await this.prisma.decision_templates.findFirst({
+      where: { id: templateId, event_id: eventId },
+      select: { id: true },
+    });
+    if (!existing) throw new NotFoundException('Decision template not found');
+
+    try {
+      const updated = await this.prisma.decision_templates.update({
+        where: { id: templateId },
+        data: {
+          ...(dto.name !== undefined ? { name: dto.name } : {}),
+          ...(dto.status !== undefined ? { status: dto.status } : {}),
+          ...(dto.subjectTemplate !== undefined
+            ? { subject_template: dto.subjectTemplate }
+            : {}),
+          ...(dto.bodyTemplate !== undefined
+            ? { body_template: dto.bodyTemplate }
+            : {}),
+          ...(dto.isActive !== undefined ? { is_active: dto.isActive } : {}),
+          updated_by: actorId,
+          updated_at: new Date(),
+        },
+      });
+      return {
+        id: updated.id,
+        eventId: updated.event_id,
+        name: updated.name,
+        status: updated.status as DecisionTemplateResponse['status'],
+        subjectTemplate: updated.subject_template,
+        bodyTemplate: updated.body_template,
+        isActive: updated.is_active,
+        createdBy: updated.created_by,
+        updatedBy: updated.updated_by,
+        createdAt: updated.created_at,
+        updatedAt: updated.updated_at,
+      };
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new BadRequestException(
+          'A decision template with this name already exists for this event',
+        );
+      }
+      throw error;
+    }
+  }
+
+  async deleteDecisionTemplate(eventId: string, templateId: string): Promise<void> {
+    const result = await this.prisma.decision_templates.deleteMany({
+      where: { id: templateId, event_id: eventId },
+    });
+    if (result.count === 0) {
+      throw new NotFoundException('Decision template not found');
+    }
   }
 
   /**
@@ -1111,6 +1518,10 @@ export class ApplicationsService {
       options?.maskDecisionIfUnpublished && !decisionPublished
         ? DecisionStatus.NONE
         : (app.decision_status as DecisionStatus);
+    const decisionDraft =
+      options?.maskDecisionIfUnpublished && !decisionPublished
+        ? undefined
+        : ((app.decision_draft as Record<string, any> | undefined) ?? undefined);
     const appForDerivedStatus = {
       ...app,
       decision_status: decisionStatus,
@@ -1124,6 +1535,7 @@ export class ApplicationsService {
       applicantName: user?.applicant_profiles?.full_name,
       decisionStatus,
       decisionPublishedAt: decisionPublished ? app.decision_published_at : null,
+      decisionDraft,
       tags: app.tags,
       derivedStatus: this.calculateDerivedStatus(
         appForDerivedStatus,
@@ -1584,6 +1996,44 @@ export class ApplicationsService {
     }
 
     return normalized;
+  }
+
+  private buildDecisionTemplateVariables(
+    application: {
+      id: string;
+      applicantName: string;
+      applicantEmail: string;
+    },
+    event: { id: string; title: string; slug: string },
+    status: DecisionStatus,
+  ): Record<string, string> {
+    const decisionLabelMap: Record<DecisionStatus, string> = {
+      [DecisionStatus.NONE]: 'No decision',
+      [DecisionStatus.ACCEPTED]: 'Accepted',
+      [DecisionStatus.WAITLISTED]: 'Waitlisted',
+      [DecisionStatus.REJECTED]: 'Rejected',
+    };
+
+    return {
+      applicantName: application.applicantName,
+      applicantEmail: application.applicantEmail,
+      applicationId: application.id,
+      eventTitle: event.title,
+      eventSlug: event.slug,
+      eventId: event.id,
+      decisionStatus: status,
+      decisionLabel: decisionLabelMap[status] ?? status,
+    };
+  }
+
+  private renderDecisionTemplateString(
+    template: string,
+    variables: Record<string, string>,
+  ): string {
+    return template.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_, key) => {
+      const value = variables[key];
+      return value !== undefined ? value : '';
+    });
   }
 
   private readBoolean(value: unknown, fallback: boolean): boolean {
