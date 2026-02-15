@@ -25,6 +25,7 @@ describe('AuthService', () => {
                 findUnique: jest.fn(),
                 create: jest.fn(),
                 update: jest.fn(),
+                delete: jest.fn(),
             },
             applicant_profiles: {
                 upsert: jest.fn(),
@@ -32,6 +33,26 @@ describe('AuthService', () => {
             },
             event_role_assignments: {
                 findFirst: jest.fn().mockResolvedValue(null),
+                deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+            },
+            audit_logs: {
+                updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+            },
+            attendance_records: {
+                updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+            },
+            applications: {
+                updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+                deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+            },
+            microsite_page_versions: {
+                updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+            },
+            microsite_versions: {
+                updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+            },
+            file_objects: {
+                deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
             $transaction: jest.fn((fn: any) => fn(mockPrisma)),
         };
@@ -50,6 +71,8 @@ describe('AuthService', () => {
             isAllowed: jest.fn().mockResolvedValue(true),
             recordAttempt: jest.fn(),
             trackSession: jest.fn(),
+            trackUserSession: jest.fn(),
+            revokeUserSessions: jest.fn().mockResolvedValue(0),
         };
 
         service = new AuthService(mockPrisma, mockOrgSettings, mockRateLimiter);
@@ -204,6 +227,65 @@ describe('AuthService', () => {
                     data: expect.objectContaining({ password_hash: expect.any(String) }),
                 }),
             );
+        });
+    });
+
+    describe('deleteMyAccount', () => {
+        it('should throw BadRequestException when current password is missing', async () => {
+            await expect(service.deleteMyAccount('user-1', '')).rejects.toThrow(
+                BadRequestException,
+            );
+        });
+
+        it('should throw UnauthorizedException when current password is invalid', async () => {
+            mockPrisma.users.findUnique.mockResolvedValue({
+                id: 'user-1',
+                password_hash: TEST_HASH,
+            });
+
+            await expect(
+                service.deleteMyAccount('user-1', 'wrong-password'),
+            ).rejects.toThrow(UnauthorizedException);
+        });
+
+        it('should hard-delete account and related records with valid password', async () => {
+            mockPrisma.users.findUnique.mockResolvedValue({
+                id: 'user-1',
+                password_hash: TEST_HASH,
+            });
+            mockPrisma.users.delete.mockResolvedValue({ id: 'user-1' });
+
+            const result = await service.deleteMyAccount(
+                'user-1',
+                'correct-password',
+            );
+
+            expect(result.message).toContain('Account deleted successfully');
+            expect(mockPrisma.audit_logs.updateMany).toHaveBeenCalledWith({
+                where: { actor_user_id: 'user-1' },
+                data: { actor_user_id: null },
+            });
+            expect(mockPrisma.applications.deleteMany).toHaveBeenCalledWith({
+                where: { applicant_user_id: 'user-1' },
+            });
+            expect(mockPrisma.users.delete).toHaveBeenCalledWith({
+                where: { id: 'user-1' },
+            });
+            expect(mockRateLimiter.revokeUserSessions).toHaveBeenCalledWith(
+                'user-1',
+            );
+        });
+
+        it('should return BadRequestException when hard delete is blocked by FK constraints', async () => {
+            mockPrisma.users.findUnique.mockResolvedValue({
+                id: 'user-1',
+                password_hash: TEST_HASH,
+            });
+            mockPrisma.users.delete.mockRejectedValue({ code: 'P2003' });
+
+            await expect(
+                service.deleteMyAccount('user-1', 'correct-password'),
+            ).rejects.toThrow(BadRequestException);
         });
     });
 });

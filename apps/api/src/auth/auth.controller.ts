@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Patch,
+  Delete,
   Body,
   Session,
   Res,
@@ -176,6 +177,24 @@ export class AuthController {
       body?.currentPassword,
       body?.newPassword,
     );
+  }
+
+  @Delete('me')
+  @HttpCode(HttpStatus.OK)
+  async deleteMyAccount(
+    @Session() session: any,
+    @Body() body: { currentPassword: string },
+    @Res({ passthrough: true }) res: express.Response,
+  ) {
+    const userId = this.requireSessionUserId(session);
+    const result = await this.authService.deleteMyAccount(
+      userId,
+      body?.currentPassword,
+    );
+    await this.authService.logout(session).catch(() => undefined);
+    res.clearCookie('sid');
+    res.clearCookie('csrf_token');
+    return result;
   }
 
   // Password Reset Flow - Token-based, no session auth required

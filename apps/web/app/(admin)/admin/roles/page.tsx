@@ -525,8 +525,8 @@ export default function RolesPage() {
           <DialogHeader>
             <DialogTitle>Assign a role</DialogTitle>
             <DialogDescription>
-              Grant a user a role. If they are new, they will receive an
-              invitation email to set their password.
+              Grant a user a role. New users and re-added staff users receive
+              an invitation email to set their password.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -548,7 +548,8 @@ export default function RolesPage() {
                     <p>
                       This email already has {existingAssignments.length} role
                       assignment{existingAssignments.length === 1 ? "" : "s"}.
-                      No invitation email will be sent.
+                      A new invitation email is sent when access is granted
+                      again after all staff access was removed.
                     </p>
                     {existingAssignments.length > 0 && (
                       <div className="flex flex-wrap gap-2">
@@ -568,11 +569,11 @@ export default function RolesPage() {
               ) : (
                 <Alert>
                   <Mail className="h-4 w-4" />
-                  <AlertTitle>New user invitation</AlertTitle>
+                  <AlertTitle>Invitation email</AlertTitle>
                   <AlertDescription>
                     <p>
                       An invitation email will be sent so they can set a
-                      password and activate their account.
+                      password and activate staff access.
                     </p>
                     <p>The link expires in 1 hour.</p>
                   </AlertDescription>
