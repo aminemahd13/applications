@@ -128,6 +128,8 @@ type BlockType =
   | "STICKY_ALERT_BAR"
   | "TABS"
   | "VIDEO_EMBED"
+  | "EMBED_DOC"
+  | "TEXT_IMAGE_RIGHT"
   | "TESTIMONIALS"
   | "CUSTOM_CODE"
   | "RANKS";
@@ -190,6 +192,8 @@ const BLOCK_CATALOG: {
   { type: "STICKY_ALERT_BAR", label: "Sticky Alert Bar", description: "Persistent top banner for urgent updates", icon: AlertCircle, category: "Conversion" },
   { type: "TABS", label: "Tabs", description: "Tabbed content", icon: Columns, category: "Content" },
   { type: "VIDEO_EMBED", label: "Video", description: "Embed YouTube or Vimeo", icon: Video, category: "Media" },
+  { type: "EMBED_DOC", label: "Embed Doc", description: "Inline PDF/DOC viewer for brochures and handbooks", icon: FileText, category: "Content" },
+  { type: "TEXT_IMAGE_RIGHT", label: "Text + Image Right", description: "Two-column text section with image on the right", icon: PanelRight, category: "Layout" },
   { type: "TESTIMONIALS", label: "Testimonials", description: "Applicant or partner quotes", icon: MessageSquareQuote, category: "Social Proof" },
   { type: "CUSTOM_CODE", label: "Custom Code", description: "Custom HTML and CSS", icon: Code2, category: "Advanced" },
   { type: "RANKS", label: "Ranks / Results", description: "Competition results table with CSV import", icon: Trophy, category: "Content" },
@@ -496,6 +500,22 @@ function getDefaultData(type: BlockType): BlockData {
       return { tabs: [{ label: "Tab 1", content: "Content here" }] };
     case "VIDEO_EMBED":
       return { title: "Event Highlights", url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", caption: "" };
+    case "EMBED_DOC":
+      return {
+        title: "Program Handbook",
+        url: "",
+        caption: "Upload a brochure, rulebook, or handbook to preview it inline.",
+        height: 720,
+      };
+    case "TEXT_IMAGE_RIGHT":
+      return {
+        heading: "About This Program",
+        text: "Use this section for narrative content.\nKeep your message on the left and pair it with a supporting visual on the right.",
+        imageUrl: "",
+        alt: "",
+        caption: "",
+        cta: { label: "Learn more", href: "#" },
+      };
     case "TESTIMONIALS":
       return { title: "What Applicants Say", items: [{ quote: "Amazing experience.", author: "Applicant", role: "Participant", rating: 5 }] };
     case "CUSTOM_CODE":
@@ -552,6 +572,7 @@ function getBlockSearchText(block: Block): string {
     data.subtitle,
     data.message,
     data.description,
+    data.text,
     data.venueName,
     data.caption,
     (data.cta as { label?: string } | undefined)?.label,
@@ -3151,6 +3172,164 @@ function BlockInspector({
           <div className="space-y-2">
             <Label>Caption</Label>
             <Input value={(data.caption as string) ?? ""} onChange={(e) => updateField("caption", e.target.value)} />
+          </div>
+        </div>
+      );
+      break;
+
+    case "EMBED_DOC":
+      content = (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Section title</Label>
+            <Input
+              value={(data.title as string) ?? ""}
+              onChange={(e) => updateField("title", e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Document URL / Asset key</Label>
+            <Input
+              value={(data.url as string) ?? ""}
+              onChange={(e) => updateField("url", e.target.value)}
+              placeholder="https://... or events/{eventId}/microsite/file.pdf"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Upload Document</Label>
+            <Input
+              type="file"
+              accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              onChange={async (e) => {
+                const input = e.currentTarget;
+                const file = input.files?.[0];
+                if (!file) return;
+                try {
+                  const src = uploadAsset ? await uploadAsset(file) : await fileToDataUrl(file);
+                  const inferredTitle = file.name.replace(/\.[a-zA-Z0-9]+$/, "");
+                  updateFields({
+                    url: src,
+                    title: (data.title as string) || inferredTitle,
+                  });
+                } catch {
+                  toast.error("Document upload failed");
+                } finally {
+                  input.value = "";
+                }
+              }}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Supports PDF, DOC, and DOCX.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>Viewer Height (px)</Label>
+            <Input
+              type="number"
+              min={320}
+              max={1400}
+              value={String(data.height ?? 720)}
+              onChange={(e) => updateField("height", Number(e.target.value || 720))}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Caption</Label>
+            <Textarea
+              value={(data.caption as string) ?? ""}
+              onChange={(e) => updateField("caption", e.target.value)}
+              rows={2}
+            />
+          </div>
+        </div>
+      );
+      break;
+
+    case "TEXT_IMAGE_RIGHT":
+      content = (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Heading</Label>
+            <Input
+              value={(data.heading as string) ?? ""}
+              onChange={(e) => updateField("heading", e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Text</Label>
+            <Textarea
+              value={(data.text as string) ?? ""}
+              onChange={(e) => updateField("text", e.target.value)}
+              rows={5}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Image</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                type="file"
+                accept="image/*"
+                onChange={async (e) => {
+                  const input = e.currentTarget;
+                  const file = input.files?.[0];
+                  if (!file) return;
+                  try {
+                    const src = uploadAsset ? await uploadAsset(file) : await fileToDataUrl(file);
+                    updateField("imageUrl", src);
+                  } catch {
+                    toast.error("Image upload failed");
+                  } finally {
+                    input.value = "";
+                  }
+                }}
+              />
+              {openMediaLibrary && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => openMediaLibrary("image", (assetKey) => updateField("imageUrl", assetKey))}
+                >
+                  Library
+                </Button>
+              )}
+            </div>
+            <Input
+              value={(data.imageUrl as string) ?? (data.assetKey as string) ?? ""}
+              onChange={(e) => updateField("imageUrl", e.target.value)}
+              placeholder="Image URL or asset key"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-2">
+              <Label>Alt text</Label>
+              <Input
+                value={(data.alt as string) ?? ""}
+                onChange={(e) => updateField("alt", e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Caption</Label>
+              <Input
+                value={(data.caption as string) ?? ""}
+                onChange={(e) => updateField("caption", e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-2">
+              <Label>CTA label</Label>
+              <Input
+                value={(data.cta as { label?: string })?.label ?? ""}
+                onChange={(e) => updateField("cta", { ...(data.cta as object ?? {}), label: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>CTA link</Label>
+              <Input
+                value={(data.cta as { href?: string })?.href ?? ""}
+                onChange={(e) => updateField("cta", { ...(data.cta as object ?? {}), href: e.target.value })}
+              />
+            </div>
           </div>
         </div>
       );
