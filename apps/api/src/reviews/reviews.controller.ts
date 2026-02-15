@@ -149,15 +149,15 @@ export class ReviewsController {
   }
 
   /**
-   * Cancel needs-info request
+   * Delete needs-info request
    */
   @Delete('needs-info/:needsInfoId')
-  @RequirePermission(Permission.EVENT_STEP_REVIEW)
-  async cancelNeedsInfo(
+  @RequirePermission(Permission.EVENT_APPLICATION_DELETE)
+  async deleteNeedsInfo(
     @Param('eventId') eventId: string,
     @Param('needsInfoId') needsInfoId: string,
   ) {
-    await this.reviewsService.cancelNeedsInfo(eventId, needsInfoId);
+    await this.reviewsService.deleteNeedsInfo(eventId, needsInfoId);
     return { success: true };
   }
 

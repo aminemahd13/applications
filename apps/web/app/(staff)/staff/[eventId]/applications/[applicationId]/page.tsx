@@ -858,6 +858,7 @@ export default function ApplicationDetailPage() {
   const canManageNotes = hasPermission(Permission.EVENT_APPLICATION_NOTES_MANAGE);
   const canPatchSteps = hasPermission(Permission.EVENT_STEP_PATCH);
   const canDeleteApplication = hasPermission(Permission.EVENT_APPLICATION_DELETE);
+  const canDeleteNeedsInfo = canDeleteApplication;
 
   const loadApplication = async (silent = false) => {
     if (!silent) setIsLoading(true);
@@ -1448,14 +1449,17 @@ export default function ApplicationDetailPage() {
     }
   }
 
-  async function cancelNeedsInfo(needsInfoId: string) {
-    if (!canReviewSteps) return;
+  async function deleteNeedsInfo(needsInfoId: string) {
+    if (!canDeleteNeedsInfo) return;
+    if (!window.confirm("Delete this needs-info request?")) {
+      return;
+    }
     try {
       await apiClient(`/events/${eventId}/needs-info/${needsInfoId}`, {
         method: "DELETE",
         csrfToken: csrfToken ?? undefined,
       });
-      toast.success("Needs-info request canceled");
+      toast.success("Needs-info request deleted");
       await loadNeedsInfo();
       await loadAudit();
     } catch {
@@ -1890,14 +1894,14 @@ export default function ApplicationDetailPage() {
                           {req.message && (
                             <p className="text-sm mt-2 whitespace-pre-wrap">{req.message}</p>
                           )}
-                          {req.status === "OPEN" && canReviewSteps && (
+                          {canDeleteNeedsInfo && (
                             <div className="mt-2">
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => cancelNeedsInfo(req.id)}
+                                onClick={() => deleteNeedsInfo(req.id)}
                               >
-                                Cancel request
+                                Delete request
                               </Button>
                             </div>
                           )}

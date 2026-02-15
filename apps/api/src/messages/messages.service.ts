@@ -435,6 +435,19 @@ export class MessagesService {
     };
   }
 
+  async deleteMessage(eventId: string, messageId: string): Promise<void> {
+    const result = await this.prisma.messages.deleteMany({
+      where: {
+        id: messageId,
+        event_id: eventId,
+      },
+    });
+
+    if (result.count === 0) {
+      throw new NotFoundException('Message not found');
+    }
+  }
+
   // ============================================================
   // APPLICANT INBOX
   // ============================================================

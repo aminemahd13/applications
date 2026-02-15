@@ -11,6 +11,7 @@ import {
   Mail,
   Bell,
   BarChart3,
+  Trash2,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -41,7 +42,8 @@ import {
   CardSkeleton,
 } from "@/components/shared";
 import { apiClient } from "@/lib/api";
-import { useAuth } from "@/lib/auth-context";
+import { useAuth, usePermissions } from "@/lib/auth-context";
+import { Permission } from "@event-platform/shared";
 import { toast } from "sonner";
 
 interface SentMessage {
@@ -57,6 +59,8 @@ export default function MessagesPage() {
   const params = useParams();
   const eventId = params.eventId as string;
   const { csrfToken } = useAuth();
+  const { hasPermission } = usePermissions(eventId);
+  const canDeleteMessages = hasPermission(Permission.EVENT_APPLICATION_DELETE);
 
   const [messages, setMessages] = useState<SentMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -194,6 +198,26 @@ export default function MessagesPage() {
     }
   }
 
+  async function deleteMessage(messageId: string) {
+    if (!canDeleteMessages) return;
+    if (!window.confirm("Delete this message? This action cannot be undone.")) {
+      return;
+    }
+
+    try {
+      await apiClient(`/events/${eventId}/messages/${messageId}`, {
+        method: "DELETE",
+        csrfToken: csrfToken ?? undefined,
+      });
+      setMessages((current) =>
+        current.filter((message) => message.id !== messageId)
+      );
+      toast.success("Message deleted");
+    } catch {
+      /* handled */
+    }
+  }
+
   const announcements = messages.filter((m) => m.type === "ANNOUNCEMENT");
   const direct = messages.filter((m) => m.type === "DIRECT");
 
@@ -247,7 +271,12 @@ export default function MessagesPage() {
               ) : (
                 <div className="space-y-3">
                   {announcements.map((msg) => (
-                    <MessageCard key={msg.id} message={msg} />
+                    <MessageCard
+                      key={msg.id}
+                      message={msg}
+                      canDelete={canDeleteMessages}
+                      onDelete={deleteMessage}
+                    />
                   ))}
                 </div>
               )}
@@ -268,7 +297,12 @@ export default function MessagesPage() {
               ) : (
                 <div className="space-y-3">
                   {direct.map((msg) => (
-                    <MessageCard key={msg.id} message={msg} />
+                    <MessageCard
+                      key={msg.id}
+                      message={msg}
+                      canDelete={canDeleteMessages}
+                      onDelete={deleteMessage}
+                    />
                   ))}
                 </div>
               )}
@@ -397,7 +431,15 @@ export default function MessagesPage() {
   );
 }
 
-function MessageCard({ message }: { message: SentMessage }) {
+function MessageCard({
+  message,
+  canDelete,
+  onDelete,
+}: {
+  message: SentMessage;
+  canDelete: boolean;
+  onDelete: (messageId: string) => void;
+}) {
   const readRate =
     message.recipientCount > 0
       ? Math.round((message.readCount / message.recipientCount) * 100)
@@ -426,6 +468,17 @@ function MessageCard({ message }: { message: SentMessage }) {
             <Badge variant={message.type === "ANNOUNCEMENT" ? "default" : "secondary"}>
               {message.type === "ANNOUNCEMENT" ? "Announcement" : "Direct"}
             </Badge>
+            {canDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-destructive hover:text-destructive"
+                onClick={() => onDelete(message.id)}
+                aria-label="Delete message"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
           </div>
         </div>
       </CardContent>
