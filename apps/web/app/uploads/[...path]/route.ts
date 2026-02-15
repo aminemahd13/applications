@@ -21,6 +21,8 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
+const SENSITIVE_UPSTREAM_HEADERS = new Set(["cookie", "cookie2"]);
+
 function normalizeAbsoluteUrl(value: string | undefined): string | null {
   const raw = (value ?? "").trim().replace(/\/+$/, "");
   if (!raw) return null;
@@ -90,6 +92,7 @@ function buildForwardHeaders(
   for (const [key, value] of req.headers.entries()) {
     const lower = key.toLowerCase();
     if (HOP_BY_HOP_HEADERS.has(lower)) continue;
+    if (SENSITIVE_UPSTREAM_HEADERS.has(lower)) continue;
     if (lower === "host") continue;
     headers[lower] = value;
   }

@@ -29,6 +29,19 @@ describe('AdminService.assignRole', () => {
       event_role_assignments: {
         findFirst: jest.fn(),
         create: jest.fn(),
+        update: jest.fn().mockImplementation(({ where, data }) =>
+          Promise.resolve({
+            id: where.id,
+            created_at: new Date('2026-01-01T00:00:00.000Z'),
+            access_start_at: data?.access_start_at ?? null,
+            access_end_at: data?.access_end_at ?? null,
+            invite_status: data?.invite_status ?? 'SENT',
+            invite_failure_reason: data?.invite_failure_reason ?? null,
+            invite_last_attempt_at: data?.invite_last_attempt_at ?? null,
+            invite_last_sent_at: data?.invite_last_sent_at ?? null,
+            invite_last_expires_at: data?.invite_last_expires_at ?? null,
+          }),
+        ),
       },
     };
 

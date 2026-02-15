@@ -2990,6 +2990,9 @@ export default function ApplicationDetailPage() {
                     value={fieldEditFileValue}
                     onChange={(next) => setFieldEditValue(next)}
                     eventId={eventId}
+                    applicationId={appId}
+                    stepId={fieldEditTarget?.stepId}
+                    fieldId={fieldEditTarget?.fieldKey}
                     accept={fieldEditTarget?.field?.allowedMimeTypes?.join(",")}
                     multiple={fieldEditFileMultiple}
                     maxFiles={

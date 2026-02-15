@@ -181,39 +181,6 @@ function validateFieldValue(
             ) {
                 addIssue(ctx, fieldKey, `Max ${maxFiles} files`);
             }
-
-            const maxFileSizeMB = field.ui?.maxFileSizeMB;
-            if (
-                typeof maxFileSizeMB === 'number' &&
-                Number.isFinite(maxFileSizeMB) &&
-                maxFileSizeMB > 0
-            ) {
-                const maxBytes = Math.floor(maxFileSizeMB * 1024 * 1024);
-                const tooLarge = files.some(
-                    (file) =>
-                        typeof file.sizeBytes === 'number' &&
-                        file.sizeBytes > maxBytes,
-                );
-                if (tooLarge) {
-                    addIssue(ctx, fieldKey, `Max file size ${maxFileSizeMB}MB`);
-                }
-            }
-
-            const allowedTypes = field.ui?.allowedMimeTypes ?? rules.allowedTypes;
-            if (allowedTypes?.length) {
-                const invalidType = files.some(
-                    (file) =>
-                        typeof file.mimeType === 'string' &&
-                        !allowedTypes.includes(file.mimeType),
-                );
-                if (invalidType) {
-                    addIssue(
-                        ctx,
-                        fieldKey,
-                        'Contains file type not allowed by this field',
-                    );
-                }
-            }
             return;
         }
 

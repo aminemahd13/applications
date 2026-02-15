@@ -17,12 +17,22 @@ type FormValues = Record<string, unknown>;
 interface FormRendererProps {
   definition: FormDefinition | Record<string, unknown>;
   eventId: string;
+  applicationId?: string;
+  stepId?: string;
   initialData?: FormValues;
   onSubmit: (data: FormValues) => void;
   readOnly?: boolean;
 }
 
-export function FormRenderer({ definition, eventId, initialData, onSubmit, readOnly }: FormRendererProps) {
+export function FormRenderer({
+  definition,
+  eventId,
+  applicationId,
+  stepId,
+  initialData,
+  onSubmit,
+  readOnly,
+}: FormRendererProps) {
   const normalizedDefinition = React.useMemo(
     () => normalizeFormDefinition(definition),
     [definition],
@@ -153,6 +163,9 @@ export function FormRenderer({ definition, eventId, initialData, onSubmit, readO
                                     value={uploadValue}
                                     onChange={onChange}
                                     eventId={eventId}
+                                    applicationId={applicationId}
+                                    stepId={stepId}
+                                    fieldId={fieldKey}
                                     readOnly={readOnly}
                                     accept={
                                       field.ui?.allowedMimeTypes?.join(',') ??

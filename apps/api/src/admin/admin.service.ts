@@ -1476,12 +1476,14 @@ export class AdminService {
     endAt?: string | Date | null;
   }): Promise<StaffMember> {
     const { email, role, eventId } = params;
+    const hasStartAt = Object.prototype.hasOwnProperty.call(params, 'startAt');
+    const hasEndAt = Object.prototype.hasOwnProperty.call(params, 'endAt');
     const parsedStartAt = parseOptionalDateInput(params.startAt);
     const parsedEndAt = parseOptionalDateInput(params.endAt);
-    if (parsedStartAt === undefined) {
+    if (hasStartAt && parsedStartAt === undefined) {
       throw new BadRequestException('Invalid startAt date');
     }
-    if (parsedEndAt === undefined) {
+    if (hasEndAt && parsedEndAt === undefined) {
       throw new BadRequestException('Invalid endAt date');
     }
     if (
@@ -1520,7 +1522,10 @@ export class AdminService {
           'Event scope is required for event roles. Use role "global_admin" for global access.',
         );
       }
-      if (parsedStartAt !== null || parsedEndAt !== null) {
+      if (
+        (hasStartAt && parsedStartAt !== null) ||
+        (hasEndAt && parsedEndAt !== null)
+      ) {
         throw new BadRequestException(
           'startAt/endAt are only supported for event-scoped staff roles',
         );
@@ -1791,12 +1796,14 @@ export class AdminService {
       );
     }
 
+    const hasStartAt = Object.prototype.hasOwnProperty.call(params, 'startAt');
+    const hasEndAt = Object.prototype.hasOwnProperty.call(params, 'endAt');
     const parsedStartAt = parseOptionalDateInput(params.startAt);
     const parsedEndAt = parseOptionalDateInput(params.endAt);
-    if (parsedStartAt === undefined) {
+    if (hasStartAt && parsedStartAt === undefined) {
       throw new BadRequestException('Invalid startAt date');
     }
-    if (parsedEndAt === undefined) {
+    if (hasEndAt && parsedEndAt === undefined) {
       throw new BadRequestException('Invalid endAt date');
     }
     if (
@@ -1807,7 +1814,7 @@ export class AdminService {
       throw new BadRequestException('startAt must be earlier than endAt');
     }
 
-    if (parsedStartAt === undefined && parsedEndAt === undefined) {
+    if (!hasStartAt && !hasEndAt) {
       throw new BadRequestException('At least one access date must be provided');
     }
 
@@ -1830,8 +1837,8 @@ export class AdminService {
     const updated = await this.prisma.event_role_assignments.update({
       where: { id },
       data: {
-        ...(parsedStartAt !== undefined ? { access_start_at: parsedStartAt } : {}),
-        ...(parsedEndAt !== undefined ? { access_end_at: parsedEndAt } : {}),
+        ...(hasStartAt ? { access_start_at: parsedStartAt ?? null } : {}),
+        ...(hasEndAt ? { access_end_at: parsedEndAt ?? null } : {}),
       },
     });
 
