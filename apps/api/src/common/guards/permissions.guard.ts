@@ -19,13 +19,12 @@ import { PERMISSIONS_KEY } from '../decorators/require-permission.decorator';
 @Injectable()
 export class PermissionsGuard implements CanActivate {
   private static readonly ORG_SETTINGS_CACHE_TTL_MS = 30_000;
-  private static readonly SELF_PERMISSIONS_ALLOWED_WHEN_UNVERIFIED = new Set<
-    Permission
-  >([
-    Permission.SELF_PROFILE_UPDATE,
-    Permission.SELF_APPLICATION_READ,
-    Permission.SELF_INBOX_READ,
-  ]);
+  private static readonly SELF_PERMISSIONS_ALLOWED_WHEN_UNVERIFIED =
+    new Set<Permission>([
+      Permission.SELF_PROFILE_UPDATE,
+      Permission.SELF_APPLICATION_READ,
+      Permission.SELF_INBOX_READ,
+    ]);
   private static orgSettingsCache: {
     security: Record<string, unknown>;
     expiresAt: number;
