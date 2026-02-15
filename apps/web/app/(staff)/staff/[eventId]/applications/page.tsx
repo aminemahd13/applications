@@ -12,6 +12,10 @@ import {
   ChevronRight,
   Eye,
   Trash2,
+  Tags,
+  UserCheck,
+  Mail,
+  CheckCircle2,
 } from "lucide-react";
 import {
   useReactTable,
@@ -27,6 +31,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -42,6 +50,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 import {
   PageHeader,
@@ -66,6 +82,22 @@ interface Application {
   submittedAt?: string;
   tags: string[];
   decision?: string;
+}
+
+interface ReviewerOption {
+  userId: string;
+  email: string;
+  fullName: string | null;
+  roles: string[];
+}
+
+interface DecisionTemplate {
+  id: string;
+  name: string;
+  status: "ACCEPTED" | "WAITLISTED" | "REJECTED";
+  subjectTemplate: string;
+  bodyTemplate: string;
+  isActive: boolean;
 }
 
 type StatusFilterValue =
@@ -166,41 +198,130 @@ export default function ApplicationsListPage() {
   const { csrfToken } = useAuth();
   const { hasPermission } = usePermissions(eventId);
   const canDeleteApplications = hasPermission(Permission.EVENT_APPLICATION_DELETE);
+  const canManageTags = hasPermission(Permission.EVENT_APPLICATION_TAGS_MANAGE);
+  const canAssignReviewers = hasPermission(Permission.EVENT_APPLICATION_LIST);
+  const canDraftDecisions = hasPermission(Permission.EVENT_DECISION_DRAFT);
+  const canSendMessages = hasPermission(Permission.EVENT_MESSAGES_SEND);
 
   const [applications, setApplications] = useState<Application[]>([]);
+  const [reviewers, setReviewers] = useState<ReviewerOption[]>([]);
+  const [decisionTemplates, setDecisionTemplates] = useState<DecisionTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isApplyingBulk, setIsApplyingBulk] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>("all");
   const [deleteTarget, setDeleteTarget] = useState<Application | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [showBulkTags, setShowBulkTags] = useState(false);
+  const [showBulkAssign, setShowBulkAssign] = useState(false);
+  const [showBulkMessage, setShowBulkMessage] = useState(false);
+  const [showBulkDecision, setShowBulkDecision] = useState(false);
+  const [showTemplateManager, setShowTemplateManager] = useState(false);
+  const [bulkAddTags, setBulkAddTags] = useState("");
+  const [bulkRemoveTags, setBulkRemoveTags] = useState("");
+  const [bulkReviewerId, setBulkReviewerId] = useState("__unassigned__");
+  const [bulkMessageSubject, setBulkMessageSubject] = useState("");
+  const [bulkMessageBody, setBulkMessageBody] = useState("");
+  const [bulkMessageSendEmail, setBulkMessageSendEmail] = useState(false);
+  const [bulkDecisionStatus, setBulkDecisionStatus] = useState<
+    "ACCEPTED" | "WAITLISTED" | "REJECTED"
+  >("ACCEPTED");
+  const [bulkDecisionTemplateId, setBulkDecisionTemplateId] = useState("__none__");
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [templateName, setTemplateName] = useState("");
+  const [templateStatus, setTemplateStatus] = useState<
+    "ACCEPTED" | "WAITLISTED" | "REJECTED"
+  >("ACCEPTED");
+  const [templateSubject, setTemplateSubject] = useState("");
+  const [templateBody, setTemplateBody] = useState("");
+  const [templateIsActive, setTemplateIsActive] = useState(true);
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
+  const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
+
+  async function refreshApplications() {
+    const res = await apiClient<
+      | Application[]
+      | { data: Array<Record<string, unknown>>; meta?: unknown }
+    >(`/events/${eventId}/applications`);
+    const raw = Array.isArray(res)
+      ? (res as unknown as Array<Record<string, unknown>>)
+      : Array.isArray((res as any).data)
+        ? (res as any).data
+        : [];
+    const mapped: Application[] = raw.map(normalizeApplication);
+    setApplications(mapped);
+    setSelectedIds((prev) => prev.filter((id) => mapped.some((app) => app.id === id)));
+  }
+
+  async function refreshDecisionTemplates() {
+    if (!canDraftDecisions) return;
+    const templateRes = await apiClient<{ data?: DecisionTemplate[] }>(
+      `/events/${eventId}/decision-templates`,
+    ).catch(() => ({ data: [] }));
+    setDecisionTemplates(Array.isArray(templateRes.data) ? templateRes.data : []);
+  }
+
+  function resetTemplateEditor() {
+    setEditingTemplateId(null);
+    setTemplateName("");
+    setTemplateStatus("ACCEPTED");
+    setTemplateSubject("");
+    setTemplateBody("");
+    setTemplateIsActive(true);
+  }
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await apiClient<
-          | Application[]
-          | { data: Array<Record<string, unknown>>; meta?: unknown }
-        >(`/events/${eventId}/applications`);
-        const raw = Array.isArray(res)
-          ? (res as unknown as Array<Record<string, unknown>>)
-          : Array.isArray((res as any).data)
-            ? (res as any).data
-            : [];
-        setApplications(raw.map(normalizeApplication));
+        await refreshApplications();
+        if (canAssignReviewers) {
+          const reviewerRes = await apiClient<{ data?: ReviewerOption[] }>(
+            `/events/${eventId}/review-queue/reviewers`,
+          ).catch(() => ({ data: [] }));
+          setReviewers(Array.isArray(reviewerRes.data) ? reviewerRes.data : []);
+        }
+        if (canDraftDecisions) {
+          await refreshDecisionTemplates();
+        }
       } catch {
         /* handled */
       } finally {
         setIsLoading(false);
       }
     })();
-  }, [eventId]);
+  }, [canAssignReviewers, canDraftDecisions, eventId]);
 
   const filteredData = useMemo(
     () => applications.filter((a) => matchesStatusFilter(a.status, statusFilter)),
     [applications, statusFilter]
   );
+  const selectedCount = selectedIds.length;
+  const selectedApplicationIds = useMemo(
+    () => selectedIds.filter((id) => applications.some((app) => app.id === id)),
+    [applications, selectedIds],
+  );
+  const decisionTemplatesForStatus = useMemo(
+    () =>
+      decisionTemplates.filter(
+        (template) =>
+          template.isActive && template.status === bulkDecisionStatus,
+      ),
+    [bulkDecisionStatus, decisionTemplates],
+  );
+
+  function parseTagInput(input: string): string[] {
+    return Array.from(
+      new Set(
+        input
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter((tag) => tag.length > 0),
+      ),
+    );
+  }
 
   async function handleExport() {
     setIsExporting(true);
@@ -248,8 +369,239 @@ export default function ApplicationsListPage() {
     }
   }
 
+  async function applyBulkTags() {
+    if (!canManageTags || selectedApplicationIds.length === 0) return;
+    const addTags = parseTagInput(bulkAddTags);
+    const removeTags = parseTagInput(bulkRemoveTags);
+    if (addTags.length === 0 && removeTags.length === 0) {
+      toast.error("Add at least one tag to add or remove");
+      return;
+    }
+    setIsApplyingBulk(true);
+    try {
+      await apiClient(`/events/${eventId}/applications/bulk/tags`, {
+        method: "POST",
+        body: {
+          applicationIds: selectedApplicationIds,
+          addTags,
+          removeTags,
+        },
+        csrfToken: csrfToken ?? undefined,
+      });
+      await refreshApplications();
+      toast.success("Bulk tags updated");
+      setShowBulkTags(false);
+      setBulkAddTags("");
+      setBulkRemoveTags("");
+    } catch {
+      /* handled */
+    } finally {
+      setIsApplyingBulk(false);
+    }
+  }
+
+  async function applyBulkReviewer() {
+    if (!canAssignReviewers || selectedApplicationIds.length === 0) return;
+    setIsApplyingBulk(true);
+    try {
+      await apiClient(`/events/${eventId}/applications/bulk/assign-reviewer`, {
+        method: "POST",
+        body: {
+          applicationIds: selectedApplicationIds,
+          reviewerId: bulkReviewerId === "__unassigned__" ? null : bulkReviewerId,
+        },
+        csrfToken: csrfToken ?? undefined,
+      });
+      await refreshApplications();
+      toast.success("Bulk reviewer assignment updated");
+      setShowBulkAssign(false);
+    } catch {
+      /* handled */
+    } finally {
+      setIsApplyingBulk(false);
+    }
+  }
+
+  async function applyBulkDecisionDraft() {
+    if (!canDraftDecisions || selectedApplicationIds.length === 0) return;
+    setIsApplyingBulk(true);
+    try {
+      await apiClient(`/events/${eventId}/applications/bulk/decision-draft`, {
+        method: "POST",
+        body: {
+          applicationIds: selectedApplicationIds,
+          status: bulkDecisionStatus,
+          templateId:
+            bulkDecisionTemplateId === "__none__"
+              ? null
+              : bulkDecisionTemplateId,
+        },
+        csrfToken: csrfToken ?? undefined,
+      });
+      await refreshApplications();
+      toast.success("Decision drafts updated");
+      setShowBulkDecision(false);
+    } catch {
+      /* handled */
+    } finally {
+      setIsApplyingBulk(false);
+    }
+  }
+
+  async function applyBulkMessage() {
+    if (!canSendMessages || selectedApplicationIds.length === 0) return;
+    if (!bulkMessageSubject.trim() || !bulkMessageBody.trim()) {
+      toast.error("Message subject and body are required");
+      return;
+    }
+    setIsApplyingBulk(true);
+    try {
+      await apiClient(`/events/${eventId}/messages`, {
+        method: "POST",
+        body: {
+          title: bulkMessageSubject.trim(),
+          bodyRich: bulkMessageBody.trim(),
+          bodyText: bulkMessageBody.trim(),
+          recipientFilter: {
+            applicationIds: selectedApplicationIds,
+          },
+          sendEmail: bulkMessageSendEmail,
+        },
+        csrfToken: csrfToken ?? undefined,
+      });
+      toast.success("Bulk message sent");
+      setShowBulkMessage(false);
+      setBulkMessageSubject("");
+      setBulkMessageBody("");
+      setBulkMessageSendEmail(false);
+    } catch {
+      /* handled */
+    } finally {
+      setIsApplyingBulk(false);
+    }
+  }
+
+  function startTemplateCreate() {
+    resetTemplateEditor();
+  }
+
+  function editTemplate(template: DecisionTemplate) {
+    setEditingTemplateId(template.id);
+    setTemplateName(template.name);
+    setTemplateStatus(template.status);
+    setTemplateSubject(template.subjectTemplate);
+    setTemplateBody(template.bodyTemplate);
+    setTemplateIsActive(template.isActive);
+  }
+
+  async function saveTemplate() {
+    if (!canDraftDecisions) return;
+    if (!templateName.trim() || !templateSubject.trim() || !templateBody.trim()) {
+      toast.error("Template name, subject, and body are required");
+      return;
+    }
+
+    setIsSavingTemplate(true);
+    try {
+      if (editingTemplateId) {
+        await apiClient(`/events/${eventId}/decision-templates/${editingTemplateId}`, {
+          method: "PATCH",
+          body: {
+            name: templateName.trim(),
+            status: templateStatus,
+            subjectTemplate: templateSubject.trim(),
+            bodyTemplate: templateBody.trim(),
+            isActive: templateIsActive,
+          },
+          csrfToken: csrfToken ?? undefined,
+        });
+        toast.success("Template updated");
+      } else {
+        await apiClient(`/events/${eventId}/decision-templates`, {
+          method: "POST",
+          body: {
+            name: templateName.trim(),
+            status: templateStatus,
+            subjectTemplate: templateSubject.trim(),
+            bodyTemplate: templateBody.trim(),
+            isActive: templateIsActive,
+          },
+          csrfToken: csrfToken ?? undefined,
+        });
+        toast.success("Template created");
+      }
+      await refreshDecisionTemplates();
+      resetTemplateEditor();
+    } catch {
+      /* handled */
+    } finally {
+      setIsSavingTemplate(false);
+    }
+  }
+
+  async function deleteTemplate(templateId: string) {
+    if (!canDraftDecisions) return;
+    setDeletingTemplateId(templateId);
+    try {
+      await apiClient(`/events/${eventId}/decision-templates/${templateId}`, {
+        method: "DELETE",
+        csrfToken: csrfToken ?? undefined,
+      });
+      await refreshDecisionTemplates();
+      if (editingTemplateId === templateId) {
+        resetTemplateEditor();
+      }
+      toast.success("Template deleted");
+    } catch {
+      /* handled */
+    } finally {
+      setDeletingTemplateId(null);
+    }
+  }
+
   const columns: ColumnDef<Application>[] = useMemo(
     () => [
+      {
+        id: "select",
+        header: () => {
+          const visibleIds = filteredData.map((row) => row.id);
+          const selectedVisibleCount = visibleIds.filter((id) =>
+            selectedIds.includes(id),
+          ).length;
+          const allSelected =
+            visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+          return (
+            <Checkbox
+              checked={allSelected}
+              onCheckedChange={(checked) => {
+                const nextChecked = checked === true;
+                setSelectedIds((prev) => {
+                  const withoutVisible = prev.filter((id) => !visibleIds.includes(id));
+                  return nextChecked
+                    ? Array.from(new Set([...withoutVisible, ...visibleIds]))
+                    : withoutVisible;
+                });
+              }}
+              aria-label="Select all applications"
+            />
+          );
+        },
+        cell: ({ row }) => (
+          <Checkbox
+            checked={selectedIds.includes(row.original.id)}
+            onCheckedChange={(checked) => {
+              const nextChecked = checked === true;
+              setSelectedIds((prev) =>
+                nextChecked
+                  ? Array.from(new Set([...prev, row.original.id]))
+                  : prev.filter((id) => id !== row.original.id),
+              );
+            }}
+            onClick={(event) => event.stopPropagation()}
+            aria-label={`Select ${row.original.applicantName}`}
+          />
+        ),
+      },
       {
         accessorKey: "applicantName",
         header: ({ column }) => (
@@ -369,8 +721,10 @@ export default function ApplicationsListPage() {
       basePath,
       canDeleteApplications,
       deleteTarget?.id,
+      filteredData,
       isDeleting,
       router,
+      selectedIds,
     ]
   );
 
@@ -393,6 +747,18 @@ export default function ApplicationsListPage() {
         title="Applications"
         description={`${applications.length} total applications`}
       >
+        {canDraftDecisions && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setShowTemplateManager(true);
+              startTemplateCreate();
+            }}
+          >
+            Manage decision templates
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -438,6 +804,59 @@ export default function ApplicationsListPage() {
           </SelectContent>
         </Select>
       </div>
+
+      {selectedCount > 0 && (
+        <Card>
+          <CardContent className="p-3 flex flex-wrap items-center gap-2">
+            <p className="text-sm text-muted-foreground mr-2">
+              {selectedCount} selected
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowBulkTags(true)}
+              disabled={!canManageTags}
+            >
+              <Tags className="mr-1.5 h-3.5 w-3.5" />
+              Bulk tags
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowBulkAssign(true)}
+              disabled={!canAssignReviewers}
+            >
+              <UserCheck className="mr-1.5 h-3.5 w-3.5" />
+              Assign reviewer
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowBulkMessage(true)}
+              disabled={!canSendMessages}
+            >
+              <Mail className="mr-1.5 h-3.5 w-3.5" />
+              Send message
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowBulkDecision(true)}
+              disabled={!canDraftDecisions}
+            >
+              <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+              Decision draft
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setSelectedIds([])}
+            >
+              Clear selection
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Table */}
       {isLoading ? (
@@ -525,6 +944,322 @@ export default function ApplicationsListPage() {
           </Button>
         </div>
       </div>
+
+      <Dialog open={showBulkTags} onOpenChange={setShowBulkTags}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bulk tag applications</DialogTitle>
+            <DialogDescription>
+              Add and/or remove tags for {selectedCount} selected applications.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Add tags</Label>
+              <Input
+                value={bulkAddTags}
+                onChange={(event) => setBulkAddTags(event.target.value)}
+                placeholder="vip, shortlist"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Remove tags</Label>
+              <Input
+                value={bulkRemoveTags}
+                onChange={(event) => setBulkRemoveTags(event.target.value)}
+                placeholder="needs_followup"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkTags(false)}>
+              Cancel
+            </Button>
+            <Button onClick={applyBulkTags} disabled={isApplyingBulk}>
+              {isApplyingBulk ? "Applying..." : "Apply"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showBulkAssign} onOpenChange={setShowBulkAssign}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bulk assign reviewer</DialogTitle>
+            <DialogDescription>
+              Assign or clear reviewer for {selectedCount} selected applications.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Reviewer</Label>
+            <Select value={bulkReviewerId} onValueChange={setBulkReviewerId}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__unassigned__">Unassigned</SelectItem>
+                {reviewers.map((reviewer) => (
+                  <SelectItem key={reviewer.userId} value={reviewer.userId}>
+                    {reviewer.fullName ?? reviewer.email} ({reviewer.email})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkAssign(false)}>
+              Cancel
+            </Button>
+            <Button onClick={applyBulkReviewer} disabled={isApplyingBulk}>
+              {isApplyingBulk ? "Applying..." : "Apply"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showBulkMessage} onOpenChange={setShowBulkMessage}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bulk message applicants</DialogTitle>
+            <DialogDescription>
+              Send one message to {selectedCount} selected applications.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Subject</Label>
+              <Input
+                value={bulkMessageSubject}
+                onChange={(event) => setBulkMessageSubject(event.target.value)}
+                placeholder="Important update"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Body</Label>
+              <Textarea
+                rows={6}
+                value={bulkMessageBody}
+                onChange={(event) => setBulkMessageBody(event.target.value)}
+                placeholder="Write your message..."
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={bulkMessageSendEmail}
+                onChange={(event) =>
+                  setBulkMessageSendEmail(event.target.checked)
+                }
+              />
+              Also send by email
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkMessage(false)}>
+              Cancel
+            </Button>
+            <Button onClick={applyBulkMessage} disabled={isApplyingBulk}>
+              {isApplyingBulk ? "Sending..." : "Send message"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showBulkDecision} onOpenChange={setShowBulkDecision}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bulk decision draft</DialogTitle>
+            <DialogDescription>
+              Draft a decision for {selectedCount} selected applications.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Status</Label>
+              <Select
+                value={bulkDecisionStatus}
+                onValueChange={(value) =>
+                  setBulkDecisionStatus(
+                    value as "ACCEPTED" | "WAITLISTED" | "REJECTED",
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ACCEPTED">Accepted</SelectItem>
+                  <SelectItem value="WAITLISTED">Waitlisted</SelectItem>
+                  <SelectItem value="REJECTED">Rejected</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Template (optional)</Label>
+              <Select
+                value={bulkDecisionTemplateId}
+                onValueChange={setBulkDecisionTemplateId}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {decisionTemplatesForStatus.map((template) => (
+                    <SelectItem key={template.id} value={template.id}>
+                      {template.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkDecision(false)}>
+              Cancel
+            </Button>
+            <Button onClick={applyBulkDecisionDraft} disabled={isApplyingBulk}>
+              {isApplyingBulk ? "Applying..." : "Apply draft"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showTemplateManager}
+        onOpenChange={(open) => {
+          setShowTemplateManager(open);
+          if (!open) resetTemplateEditor();
+        }}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Decision Templates</DialogTitle>
+            <DialogDescription>
+              Create reusable accepted/waitlisted/rejected templates with variables.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-2 rounded-md border border-border/60 p-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium">Existing templates</p>
+                <Button size="sm" variant="outline" onClick={startTemplateCreate}>
+                  New
+                </Button>
+              </div>
+              <div className="max-h-80 space-y-2 overflow-auto pr-1">
+                {decisionTemplates.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No templates yet.
+                  </p>
+                ) : (
+                  decisionTemplates.map((template) => (
+                    <div
+                      key={template.id}
+                      className="rounded-md border border-border/60 p-2 space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-medium">{template.name}</p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {template.status} • {template.isActive ? "Active" : "Inactive"}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => editTemplate(template)}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-destructive hover:text-destructive"
+                            onClick={() => deleteTemplate(template.id)}
+                            disabled={deletingTemplateId === template.id}
+                          >
+                            {deletingTemplateId === template.id ? "..." : "Delete"}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border/60 p-3">
+              <p className="text-sm font-medium">
+                {editingTemplateId ? "Edit template" : "Create template"}
+              </p>
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input
+                  value={templateName}
+                  onChange={(event) => setTemplateName(event.target.value)}
+                  placeholder="Accepted with scholarship"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select
+                  value={templateStatus}
+                  onValueChange={(value) =>
+                    setTemplateStatus(value as "ACCEPTED" | "WAITLISTED" | "REJECTED")
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ACCEPTED">Accepted</SelectItem>
+                    <SelectItem value="WAITLISTED">Waitlisted</SelectItem>
+                    <SelectItem value="REJECTED">Rejected</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Subject template</Label>
+                <Input
+                  value={templateSubject}
+                  onChange={(event) => setTemplateSubject(event.target.value)}
+                  placeholder="Decision for {{event.title}}"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Body template</Label>
+                <Textarea
+                  rows={7}
+                  value={templateBody}
+                  onChange={(event) => setTemplateBody(event.target.value)}
+                  placeholder="Hello {{applicant.name}}, ..."
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={templateIsActive}
+                  onCheckedChange={setTemplateIsActive}
+                  id="decision-template-active"
+                />
+                <Label htmlFor="decision-template-active">Active</Label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Variables: {"{{event.title}}"}, {"{{event.slug}}"}, {"{{applicant.name}}"}, {"{{applicant.email}}"}, {"{{application.id}}"}, {"{{decision.status}}"}
+              </p>
+              <DialogFooter>
+                <Button variant="outline" onClick={resetTemplateEditor}>
+                  Reset
+                </Button>
+                <Button onClick={saveTemplate} disabled={isSavingTemplate}>
+                  {isSavingTemplate ? "Saving..." : editingTemplateId ? "Save changes" : "Create template"}
+                </Button>
+              </DialogFooter>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={Boolean(deleteTarget)}

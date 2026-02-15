@@ -15,6 +15,8 @@ import {
   Layers,
   Mail,
   UserCheck,
+  RefreshCcw,
+  Clock,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -75,8 +77,15 @@ interface StaffMember {
   eventName?: string;
   eventId?: string;
   assignedAt: string;
+  accessStartAt?: string | null;
+  accessEndAt?: string | null;
   isGlobalAdmin?: boolean;
   invitationSent?: boolean;
+  inviteStatus?: "NONE" | "SENT" | "FAILED" | "EXPIRED";
+  inviteFailureReason?: string | null;
+  inviteLastAttemptAt?: string | null;
+  inviteLastSentAt?: string | null;
+  inviteLastExpiresAt?: string | null;
 }
 
 interface EventOption {
@@ -137,6 +146,39 @@ function groupAssignments(items: StaffMember[]): StaffGroup[] {
     );
 }
 
+function toDateTimeLocalValue(value?: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function toIsoOrNull(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+function formatDateShort(value?: string | null): string {
+  if (!value) return "None";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "None";
+  return parsed.toLocaleString();
+}
+
+function getAccessState(member: StaffMember): "ACTIVE" | "SCHEDULED" | "EXPIRED" {
+  const now = Date.now();
+  const start = member.accessStartAt ? new Date(member.accessStartAt).getTime() : null;
+  const end = member.accessEndAt ? new Date(member.accessEndAt).getTime() : null;
+
+  if (start !== null && Number.isFinite(start) && start > now) return "SCHEDULED";
+  if (end !== null && Number.isFinite(end) && end < now) return "EXPIRED";
+  return "ACTIVE";
+}
+
 export default function RolesPage() {
   const { csrfToken } = useAuth();
   const [staff, setStaff] = useState<StaffMember[]>([]);
@@ -149,22 +191,31 @@ export default function RolesPage() {
   const [assignEmail, setAssignEmail] = useState("");
   const [assignRole, setAssignRole] = useState("reviewer");
   const [assignEventId, setAssignEventId] = useState("__unset__");
+  const [assignStartAt, setAssignStartAt] = useState("");
+  const [assignEndAt, setAssignEndAt] = useState("");
   const [isAssigning, setIsAssigning] = useState(false);
 
   const [roleFilter, setRoleFilter] = useState("all");
   const [removeTarget, setRemoveTarget] = useState<StaffMember | null>(null);
+  const [resendingInviteId, setResendingInviteId] = useState<string | null>(null);
+  const [accessTarget, setAccessTarget] = useState<StaffMember | null>(null);
+  const [accessStartAt, setAccessStartAt] = useState("");
+  const [accessEndAt, setAccessEndAt] = useState("");
+  const [isUpdatingAccess, setIsUpdatingAccess] = useState(false);
+
+  async function loadRolesAndEvents() {
+    const [roles, eventsResponse] = await Promise.all([
+      apiClient<StaffMember[]>("/admin/roles"),
+      apiClient<{ data: EventOption[] }>("/admin/events?limit=100"),
+    ]);
+    setStaff(roles);
+    setEvents(eventsResponse.data);
+  }
 
   useEffect(() => {
     (async () => {
       try {
-        const data = await apiClient<StaffMember[]>("/admin/roles");
-        setStaff(data);
-
-        // Fetch events for dropdown
-        const eventsResponse = await apiClient<{ data: EventOption[] }>(
-          "/admin/events?limit=100",
-        );
-        setEvents(eventsResponse.data);
+        await loadRolesAndEvents();
       } catch {
         /* handled */
       } finally {
@@ -222,6 +273,16 @@ export default function RolesPage() {
     },
     {} as Record<string, number>,
   );
+  const inviteCounts = staff.reduce(
+    (acc, member) => {
+      const key = member.inviteStatus ?? "NONE";
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    },
+    {} as Record<"NONE" | "SENT" | "FAILED" | "EXPIRED", number>,
+  );
+  const inviteAttentionCount =
+    (inviteCounts.FAILED ?? 0) + (inviteCounts.EXPIRED ?? 0);
   const uniqueStaffUsers = groupedAll.length;
   const roleAssignmentCount = staff.length;
 
@@ -242,6 +303,12 @@ export default function RolesPage() {
       toast.error("Global Admin must use Global scope");
       return;
     }
+    const startAtIso = assignEventId === "_global_" ? null : toIsoOrNull(assignStartAt);
+    const endAtIso = assignEventId === "_global_" ? null : toIsoOrNull(assignEndAt);
+    if (startAtIso && endAtIso && new Date(startAtIso) > new Date(endAtIso)) {
+      toast.error("Access start must be before access end");
+      return;
+    }
     setIsAssigning(true);
     try {
       const member = await apiClient<StaffMember>("/admin/roles", {
@@ -250,6 +317,8 @@ export default function RolesPage() {
           email: assignEmail,
           role: assignRole,
           eventId: assignEventId === "_global_" ? undefined : assignEventId,
+          startAt: assignEventId === "_global_" ? undefined : startAtIso,
+          endAt: assignEventId === "_global_" ? undefined : endAtIso,
         },
         csrfToken: csrfToken ?? undefined,
       });
@@ -257,6 +326,8 @@ export default function RolesPage() {
       setShowAssign(false);
       setAssignEmail("");
       setAssignEventId("__unset__");
+      setAssignStartAt("");
+      setAssignEndAt("");
       if (member.invitationSent === true) {
         toast.success("Invitation sent and role assigned");
       } else if (member.invitationSent === false) {
@@ -285,6 +356,98 @@ export default function RolesPage() {
       /* handled */
     } finally {
       setRemoveTarget(null);
+    }
+  }
+
+  async function resendInvite(member: StaffMember) {
+    setResendingInviteId(member.id);
+    try {
+      const updated = await apiClient<StaffMember>(
+        `/admin/roles/${member.id}/resend-invite`,
+        {
+          method: "POST",
+          csrfToken: csrfToken ?? undefined,
+        },
+      );
+      setStaff((prev) =>
+        prev.map((item) => (item.id === member.id ? { ...item, ...updated } : item)),
+      );
+      if (updated.invitationSent) {
+        toast.success("Invite resent");
+      } else {
+        toast.error("Invite resend failed");
+      }
+    } catch {
+      /* handled */
+    } finally {
+      setResendingInviteId(null);
+    }
+  }
+
+  function openAccessEditor(member: StaffMember) {
+    setAccessTarget(member);
+    setAccessStartAt(toDateTimeLocalValue(member.accessStartAt));
+    setAccessEndAt(toDateTimeLocalValue(member.accessEndAt));
+  }
+
+  async function updateAccessWindow() {
+    if (!accessTarget) return;
+    const startAtIso = toIsoOrNull(accessStartAt);
+    const endAtIso = toIsoOrNull(accessEndAt);
+
+    if (startAtIso && endAtIso && new Date(startAtIso) > new Date(endAtIso)) {
+      toast.error("Access start must be before access end");
+      return;
+    }
+
+    setIsUpdatingAccess(true);
+    try {
+      const updated = await apiClient<StaffMember>(
+        `/admin/roles/${accessTarget.id}/access`,
+        {
+          method: "PATCH",
+          body: {
+            startAt: startAtIso,
+            endAt: endAtIso,
+          },
+          csrfToken: csrfToken ?? undefined,
+        },
+      );
+      setStaff((prev) =>
+        prev.map((item) => (item.id === accessTarget.id ? { ...item, ...updated } : item)),
+      );
+      setAccessTarget(null);
+      toast.success("Access window updated");
+    } catch {
+      /* handled */
+    } finally {
+      setIsUpdatingAccess(false);
+    }
+  }
+
+  function inviteBadgeClass(status?: StaffMember["inviteStatus"]): string {
+    switch (status) {
+      case "SENT":
+        return "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300";
+      case "FAILED":
+        return "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300";
+      case "EXPIRED":
+        return "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300";
+      default:
+        return "bg-muted text-muted-foreground";
+    }
+  }
+
+  function accessBadgeClass(state: ReturnType<typeof getAccessState>): string {
+    switch (state) {
+      case "ACTIVE":
+        return "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300";
+      case "SCHEDULED":
+        return "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300";
+      case "EXPIRED":
+        return "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300";
+      default:
+        return "bg-muted text-muted-foreground";
     }
   }
 
@@ -384,6 +547,25 @@ export default function RolesPage() {
         {filtered.length} assignments.
       </p>
 
+      <Card>
+        <CardContent className="p-4 flex flex-wrap items-center gap-2">
+          <div className="mr-2 flex items-center gap-2 text-sm font-medium">
+            <Mail className="h-4 w-4 text-muted-foreground" />
+            Invite Management Center
+          </div>
+          <Badge variant="secondary">Sent: {inviteCounts.SENT ?? 0}</Badge>
+          <Badge variant="secondary">Expired: {inviteCounts.EXPIRED ?? 0}</Badge>
+          <Badge variant="secondary">Failed: {inviteCounts.FAILED ?? 0}</Badge>
+          <Badge variant="secondary">No invite: {inviteCounts.NONE ?? 0}</Badge>
+          {inviteAttentionCount > 0 && (
+            <span className="text-xs text-amber-700 dark:text-amber-300">
+              {inviteAttentionCount} assignment
+              {inviteAttentionCount === 1 ? "" : "s"} need attention.
+            </span>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Table */}
       {isLoading ? (
         <TableSkeleton />
@@ -461,6 +643,8 @@ export default function RolesPage() {
                                 : null;
                             const scopeLabel =
                               assignment.eventName ?? "Global";
+                            const accessState = getAccessState(assignment);
+                            const inviteStatus = assignment.inviteStatus ?? "NONE";
 
                             return (
                               <div
@@ -475,7 +659,61 @@ export default function RolesPage() {
                                 <span className="text-xs text-muted-foreground">
                                   Scope: {scopeLabel}
                                 </span>
+                                {!assignment.isGlobalAdmin && (
+                                  <span
+                                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${accessBadgeClass(accessState)}`}
+                                  >
+                                    Access: {accessState.toLowerCase()}
+                                  </span>
+                                )}
+                                <span
+                                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${inviteBadgeClass(inviteStatus)}`}
+                                >
+                                  Invite: {inviteStatus.toLowerCase()}
+                                </span>
+                                {assignment.inviteFailureReason && (
+                                  <span className="text-[10px] text-destructive">
+                                    {assignment.inviteFailureReason}
+                                  </span>
+                                )}
+                                {!assignment.isGlobalAdmin && (
+                                  <span className="text-[10px] text-muted-foreground">
+                                    Window: {formatDateShort(assignment.accessStartAt)} -{" "}
+                                    {formatDateShort(assignment.accessEndAt)}
+                                  </span>
+                                )}
+                                {(assignment.inviteLastSentAt ||
+                                  assignment.inviteLastAttemptAt) && (
+                                  <span className="text-[10px] text-muted-foreground">
+                                    Last invite:{" "}
+                                    {formatDateShort(
+                                      assignment.inviteLastSentAt ??
+                                        assignment.inviteLastAttemptAt,
+                                    )}
+                                  </span>
+                                )}
                                 <div className="ml-auto flex items-center gap-2">
+                                  {!assignment.isGlobalAdmin && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => openAccessEditor(assignment)}
+                                    >
+                                      <Clock className="mr-1.5 h-3.5 w-3.5" />
+                                      Access
+                                    </Button>
+                                  )}
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => resendInvite(assignment)}
+                                    disabled={resendingInviteId === assignment.id}
+                                  >
+                                    <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
+                                    {resendingInviteId === assignment.id
+                                      ? "Resending..."
+                                      : "Resend invite"}
+                                  </Button>
                                   {workspaceHref ? (
                                     <Button
                                       variant="outline"
@@ -620,6 +858,26 @@ export default function RolesPage() {
                 <p className="text-xs text-destructive">{scopeError}</p>
               )}
             </div>
+            {assignEventId !== "_global_" && assignEventId !== "__unset__" && (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Access start (optional)</Label>
+                  <Input
+                    type="datetime-local"
+                    value={assignStartAt}
+                    onChange={(event) => setAssignStartAt(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Access end (optional)</Label>
+                  <Input
+                    type="datetime-local"
+                    value={assignEndAt}
+                    onChange={(event) => setAssignEndAt(event.target.value)}
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
               <p className="text-xs font-medium text-muted-foreground">
@@ -634,6 +892,12 @@ export default function RolesPage() {
                 <span className="text-xs text-muted-foreground">
                   Scope: {scopeLabel}
                 </span>
+                {assignEventId !== "_global_" &&
+                  assignEventId !== "__unset__" && (
+                    <span className="text-xs text-muted-foreground">
+                      Window: {assignStartAt || "None"} - {assignEndAt || "None"}
+                    </span>
+                  )}
               </div>
             </div>
 
@@ -656,6 +920,51 @@ export default function RolesPage() {
                 <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
               )}
               Assign role
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(accessTarget)}
+        onOpenChange={(open) => {
+          if (!open) setAccessTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Update temporary access</DialogTitle>
+            <DialogDescription>
+              Set or clear start/end dates for this assignment.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Access start</Label>
+              <Input
+                type="datetime-local"
+                value={accessStartAt}
+                onChange={(event) => setAccessStartAt(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Access end</Label>
+              <Input
+                type="datetime-local"
+                value={accessEndAt}
+                onChange={(event) => setAccessEndAt(event.target.value)}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Leave either field blank for no boundary.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAccessTarget(null)}>
+              Cancel
+            </Button>
+            <Button onClick={updateAccessWindow} disabled={isUpdatingAccess}>
+              {isUpdatingAccess ? "Saving..." : "Save access window"}
             </Button>
           </DialogFooter>
         </DialogContent>

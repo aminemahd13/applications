@@ -20,6 +20,8 @@ import {
   CreateReviewSchema,
   ReviewQueueFilterSchema,
   CreatePatchSchema,
+  CreateReviewQueueSavedViewSchema,
+  UpdateReviewQueueSavedViewSchema,
   VerifyFieldSchema, // Added import
 } from '@event-platform/shared';
 
@@ -59,6 +61,50 @@ export class ReviewsController {
   async getStats(@Param('eventId') eventId: string) {
     const stats = await this.queueService.getStats(eventId);
     return { data: stats };
+  }
+
+  @Get('review-queue/views')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async listSavedViews(@Param('eventId') eventId: string) {
+    const views = await this.queueService.listSavedViews(eventId);
+    return { data: views };
+  }
+
+  @Post('review-queue/views')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async createSavedView(@Param('eventId') eventId: string, @Body() body: any) {
+    const dto = CreateReviewQueueSavedViewSchema.parse(body);
+    const view = await this.queueService.createSavedView(eventId, dto);
+    return { data: view };
+  }
+
+  @Patch('review-queue/views/:viewId')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async updateSavedView(
+    @Param('eventId') eventId: string,
+    @Param('viewId') viewId: string,
+    @Body() body: any,
+  ) {
+    const dto = UpdateReviewQueueSavedViewSchema.parse(body);
+    const view = await this.queueService.updateSavedView(eventId, viewId, dto);
+    return { data: view };
+  }
+
+  @Delete('review-queue/views/:viewId')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async deleteSavedView(
+    @Param('eventId') eventId: string,
+    @Param('viewId') viewId: string,
+  ) {
+    await this.queueService.deleteSavedView(eventId, viewId);
+    return { success: true };
+  }
+
+  @Get('review-queue/reviewers')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async listReviewers(@Param('eventId') eventId: string) {
+    const reviewers = await this.queueService.listAvailableReviewers(eventId);
+    return { data: reviewers };
   }
 
   /**

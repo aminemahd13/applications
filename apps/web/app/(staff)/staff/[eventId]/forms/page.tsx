@@ -64,6 +64,37 @@ interface FormField {
     maxFileSizeMB?: number;
     maxFiles?: number;
   };
+  logic?: {
+    showWhen?: ConditionGroup;
+    requireWhen?: ConditionGroup;
+  };
+}
+
+type ConditionOperator =
+  | "eq"
+  | "neq"
+  | "contains"
+  | "not_contains"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "exists"
+  | "not_exists"
+  | "in"
+  | "not_in";
+
+type ConditionMode = "all" | "any";
+
+interface ConditionRule {
+  fieldKey: string;
+  operator: ConditionOperator;
+  value?: string;
+}
+
+interface ConditionGroup {
+  mode: ConditionMode;
+  rules: ConditionRule[];
 }
 
 interface FormSection {
@@ -120,6 +151,25 @@ const uiToSchemaFieldType: Record<string, string> = {
   INFO_TEXT: "info_text",
 };
 
+const conditionOperators: Array<{
+  value: ConditionOperator;
+  label: string;
+  needsValue?: boolean;
+}> = [
+  { value: "eq", label: "Equals", needsValue: true },
+  { value: "neq", label: "Not equals", needsValue: true },
+  { value: "contains", label: "Contains", needsValue: true },
+  { value: "not_contains", label: "Does not contain", needsValue: true },
+  { value: "gt", label: "Greater than", needsValue: true },
+  { value: "gte", label: "Greater than or equal", needsValue: true },
+  { value: "lt", label: "Less than", needsValue: true },
+  { value: "lte", label: "Less than or equal", needsValue: true },
+  { value: "exists", label: "Has any value", needsValue: false },
+  { value: "not_exists", label: "Is empty", needsValue: false },
+  { value: "in", label: "In list (comma separated)", needsValue: true },
+  { value: "not_in", label: "Not in list (comma separated)", needsValue: true },
+];
+
 function toOptionalNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim().length > 0) {
@@ -143,6 +193,66 @@ function mergeStringArrays(
   const merged = values.flatMap((arr) => arr ?? []);
   const unique = Array.from(new Set(merged.map((v) => v.trim()).filter(Boolean)));
   return unique.length > 0 ? unique : undefined;
+}
+
+function normalizeConditionOperator(value: unknown): ConditionOperator {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "==" || normalized === "=") return "eq";
+  if (normalized === "!=" || normalized === "<>") return "neq";
+  if (normalized === ">") return "gt";
+  if (normalized === ">=") return "gte";
+  if (normalized === "<") return "lt";
+  if (normalized === "<=") return "lte";
+  if (normalized === "notcontains") return "not_contains";
+  if (normalized === "notexists") return "not_exists";
+  if (normalized === "notin") return "not_in";
+  const supported = new Set(conditionOperators.map((item) => item.value));
+  return supported.has(normalized as ConditionOperator)
+    ? (normalized as ConditionOperator)
+    : "eq";
+}
+
+function parseConditionGroup(rawGroup: unknown): ConditionGroup | undefined {
+  if (!rawGroup || typeof rawGroup !== "object") return undefined;
+  const group = rawGroup as Record<string, unknown>;
+  const rawRules = Array.isArray(group.rules)
+    ? group.rules
+    : Array.isArray(group.conditions)
+      ? group.conditions
+      : [];
+
+  const rules = rawRules
+    .filter(
+      (item): item is Record<string, unknown> =>
+        !!item && typeof item === "object" && !Array.isArray(item),
+    )
+    .map<ConditionRule | null>((rule) => {
+      const fieldKey =
+        typeof rule.fieldKey === "string"
+          ? rule.fieldKey.trim()
+          : typeof rule.key === "string"
+            ? rule.key.trim()
+            : "";
+      if (!fieldKey) return null;
+      const value =
+        rule.value === undefined || rule.value === null
+          ? undefined
+          : String(rule.value);
+      return {
+        fieldKey,
+        operator: normalizeConditionOperator(rule.operator),
+        ...(value !== undefined ? { value } : {}),
+      };
+    })
+    .filter((rule): rule is ConditionRule => rule !== null);
+
+  if (rules.length === 0) return undefined;
+
+  const modeValue = String(group.mode ?? "all").toLowerCase();
+  return {
+    mode: modeValue === "any" ? "any" : "all",
+    rules,
+  };
 }
 
 function deriveStatus(raw: any): "DRAFT" | "PUBLISHED" {
@@ -172,6 +282,7 @@ function parseSections(rawDraftSchema: any): FormSection[] {
               : fieldId;
           const rawValidation = field?.validation ?? {};
           const rawUi = field?.ui ?? {};
+          const rawLogic = field?.logic ?? {};
           const validation = {
             min:
               toOptionalNumber(rawValidation?.min) ??
@@ -197,6 +308,11 @@ function parseSections(rawDraftSchema: any): FormSection[] {
             maxFileSizeMB: toOptionalNumber(rawUi?.maxFileSizeMB),
             maxFiles: toOptionalNumber(rawUi?.maxFiles),
           };
+
+          const showWhen = parseConditionGroup(rawLogic?.showWhen ?? field?.showWhen);
+          const requireWhen = parseConditionGroup(
+            rawLogic?.requireWhen ?? field?.requireWhen,
+          );
 
           return {
             fieldId,
@@ -231,6 +347,13 @@ function parseSections(rawDraftSchema: any): FormSection[] {
                 ? validation
                 : undefined,
             file: Object.values(file).some((v) => v !== undefined) ? file : undefined,
+            logic:
+              showWhen || requireWhen
+                ? {
+                    ...(showWhen ? { showWhen } : {}),
+                    ...(requireWhen ? { requireWhen } : {}),
+                  }
+                : undefined,
           };
         })
       : [],
@@ -268,6 +391,40 @@ function toDraftSchema(sections: FormSection[]) {
         if (allowedTypes && allowedTypes.length > 0)
           validation.allowedTypes = allowedTypes;
 
+        const logic =
+          field.logic?.showWhen || field.logic?.requireWhen
+            ? {
+                ...(field.logic?.showWhen
+                  ? {
+                      showWhen: {
+                        mode: field.logic.showWhen.mode,
+                        rules: field.logic.showWhen.rules.map((rule) => ({
+                          fieldKey: rule.fieldKey,
+                          operator: rule.operator,
+                          ...(rule.value !== undefined
+                            ? { value: rule.value }
+                            : {}),
+                        })),
+                      },
+                    }
+                  : {}),
+                ...(field.logic?.requireWhen
+                  ? {
+                      requireWhen: {
+                        mode: field.logic.requireWhen.mode,
+                        rules: field.logic.requireWhen.rules.map((rule) => ({
+                          fieldKey: rule.fieldKey,
+                          operator: rule.operator,
+                          ...(rule.value !== undefined
+                            ? { value: rule.value }
+                            : {}),
+                        })),
+                      },
+                    }
+                  : {}),
+              }
+            : undefined;
+
         return {
           id: field.fieldId,
           key: field.key?.trim() || field.fieldId,
@@ -275,6 +432,7 @@ function toDraftSchema(sections: FormSection[]) {
           label: field.label,
           validation: Object.keys(validation).length > 0 ? validation : undefined,
           ui: Object.keys(ui).length > 0 ? ui : undefined,
+          logic,
         };
       }),
     })),
@@ -521,6 +679,38 @@ export default function FormsPage() {
       sections: editingForm.sections.filter((s) => s.id !== sectionId),
     });
   }
+
+  function updateConditionGroup(
+    sectionId: string,
+    fieldId: string,
+    groupKey: "showWhen" | "requireWhen",
+    nextGroup: ConditionGroup | undefined,
+  ) {
+    if (!editingForm) return;
+    const section = editingForm.sections.find((item) => item.id === sectionId);
+    const field = section?.fields.find((item) => item.fieldId === fieldId);
+    const currentLogic = field?.logic ?? {};
+    const nextLogic = {
+      ...currentLogic,
+      [groupKey]: nextGroup,
+    };
+    if (!nextLogic.showWhen) delete nextLogic.showWhen;
+    if (!nextLogic.requireWhen) delete nextLogic.requireWhen;
+    updateField(sectionId, fieldId, {
+      logic:
+        nextLogic.showWhen || nextLogic.requireWhen ? nextLogic : undefined,
+    });
+  }
+
+  const allFieldOptions = editingForm
+    ? editingForm.sections.flatMap((section) =>
+        section.fields.map((field) => ({
+          key: field.key?.trim() || field.fieldId,
+          label: field.label?.trim() || field.key || field.fieldId,
+        })),
+      )
+    : [];
+
   // If editing a form, show the editor
   if (editingForm) {
     return (
@@ -716,6 +906,240 @@ export default function FormsPage() {
                                 Required
                               </Label>
                             </div>
+                          </div>
+
+                          <div className="space-y-2 rounded-md border border-dashed p-3">
+                            <p className="text-xs font-medium">Conditional logic</p>
+                            {(["showWhen", "requireWhen"] as const).map((groupKey) => {
+                              const groupLabel =
+                                groupKey === "showWhen"
+                                  ? "Show field when"
+                                  : "Require field when";
+                              const group = field.logic?.[groupKey];
+                              const fieldKey = field.key?.trim() || field.fieldId;
+                              const availableLogicFields = allFieldOptions.filter(
+                                (option) => option.key !== fieldKey,
+                              );
+
+                              return (
+                                <div
+                                  key={`${field.fieldId}-${groupKey}`}
+                                  className="space-y-2 rounded-md border bg-muted/20 p-2"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <Label className="text-[11px]">{groupLabel}</Label>
+                                    <Switch
+                                      checked={Boolean(group)}
+                                      disabled={availableLogicFields.length === 0}
+                                      onCheckedChange={(checked) => {
+                                        if (!checked) {
+                                          updateConditionGroup(
+                                            section.id,
+                                            field.fieldId,
+                                            groupKey,
+                                            undefined,
+                                          );
+                                          return;
+                                        }
+                                        if (availableLogicFields.length === 0) {
+                                          toast.error(
+                                            "Add at least one other field before enabling conditions",
+                                          );
+                                          return;
+                                        }
+                                        updateConditionGroup(section.id, field.fieldId, groupKey, {
+                                          mode: "all",
+                                          rules: [
+                                            {
+                                              fieldKey: availableLogicFields[0].key,
+                                              operator: "eq",
+                                              value: "",
+                                            },
+                                          ],
+                                        });
+                                      }}
+                                    />
+                                  </div>
+
+                                  {group && (
+                                    <>
+                                      <div className="space-y-1">
+                                        <Label className="text-[11px]">Match mode</Label>
+                                        <Select
+                                          value={group.mode}
+                                          onValueChange={(value) =>
+                                            updateConditionGroup(section.id, field.fieldId, groupKey, {
+                                              ...group,
+                                              mode: value === "any" ? "any" : "all",
+                                            })
+                                          }
+                                        >
+                                          <SelectTrigger className="h-7 text-xs">
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="all">All rules</SelectItem>
+                                            <SelectItem value="any">Any rule</SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                      {group.rules.map((rule, ruleIndex) => {
+                                        const operatorMeta = conditionOperators.find(
+                                          (operator) => operator.value === rule.operator,
+                                        );
+                                        const needsValue = operatorMeta?.needsValue !== false;
+                                        return (
+                                          <div
+                                            key={`${field.fieldId}-${groupKey}-rule-${ruleIndex}`}
+                                            className="grid grid-cols-1 gap-2 rounded-md border border-border/60 bg-background p-2 sm:grid-cols-3"
+                                          >
+                                            <Select
+                                              value={rule.fieldKey}
+                                              onValueChange={(value) => {
+                                                const nextRules = group.rules.map((entry, index) =>
+                                                  index === ruleIndex
+                                                    ? { ...entry, fieldKey: value }
+                                                    : entry,
+                                                );
+                                                updateConditionGroup(
+                                                  section.id,
+                                                  field.fieldId,
+                                                  groupKey,
+                                                  { ...group, rules: nextRules },
+                                                );
+                                              }}
+                                            >
+                                              <SelectTrigger className="h-7 text-xs">
+                                                <SelectValue placeholder="Field" />
+                                              </SelectTrigger>
+                                              <SelectContent>
+                                                {availableLogicFields.map((option) => (
+                                                  <SelectItem key={option.key} value={option.key}>
+                                                    {option.label}
+                                                  </SelectItem>
+                                                ))}
+                                              </SelectContent>
+                                            </Select>
+                                            <Select
+                                              value={rule.operator}
+                                              onValueChange={(value) => {
+                                                const normalized =
+                                                  normalizeConditionOperator(value);
+                                                const nextRules = group.rules.map((entry, index) =>
+                                                  index === ruleIndex
+                                                    ? {
+                                                        ...entry,
+                                                        operator: normalized,
+                                                        value:
+                                                          normalized === "exists" ||
+                                                          normalized === "not_exists"
+                                                            ? undefined
+                                                            : entry.value ?? "",
+                                                      }
+                                                    : entry,
+                                                );
+                                                updateConditionGroup(
+                                                  section.id,
+                                                  field.fieldId,
+                                                  groupKey,
+                                                  { ...group, rules: nextRules },
+                                                );
+                                              }}
+                                            >
+                                              <SelectTrigger className="h-7 text-xs">
+                                                <SelectValue placeholder="Operator" />
+                                              </SelectTrigger>
+                                              <SelectContent>
+                                                {conditionOperators.map((operator) => (
+                                                  <SelectItem
+                                                    key={operator.value}
+                                                    value={operator.value}
+                                                  >
+                                                    {operator.label}
+                                                  </SelectItem>
+                                                ))}
+                                              </SelectContent>
+                                            </Select>
+                                            <div className="flex items-center gap-2">
+                                              {needsValue ? (
+                                                <Input
+                                                  value={rule.value ?? ""}
+                                                  onChange={(event) => {
+                                                    const nextRules = group.rules.map(
+                                                      (entry, index) =>
+                                                        index === ruleIndex
+                                                          ? {
+                                                              ...entry,
+                                                              value: event.target.value,
+                                                            }
+                                                          : entry,
+                                                    );
+                                                    updateConditionGroup(
+                                                      section.id,
+                                                      field.fieldId,
+                                                      groupKey,
+                                                      { ...group, rules: nextRules },
+                                                    );
+                                                  }}
+                                                  className="h-7 text-xs"
+                                                  placeholder="Value"
+                                                />
+                                              ) : (
+                                                <span className="text-[11px] text-muted-foreground">
+                                                  No value needed
+                                                </span>
+                                              )}
+                                              <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-7 w-7 text-destructive"
+                                                onClick={() => {
+                                                  const nextRules = group.rules.filter(
+                                                    (_, index) => index !== ruleIndex,
+                                                  );
+                                                  updateConditionGroup(
+                                                    section.id,
+                                                    field.fieldId,
+                                                    groupKey,
+                                                    nextRules.length > 0
+                                                      ? { ...group, rules: nextRules }
+                                                      : undefined,
+                                                  );
+                                                }}
+                                              >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="w-full border-dashed"
+                                        onClick={() => {
+                                          if (availableLogicFields.length === 0) return;
+                                          updateConditionGroup(section.id, field.fieldId, groupKey, {
+                                            ...group,
+                                            rules: [
+                                              ...group.rules,
+                                              {
+                                                fieldKey: availableLogicFields[0].key,
+                                                operator: "eq",
+                                                value: "",
+                                              },
+                                            ],
+                                          });
+                                        }}
+                                      >
+                                        <Plus className="mr-1.5 h-3.5 w-3.5" />
+                                        Add rule
+                                      </Button>
+                                    </>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
 
                           {isOptionField && (

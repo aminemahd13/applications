@@ -162,19 +162,28 @@ model checkin_records {
 }
 
 model event_role_assignments {
-  id         String   @id @db.Uuid
-  event_id   String   @db.Uuid
-  user_id    String   @db.Uuid
-  role       String
-  overrides  Json     @default("{}")
-  created_at DateTime @default(now()) @db.Timestamptz(6)
-  events     events   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                   String    @id @db.Uuid
+  event_id             String    @db.Uuid
+  user_id              String    @db.Uuid
+  role                 String
+  overrides            Json      @default("{}")
+  access_start_at      DateTime? @db.Timestamptz(6)
+  access_end_at        DateTime? @db.Timestamptz(6)
+  invite_status        String?   @default("NONE")
+  invite_failure_reason String?
+  invite_last_sent_at  DateTime? @db.Timestamptz(6)
+  invite_last_attempt_at DateTime? @db.Timestamptz(6)
+  invite_last_expires_at DateTime? @db.Timestamptz(6)
+  invite_resend_count  Int       @default(0)
+  created_at           DateTime  @default(now()) @db.Timestamptz(6)
+  events               events    @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([event_id, user_id, role])
   @@index([user_id], map: "era_user_idx")
   @@index([user_id, event_id], map: "era_user_event_idx")
   @@index([event_id, role], map: "era_event_idx")
+  @@index([event_id, access_start_at, access_end_at], map: "era_event_access_window_idx")
 }
 
 model events {
@@ -204,11 +213,13 @@ model events {
   applications           applications[]
   audit_logs             audit_logs[]
   checkin_records        checkin_records[]
+  decision_templates     decision_templates[]
   event_role_assignments event_role_assignments[]
   file_objects           file_objects[]
   forms                  forms[]
   messages               messages[]
   microsites             microsites?
+  review_queue_saved_views review_queue_saved_views[]
   workflow_steps         workflow_steps[]
 
   @@index([application_open_at, application_close_at], map: "events_open_close_idx")
@@ -427,6 +438,8 @@ model users {
   attendance_records                                    attendance_records[]
   audit_logs                                            audit_logs[]
   checkin_records                                       checkin_records[]
+  decision_templates_decision_templates_created_byTousers decision_templates[]      @relation("decision_templates_created_byTousers")
+  decision_templates_decision_templates_updated_byTousers decision_templates[]      @relation("decision_templates_updated_byTousers")
   email_verification_tokens                             email_verification_tokens[]
   event_role_assignments                                event_role_assignments[]
   field_verifications                                   field_verifications[]
@@ -438,8 +451,46 @@ model users {
   microsite_versions                                    microsite_versions[]
   needs_info_requests                                   needs_info_requests[]
   password_reset_tokens                                 password_reset_tokens[]
+  review_queue_saved_views                              review_queue_saved_views[]
   review_records                                        review_records[]
   step_submission_versions                              step_submission_versions[]
+}
+
+model review_queue_saved_views {
+  id         String   @id @db.Uuid
+  event_id   String   @db.Uuid
+  user_id    String   @db.Uuid
+  name       String
+  filters    Json     @default("{}")
+  is_default Boolean  @default(false)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  events     events   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([event_id, user_id, name], map: "rqsv_event_user_name_uq")
+  @@index([event_id, user_id, created_at(sort: Desc)], map: "rqsv_event_user_created_idx")
+}
+
+model decision_templates {
+  id                                          String   @id @db.Uuid
+  event_id                                    String   @db.Uuid
+  name                                        String
+  status                                      String
+  subject_template                            String
+  body_template                               String
+  is_active                                   Boolean  @default(true)
+  created_by                                  String   @db.Uuid
+  updated_by                                  String?  @db.Uuid
+  created_at                                  DateTime @default(now()) @db.Timestamptz(6)
+  updated_at                                  DateTime @default(now()) @db.Timestamptz(6)
+  events                                      events   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_decision_templates_created_byTousers  users    @relation("decision_templates_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_decision_templates_updated_byTousers  users?   @relation("decision_templates_updated_byTousers", fields: [updated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([event_id, name], map: "dt_event_name_uq")
+  @@index([event_id, status, is_active], map: "dt_event_status_idx")
+  @@index([event_id, created_at(sort: Desc)], map: "dt_event_created_idx")
 }
 
 model workflow_steps {

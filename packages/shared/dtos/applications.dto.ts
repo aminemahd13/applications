@@ -43,6 +43,7 @@ export type ApplicationFilterDto = z.infer<typeof ApplicationFilterSchema>;
 export const SetDecisionSchema = z.object({
     status: z.nativeEnum(DecisionStatus),
     draft: z.boolean().default(true), // If true, only updates decision_status, not published_at
+    templateId: z.string().uuid().nullable().optional(),
 });
 
 export type SetDecisionDto = z.infer<typeof SetDecisionSchema>;
@@ -66,6 +67,75 @@ export const PublishDecisionsSchema = z.object({
 });
 
 export type PublishDecisionsDto = z.infer<typeof PublishDecisionsSchema>;
+
+export const BulkApplicationIdsSchema = z.object({
+    applicationIds: z.array(z.string().uuid()).min(1).max(500),
+});
+
+export const BulkApplicationTagsSchema = BulkApplicationIdsSchema.extend({
+    addTags: z.array(z.string().trim().min(1)).max(50).optional().default([]),
+    removeTags: z.array(z.string().trim().min(1)).max(50).optional().default([]),
+});
+
+export type BulkApplicationTagsDto = z.infer<typeof BulkApplicationTagsSchema>;
+
+export const BulkAssignReviewerSchema = BulkApplicationIdsSchema.extend({
+    reviewerId: z.string().uuid().nullable(),
+});
+
+export type BulkAssignReviewerDto = z.infer<typeof BulkAssignReviewerSchema>;
+
+export const BulkDecisionDraftSchema = BulkApplicationIdsSchema.extend({
+    status: z.nativeEnum(DecisionStatus).refine(
+        (status) => status !== DecisionStatus.NONE,
+        { message: 'Bulk decision draft status must be ACCEPTED, WAITLISTED, or REJECTED' },
+    ),
+    templateId: z.string().uuid().nullable().optional(),
+});
+
+export type BulkDecisionDraftDto = z.infer<typeof BulkDecisionDraftSchema>;
+
+export const DecisionTemplateStatusSchema = z.enum([
+    DecisionStatus.ACCEPTED,
+    DecisionStatus.WAITLISTED,
+    DecisionStatus.REJECTED,
+]);
+
+export type DecisionTemplateStatus = z.infer<typeof DecisionTemplateStatusSchema>;
+
+export const CreateDecisionTemplateSchema = z.object({
+    name: z.string().trim().min(1).max(120),
+    status: DecisionTemplateStatusSchema,
+    subjectTemplate: z.string().trim().min(1).max(200),
+    bodyTemplate: z.string().trim().min(1).max(10000),
+    isActive: z.boolean().optional().default(true),
+});
+
+export type CreateDecisionTemplateDto = z.infer<typeof CreateDecisionTemplateSchema>;
+
+export const UpdateDecisionTemplateSchema = z.object({
+    name: z.string().trim().min(1).max(120).optional(),
+    status: DecisionTemplateStatusSchema.optional(),
+    subjectTemplate: z.string().trim().min(1).max(200).optional(),
+    bodyTemplate: z.string().trim().min(1).max(10000).optional(),
+    isActive: z.boolean().optional(),
+});
+
+export type UpdateDecisionTemplateDto = z.infer<typeof UpdateDecisionTemplateSchema>;
+
+export interface DecisionTemplateResponse {
+    id: string;
+    eventId: string;
+    name: string;
+    status: DecisionTemplateStatus;
+    subjectTemplate: string;
+    bodyTemplate: string;
+    isActive: boolean;
+    createdBy: string;
+    updatedBy: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+}
 
 // ============================================================
 // STEP SUBMISSION DTOs
@@ -95,6 +165,7 @@ export interface ApplicationSummary {
     applicantName?: string;
     decisionStatus: DecisionStatus;
     decisionPublishedAt: Date | null;
+    decisionDraft?: Record<string, any>;
     tags: string[];
     derivedStatus: string; // Dynamic status based on steps and decision
     createdAt: Date;

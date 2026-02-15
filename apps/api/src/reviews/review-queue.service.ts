@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
+import * as crypto from 'crypto';
 import {
   ReviewQueueFilterDto,
   ReviewQueueItem,
@@ -8,6 +9,10 @@ import {
   PaginatedResponse,
   StepStatus,
   NeedsInfoStatus,
+  CreateReviewQueueSavedViewDto,
+  ReviewQueueSavedView,
+  ReviewQueueSavedViewFilterDto,
+  UpdateReviewQueueSavedViewDto,
 } from '@event-platform/shared';
 
 @Injectable()
@@ -24,7 +29,7 @@ export class ReviewQueueService {
     eventId: string,
     filter: ReviewQueueFilterDto,
   ): Promise<PaginatedResponse<ReviewQueueItem>> {
-    const { cursor, limit, stepId, assignedTo, status } = filter;
+    const { cursor, limit, stepId, assignedTo, status, tags } = filter;
     const reviewerId = this.cls.get('actorId');
 
     // Build step state filter based on status
@@ -47,6 +52,9 @@ export class ReviewQueueService {
       appWhere.assigned_reviewer_id = reviewerId;
     } else if (assignedTo === 'unassigned') {
       appWhere.assigned_reviewer_id = null;
+    }
+    if (tags && tags.length > 0) {
+      appWhere.tags = { hasSome: tags };
     }
 
     // Query applications with step states
@@ -184,6 +192,7 @@ export class ReviewQueueService {
             stepState.last_activity_at ||
             new Date(),
           assignedReviewerId: app.assigned_reviewer_id,
+          tags: app.tags ?? [],
           hasOpenNeedsInfo: app.needs_info_requests.some(
             (ni) => ni.step_id === stepState.step_id,
           ),
@@ -336,5 +345,173 @@ export class ReviewQueueService {
       where: { id: applicationId },
       data: { assigned_reviewer_id: null },
     });
+  }
+
+  async listSavedViews(eventId: string): Promise<ReviewQueueSavedView[]> {
+    const actorId = this.cls.get('actorId');
+    const views = await this.prisma.review_queue_saved_views.findMany({
+      where: { event_id: eventId, user_id: actorId },
+      orderBy: [{ is_default: 'desc' }, { created_at: 'desc' }],
+    });
+
+    return views.map((view) => ({
+      id: view.id,
+      eventId: view.event_id,
+      name: view.name,
+      isDefault: view.is_default,
+      filters: (view.filters as ReviewQueueSavedViewFilterDto) ?? {},
+      createdAt: view.created_at,
+      updatedAt: view.updated_at,
+    }));
+  }
+
+  async createSavedView(
+    eventId: string,
+    dto: CreateReviewQueueSavedViewDto,
+  ): Promise<ReviewQueueSavedView> {
+    const actorId = this.cls.get('actorId');
+
+    return await this.prisma.$transaction(async (tx) => {
+      if (dto.isDefault) {
+        await tx.review_queue_saved_views.updateMany({
+          where: { event_id: eventId, user_id: actorId },
+          data: { is_default: false, updated_at: new Date() },
+        });
+      }
+
+      const created = await tx.review_queue_saved_views.create({
+        data: {
+          id: crypto.randomUUID(),
+          event_id: eventId,
+          user_id: actorId,
+          name: dto.name,
+          filters: dto.filters ?? {},
+          is_default: dto.isDefault ?? false,
+        },
+      });
+
+      return {
+        id: created.id,
+        eventId: created.event_id,
+        name: created.name,
+        isDefault: created.is_default,
+        filters: (created.filters as ReviewQueueSavedViewFilterDto) ?? {},
+        createdAt: created.created_at,
+        updatedAt: created.updated_at,
+      };
+    });
+  }
+
+  async updateSavedView(
+    eventId: string,
+    viewId: string,
+    dto: UpdateReviewQueueSavedViewDto,
+  ): Promise<ReviewQueueSavedView> {
+    const actorId = this.cls.get('actorId');
+
+    return await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.review_queue_saved_views.findFirst({
+        where: { id: viewId, event_id: eventId, user_id: actorId },
+      });
+      if (!existing) {
+        throw new NotFoundException('Saved view not found');
+      }
+
+      if (dto.isDefault) {
+        await tx.review_queue_saved_views.updateMany({
+          where: { event_id: eventId, user_id: actorId },
+          data: { is_default: false, updated_at: new Date() },
+        });
+      }
+
+      const updated = await tx.review_queue_saved_views.update({
+        where: { id: viewId },
+        data: {
+          ...(dto.name !== undefined ? { name: dto.name } : {}),
+          ...(dto.filters !== undefined ? { filters: dto.filters } : {}),
+          ...(dto.isDefault !== undefined
+            ? { is_default: dto.isDefault }
+            : {}),
+          updated_at: new Date(),
+        },
+      });
+
+      return {
+        id: updated.id,
+        eventId: updated.event_id,
+        name: updated.name,
+        isDefault: updated.is_default,
+        filters: (updated.filters as ReviewQueueSavedViewFilterDto) ?? {},
+        createdAt: updated.created_at,
+        updatedAt: updated.updated_at,
+      };
+    });
+  }
+
+  async deleteSavedView(eventId: string, viewId: string): Promise<void> {
+    const actorId = this.cls.get('actorId');
+    const result = await this.prisma.review_queue_saved_views.deleteMany({
+      where: { id: viewId, event_id: eventId, user_id: actorId },
+    });
+    if (result.count === 0) {
+      throw new NotFoundException('Saved view not found');
+    }
+  }
+
+  async listAvailableReviewers(eventId: string): Promise<
+    Array<{ userId: string; email: string; fullName: string | null; roles: string[] }>
+  > {
+    const now = new Date();
+    const assignments = await this.prisma.event_role_assignments.findMany({
+      where: {
+        event_id: eventId,
+        role: { in: ['reviewer', 'organizer'] },
+        AND: [
+          { OR: [{ access_start_at: null }, { access_start_at: { lte: now } }] },
+          { OR: [{ access_end_at: null }, { access_end_at: { gte: now } }] },
+        ],
+      },
+      include: {
+        users: {
+          select: {
+            id: true,
+            email: true,
+            applicant_profiles: { select: { full_name: true } },
+          },
+        },
+      },
+      orderBy: { created_at: 'desc' },
+    });
+
+    const byUserId = new Map<
+      string,
+      { userId: string; email: string; fullName: string | null; roles: Set<string> }
+    >();
+    for (const assignment of assignments) {
+      const user = assignment.users;
+      if (!user?.id || !user.email) continue;
+      const existing = byUserId.get(user.id);
+      if (existing) {
+        existing.roles.add(String(assignment.role).toLowerCase());
+        continue;
+      }
+      byUserId.set(user.id, {
+        userId: user.id,
+        email: user.email,
+        fullName: user.applicant_profiles?.full_name ?? null,
+        roles: new Set([String(assignment.role).toLowerCase()]),
+      });
+    }
+
+    return Array.from(byUserId.values())
+      .map((entry) => ({
+        userId: entry.userId,
+        email: entry.email,
+        fullName: entry.fullName,
+        roles: Array.from(entry.roles).sort((a, b) => a.localeCompare(b)),
+      }))
+      .sort((a, b) =>
+        (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
+      );
   }
 }

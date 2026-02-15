@@ -14,6 +14,8 @@ export interface RoleAssignment {
   eventId: string;
   role: string;
   createdAt: Date;
+  accessStartAt?: Date | null;
+  accessEndAt?: Date | null;
   user?: { id: string; email: string };
 }
 
@@ -53,6 +55,8 @@ export class RoleAssignmentsService {
         eventId: a.event_id,
         role: a.role,
         createdAt: a.created_at,
+        accessStartAt: a.access_start_at,
+        accessEndAt: a.access_end_at,
         user: a.users,
       })),
       meta: {
@@ -82,6 +86,8 @@ export class RoleAssignmentsService {
         eventId: existing.event_id,
         role: existing.role,
         createdAt: existing.created_at,
+        accessStartAt: existing.access_start_at,
+        accessEndAt: existing.access_end_at,
       };
     }
 
@@ -108,6 +114,8 @@ export class RoleAssignmentsService {
         event_id: eventId,
         user_id: dto.userId,
         role: dto.role,
+        access_start_at: dto.startAt ?? null,
+        access_end_at: dto.endAt ?? null,
       },
     });
 
@@ -117,6 +125,8 @@ export class RoleAssignmentsService {
       eventId: assignment.event_id,
       role: assignment.role,
       createdAt: assignment.created_at,
+      accessStartAt: assignment.access_start_at,
+      accessEndAt: assignment.access_end_at,
     };
   }
 
@@ -178,6 +188,8 @@ export class RoleAssignmentsService {
             event_id: eventId,
             user_id: item.userId,
             role: item.role,
+            access_start_at: item.startAt ?? null,
+            access_end_at: item.endAt ?? null,
           }));
 
         if (rowsToCreate.length > 0) {

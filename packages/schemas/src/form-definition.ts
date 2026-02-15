@@ -33,6 +33,52 @@ export const ValidationSchema = z.object({
 export type ValidationRules = z.infer<typeof ValidationSchema>;
 
 // ==========================================
+// Conditional Logic
+// ==========================================
+
+export enum ConditionOperator {
+    EQ = 'eq',
+    NEQ = 'neq',
+    CONTAINS = 'contains',
+    NOT_CONTAINS = 'not_contains',
+    GT = 'gt',
+    GTE = 'gte',
+    LT = 'lt',
+    LTE = 'lte',
+    EXISTS = 'exists',
+    NOT_EXISTS = 'not_exists',
+    IN = 'in',
+    NOT_IN = 'not_in',
+}
+
+export enum ConditionMode {
+    ALL = 'all',
+    ANY = 'any',
+}
+
+export const ConditionRuleSchema = z.object({
+    fieldKey: z.string(),
+    operator: z.nativeEnum(ConditionOperator).default(ConditionOperator.EQ),
+    value: z.any().optional(),
+});
+
+export type ConditionRule = z.infer<typeof ConditionRuleSchema>;
+
+export const ConditionGroupSchema = z.object({
+    mode: z.nativeEnum(ConditionMode).default(ConditionMode.ALL),
+    rules: z.array(ConditionRuleSchema).min(1),
+});
+
+export type ConditionGroup = z.infer<typeof ConditionGroupSchema>;
+
+export const FieldLogicSchema = z.object({
+    showWhen: ConditionGroupSchema.optional(),
+    requireWhen: ConditionGroupSchema.optional(),
+});
+
+export type FieldLogic = z.infer<typeof FieldLogicSchema>;
+
+// ==========================================
 // UI Options (Widget Config)
 // ==========================================
 
@@ -66,6 +112,7 @@ export const FieldDefinitionSchema = z.object({
     label: z.string(),
     validation: ValidationSchema.optional(),
     ui: UiOptionsSchema.optional(),
+    logic: FieldLogicSchema.optional(),
     defaultValue: z.any().optional(),
 });
 
@@ -166,10 +213,89 @@ function normalizeOptions(rawOptions: unknown): Array<{ label: string; value: st
     return options.length > 0 ? options : undefined;
 }
 
+function normalizeConditionOperator(rawOperator: unknown): ConditionOperator {
+    const operator = typeof rawOperator === 'string' ? rawOperator.trim().toLowerCase() : '';
+    switch (operator) {
+        case 'eq':
+        case '=':
+        case '==':
+            return ConditionOperator.EQ;
+        case 'neq':
+        case '!=':
+        case '<>':
+            return ConditionOperator.NEQ;
+        case 'contains':
+            return ConditionOperator.CONTAINS;
+        case 'not_contains':
+        case 'notcontains':
+            return ConditionOperator.NOT_CONTAINS;
+        case 'gt':
+        case '>':
+            return ConditionOperator.GT;
+        case 'gte':
+        case '>=':
+            return ConditionOperator.GTE;
+        case 'lt':
+        case '<':
+            return ConditionOperator.LT;
+        case 'lte':
+        case '<=':
+            return ConditionOperator.LTE;
+        case 'exists':
+            return ConditionOperator.EXISTS;
+        case 'not_exists':
+        case 'notexists':
+            return ConditionOperator.NOT_EXISTS;
+        case 'in':
+            return ConditionOperator.IN;
+        case 'not_in':
+        case 'notin':
+            return ConditionOperator.NOT_IN;
+        default:
+            return ConditionOperator.EQ;
+    }
+}
+
+function normalizeConditionMode(rawMode: unknown): ConditionMode {
+    const mode = typeof rawMode === 'string' ? rawMode.trim().toLowerCase() : '';
+    return mode === ConditionMode.ANY ? ConditionMode.ANY : ConditionMode.ALL;
+}
+
+function normalizeConditionRule(rawRule: unknown): ConditionRule | null {
+    const rule = isRecord(rawRule) ? rawRule : {};
+    const fieldKey = toOptionalString(rule.fieldKey) ?? toOptionalString(rule.key);
+    if (!fieldKey) return null;
+
+    return {
+        fieldKey,
+        operator: normalizeConditionOperator(rule.operator),
+        ...(rule.value !== undefined ? { value: rule.value } : {}),
+    };
+}
+
+function normalizeConditionGroup(rawGroup: unknown): ConditionGroup | undefined {
+    const group = isRecord(rawGroup) ? rawGroup : {};
+    const rawRules = Array.isArray(group.rules)
+        ? group.rules
+        : Array.isArray(group.conditions)
+            ? group.conditions
+            : [];
+    const rules = rawRules
+        .map((rule) => normalizeConditionRule(rule))
+        .filter((rule): rule is ConditionRule => rule !== null);
+    if (rules.length === 0) return undefined;
+
+    return {
+        mode: normalizeConditionMode(group.mode),
+        rules,
+    };
+}
+
 function normalizeField(rawField: unknown, fieldIndex: number): FieldDefinition {
     const f = isRecord(rawField) ? rawField : {};
     const rawUi = isRecord(f.ui) ? f.ui : {};
     const rawValidation = isRecord(f.validation) ? f.validation : {};
+    const rawLogic = isRecord(f.logic) ? f.logic : {};
 
     const id =
         toOptionalString(f.id) ??
@@ -239,6 +365,17 @@ function normalizeField(rawField: unknown, fieldIndex: number): FieldDefinition 
         label,
     };
 
+    const showWhen = normalizeConditionGroup(rawLogic.showWhen ?? f.showWhen);
+    const requireWhen = normalizeConditionGroup(
+        rawLogic.requireWhen ?? f.requireWhen,
+    );
+    if (showWhen || requireWhen) {
+        field.logic = {
+            ...(showWhen ? { showWhen } : {}),
+            ...(requireWhen ? { requireWhen } : {}),
+        };
+    }
+
     if (Object.keys(validation).length > 0) field.validation = validation;
     if (Object.keys(ui).length > 0) field.ui = ui;
     if (f.defaultValue !== undefined) field.defaultValue = f.defaultValue;
@@ -291,4 +428,143 @@ export function normalizeFormDefinition(rawDefinition: unknown): FormDefinition 
  */
 export function getFormFields(rawDefinition: unknown): FieldDefinition[] {
     return normalizeFormDefinition(rawDefinition).sections.flatMap((s) => s.fields);
+}
+
+function readValueByPath(values: UnknownRecord, fieldKey: string): unknown {
+    if (!fieldKey.includes('.')) return values[fieldKey];
+
+    const parts = fieldKey.split('.').filter((part) => part.length > 0);
+    let current: unknown = values;
+
+    for (const part of parts) {
+        if (!isRecord(current)) return undefined;
+        current = current[part];
+    }
+
+    return current;
+}
+
+function normalizeComparable(value: unknown): unknown {
+    if (typeof value === 'string') return value.trim();
+    return value;
+}
+
+function toNumber(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim().length > 0) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') return Object.keys(value as UnknownRecord).length > 0;
+    return true;
+}
+
+export function evaluateConditionRule(
+    values: Record<string, unknown>,
+    rule: ConditionRule,
+): boolean {
+    const fieldValue = readValueByPath(values, rule.fieldKey);
+    const normalizedFieldValue = normalizeComparable(fieldValue);
+    const normalizedRuleValue = normalizeComparable(rule.value);
+
+    switch (rule.operator) {
+        case ConditionOperator.EQ:
+            return normalizedFieldValue === normalizedRuleValue;
+        case ConditionOperator.NEQ:
+            return normalizedFieldValue !== normalizedRuleValue;
+        case ConditionOperator.CONTAINS:
+            if (Array.isArray(fieldValue)) {
+                return fieldValue.some((entry) => entry === rule.value);
+            }
+            if (typeof fieldValue === 'string' && typeof rule.value === 'string') {
+                return fieldValue.toLowerCase().includes(rule.value.toLowerCase());
+            }
+            return false;
+        case ConditionOperator.NOT_CONTAINS:
+            if (Array.isArray(fieldValue)) {
+                return !fieldValue.some((entry) => entry === rule.value);
+            }
+            if (typeof fieldValue === 'string' && typeof rule.value === 'string') {
+                return !fieldValue.toLowerCase().includes(rule.value.toLowerCase());
+            }
+            return true;
+        case ConditionOperator.GT: {
+            const left = toNumber(fieldValue);
+            const right = toNumber(rule.value);
+            if (left === null || right === null) return false;
+            return left > right;
+        }
+        case ConditionOperator.GTE: {
+            const left = toNumber(fieldValue);
+            const right = toNumber(rule.value);
+            if (left === null || right === null) return false;
+            return left >= right;
+        }
+        case ConditionOperator.LT: {
+            const left = toNumber(fieldValue);
+            const right = toNumber(rule.value);
+            if (left === null || right === null) return false;
+            return left < right;
+        }
+        case ConditionOperator.LTE: {
+            const left = toNumber(fieldValue);
+            const right = toNumber(rule.value);
+            if (left === null || right === null) return false;
+            return left <= right;
+        }
+        case ConditionOperator.EXISTS:
+            return hasMeaningfulValue(fieldValue);
+        case ConditionOperator.NOT_EXISTS:
+            return !hasMeaningfulValue(fieldValue);
+        case ConditionOperator.IN:
+            return Array.isArray(rule.value)
+                ? rule.value.some((entry) => entry === fieldValue)
+                : false;
+        case ConditionOperator.NOT_IN:
+            return Array.isArray(rule.value)
+                ? !rule.value.some((entry) => entry === fieldValue)
+                : true;
+        default:
+            return false;
+    }
+}
+
+export function evaluateConditionGroup(
+    values: Record<string, unknown>,
+    group: ConditionGroup | undefined,
+    fallbackWhenMissing = true,
+): boolean {
+    if (!group || !Array.isArray(group.rules) || group.rules.length === 0) {
+        return fallbackWhenMissing;
+    }
+
+    const evaluations = group.rules.map((rule) =>
+        evaluateConditionRule(values, rule),
+    );
+    return group.mode === ConditionMode.ANY
+        ? evaluations.some(Boolean)
+        : evaluations.every(Boolean);
+}
+
+export function isFieldVisible(
+    field: FieldDefinition,
+    values: Record<string, unknown>,
+): boolean {
+    return evaluateConditionGroup(values, field.logic?.showWhen, true);
+}
+
+export function isFieldRequired(
+    field: FieldDefinition,
+    values: Record<string, unknown>,
+): boolean {
+    const staticRequired = Boolean(field.validation?.required);
+    if (staticRequired) return true;
+    return evaluateConditionGroup(values, field.logic?.requireWhen, false);
 }

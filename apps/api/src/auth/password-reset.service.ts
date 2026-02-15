@@ -20,7 +20,9 @@ export class PasswordResetService {
     private readonly emailService: EmailService,
   ) {}
 
-  private async createPasswordResetToken(userId: string): Promise<string> {
+  private async createPasswordResetToken(
+    userId: string,
+  ): Promise<{ token: string; expiresAt: Date }> {
     // Invalidate previous unused tokens for this user
     await this.prisma.password_reset_tokens.updateMany({
       where: {
@@ -40,16 +42,18 @@ export class PasswordResetService {
       .digest('hex');
 
     // Store hashed token
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
+
     await this.prisma.password_reset_tokens.create({
       data: {
         id: crypto.randomUUID(),
         user_id: userId,
         token_hash: tokenHash,
-        expires_at: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
+        expires_at: expiresAt,
       },
     });
 
-    return rawToken;
+    return { token: rawToken, expiresAt };
   }
 
   /**
@@ -79,7 +83,7 @@ export class PasswordResetService {
       return { success: true };
     }
 
-    const rawToken = await this.createPasswordResetToken(user.id);
+    const { token: rawToken } = await this.createPasswordResetToken(user.id);
 
     // Send password reset email
     await this.emailService
@@ -100,10 +104,12 @@ export class PasswordResetService {
     userName?: string;
     role?: string;
     eventName?: string;
-  }): Promise<{ invitationSent: boolean; token?: string }> {
+  }): Promise<{ invitationSent: boolean; token?: string; expiresAt?: Date }> {
     const normalizedEmail = params.email.toLowerCase().trim();
     try {
-      const rawToken = await this.createPasswordResetToken(params.userId);
+      const { token: rawToken, expiresAt } = await this.createPasswordResetToken(
+        params.userId,
+      );
       await this.emailService.sendStaffInvite(normalizedEmail, rawToken, {
         userName: params.userName,
         role: params.role,
@@ -112,6 +118,7 @@ export class PasswordResetService {
       return {
         invitationSent: true,
         token: process.env.NODE_ENV !== 'production' ? rawToken : undefined,
+        expiresAt,
       };
     } catch (err) {
       console.error('Failed to send staff invite email:', err);

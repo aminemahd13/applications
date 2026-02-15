@@ -21,6 +21,9 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { Permission } from '@event-platform/shared';
 import {
   ApplicationFilterSchema,
+  BulkApplicationTagsSchema,
+  BulkAssignReviewerSchema,
+  BulkDecisionDraftSchema,
   SaveDraftSchema,
   SubmitStepSchema,
   SetDecisionSchema,
@@ -206,6 +209,57 @@ export class ApplicationsController {
   }
 
   /**
+   * Bulk add/remove tags
+   */
+  @Post('bulk/tags')
+  @RequirePermission(Permission.EVENT_APPLICATION_TAGS_MANAGE)
+  async bulkUpdateTags(
+    @Param('eventId') eventId: string,
+    @Body() body: any,
+  ) {
+    const dto = BulkApplicationTagsSchema.parse(body);
+    const result = await this.applicationsService.bulkUpdateTags(
+      eventId,
+      dto,
+    );
+    return { data: result };
+  }
+
+  /**
+   * Bulk assign/unassign reviewer
+   */
+  @Post('bulk/assign-reviewer')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async bulkAssignReviewer(
+    @Param('eventId') eventId: string,
+    @Body() body: any,
+  ) {
+    const dto = BulkAssignReviewerSchema.parse(body);
+    const result = await this.applicationsService.bulkAssignReviewer(
+      eventId,
+      dto,
+    );
+    return { data: result };
+  }
+
+  /**
+   * Bulk draft decisions
+   */
+  @Post('bulk/decision-draft')
+  @RequirePermission(Permission.EVENT_DECISION_DRAFT)
+  async bulkDraftDecision(
+    @Param('eventId') eventId: string,
+    @Body() body: any,
+  ) {
+    const dto = BulkDecisionDraftSchema.parse(body);
+    const result = await this.applicationsService.bulkDraftDecisions(
+      eventId,
+      dto,
+    );
+    return { data: result };
+  }
+
+  /**
    * Get submission versions for a step
    */
   @Get(':applicationId/steps/:stepId/versions')
@@ -277,6 +331,7 @@ export class ApplicationsController {
       applicationId,
       dto.status,
       dto.draft,
+      dto.templateId,
     );
     return { data: app };
   }
@@ -368,7 +423,19 @@ export class ApplicationsController {
 
     // Organizers can access
     const isOrganizer = await this.prisma.event_role_assignments.findFirst({
-      where: { user_id: actorId, event_id: eventId, role: 'organizer' },
+      where: {
+        user_id: actorId,
+        event_id: eventId,
+        role: 'organizer',
+        AND: [
+          {
+            OR: [{ access_start_at: null }, { access_start_at: { lte: new Date() } }],
+          },
+          {
+            OR: [{ access_end_at: null }, { access_end_at: { gte: new Date() } }],
+          },
+        ],
+      },
     });
 
     if (!isOrganizer) {

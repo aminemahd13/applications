@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -115,6 +115,14 @@ interface ApplicationDetail {
   status: string;
   decision: string;
   decisionPublished: boolean;
+  decisionDraft?: {
+    templateId?: string;
+    templateName?: string;
+    rendered?: {
+      subject?: string;
+      body?: string;
+    };
+  } | null;
   tags: string[];
   notes: NoteEntry[];
   steps: Array<{
@@ -178,6 +186,15 @@ interface RequestFieldOption {
   section: string;
   required?: boolean;
   type?: string;
+}
+
+interface DecisionTemplate {
+  id: string;
+  name: string;
+  status: "ACCEPTED" | "WAITLISTED" | "REJECTED";
+  subjectTemplate: string;
+  bodyTemplate: string;
+  isActive: boolean;
 }
 
 interface StepFieldOption {
@@ -791,6 +808,9 @@ export default function ApplicationDetailPage() {
 
   // Decision state
   const [draftDecision, setDraftDecision] = useState<string>("");
+  const [decisionTemplates, setDecisionTemplates] = useState<DecisionTemplate[]>([]);
+  const [selectedDecisionTemplateId, setSelectedDecisionTemplateId] =
+    useState<string>("__none__");
   const [isPublishing, setIsPublishing] = useState(false);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
 
@@ -889,6 +909,12 @@ export default function ApplicationDetailPage() {
         status: raw.derivedStatus ?? raw.status ?? "UNKNOWN",
         decision: raw.decisionStatus ?? raw.decision,
         decisionPublished: raw.decisionPublishedAt != null,
+        decisionDraft:
+          raw.decisionDraft && typeof raw.decisionDraft === "object"
+            ? (raw.decisionDraft as ApplicationDetail["decisionDraft"])
+            : raw.decision_draft && typeof raw.decision_draft === "object"
+              ? (raw.decision_draft as ApplicationDetail["decisionDraft"])
+              : null,
         tags: raw.tags ?? [],
         notes: parseInternalNotes(raw.internalNotes),
         steps: (raw.stepStates ?? raw.steps ?? []).map((s: any) => {
@@ -915,6 +941,7 @@ export default function ApplicationDetailPage() {
       };
       setApp(detail);
       if (detail.decision) setDraftDecision(detail.decision);
+      setSelectedDecisionTemplateId(detail.decisionDraft?.templateId ?? "__none__");
       if (!composeActionStepId && detail.steps.length > 0) {
         setComposeActionStepId(detail.steps[0].id);
       }
@@ -925,9 +952,25 @@ export default function ApplicationDetailPage() {
     }
   };
 
+  async function loadDecisionTemplates() {
+    if (!canManageDecisions) return;
+    try {
+      const res = await apiClient<{ data?: DecisionTemplate[] }>(
+        `/events/${eventId}/decision-templates`,
+      );
+      const items = Array.isArray(res?.data)
+        ? res.data.filter((template) => template.isActive)
+        : [];
+      setDecisionTemplates(items);
+    } catch {
+      /* handled */
+    }
+  }
+
   useEffect(() => {
     loadApplication();
-  }, [eventId, appId]);
+    loadDecisionTemplates();
+  }, [eventId, appId, canManageDecisions]);
 
   async function loadMessages() {
     if (!canReadMessages) return;
@@ -999,6 +1042,30 @@ export default function ApplicationDetailPage() {
     setRequestFieldIds([]);
   }, [requestStepId, showRequestInfo]);
 
+  const decisionTemplatesForDraftStatus = useMemo<DecisionTemplate[]>(() => {
+    const normalized = String(draftDecision ?? "").toUpperCase();
+    if (
+      normalized !== "ACCEPTED" &&
+      normalized !== "WAITLISTED" &&
+      normalized !== "REJECTED"
+    ) {
+      return [] as DecisionTemplate[];
+    }
+    return decisionTemplates.filter(
+      (template: DecisionTemplate) => template.status === normalized,
+    );
+  }, [decisionTemplates, draftDecision]);
+
+  useEffect(() => {
+    if (selectedDecisionTemplateId === "__none__") return;
+    const exists = decisionTemplatesForDraftStatus.some(
+      (template: DecisionTemplate) => template.id === selectedDecisionTemplateId,
+    );
+    if (!exists) {
+      setSelectedDecisionTemplateId("__none__");
+    }
+  }, [decisionTemplatesForDraftStatus, selectedDecisionTemplateId]);
+
   async function saveDecision() {
     if (!canManageDecisions) {
       toast.error("You do not have permission to update decisions.");
@@ -1008,17 +1075,30 @@ export default function ApplicationDetailPage() {
       toast.error("Select a decision first.");
       return;
     }
+    const templateId =
+      selectedDecisionTemplateId === "__none__"
+        ? null
+        : selectedDecisionTemplateId;
+    if (templateId) {
+      const selectedTemplate = decisionTemplates.find(
+        (template) => template.id === templateId,
+      );
+      if (!selectedTemplate) {
+        toast.error("Selected template is not available");
+        return;
+      }
+      if (selectedTemplate.status !== draftDecision) {
+        toast.error("Template status must match the selected decision");
+        return;
+      }
+    }
     try {
       await apiClient(`/events/${eventId}/applications/${appId}/decision`, {
         method: "PATCH",
-        body: { status: draftDecision, draft: true },
+        body: { status: draftDecision, draft: true, templateId },
         csrfToken: csrfToken ?? undefined,
       });
-      setApp((prev) =>
-        prev
-          ? { ...prev, decision: draftDecision, decisionPublished: false }
-          : prev
-      );
+      await loadApplication(true);
       toast.success("Decision saved as draft");
     } catch {
       /* handled */
@@ -2031,7 +2111,9 @@ export default function ApplicationDetailPage() {
                 <CardContent className="space-y-4">
                   <Select
                     value={draftDecision}
-                    onValueChange={setDraftDecision}
+                    onValueChange={(value) => {
+                      setDraftDecision(value);
+                    }}
                     disabled={!canManageDecisions}
                   >
                     <SelectTrigger>
@@ -2058,6 +2140,55 @@ export default function ApplicationDetailPage() {
                       </SelectItem>
                     </SelectContent>
                   </Select>
+
+                  <div className="space-y-2">
+                    <Label>Decision template</Label>
+                    <Select
+                      value={selectedDecisionTemplateId}
+                      onValueChange={setSelectedDecisionTemplateId}
+                      disabled={!canManageDecisions || !draftDecision}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select template (optional)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">None</SelectItem>
+                        {decisionTemplatesForDraftStatus.map((template) => (
+                          <SelectItem key={template.id} value={template.id}>
+                            {template.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {draftDecision && decisionTemplatesForDraftStatus.length === 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        No active templates for this decision status.
+                      </p>
+                    )}
+                  </div>
+
+                  {app.decisionDraft?.rendered && (
+                    <div className="rounded-md border border-border/60 bg-muted/20 p-3 space-y-2">
+                      <p className="text-xs font-medium">
+                        Current rendered template draft
+                      </p>
+                      {app.decisionDraft.templateName && (
+                        <p className="text-xs text-muted-foreground">
+                          Template: {app.decisionDraft.templateName}
+                        </p>
+                      )}
+                      {app.decisionDraft.rendered.subject && (
+                        <p className="text-sm font-medium">
+                          {app.decisionDraft.rendered.subject}
+                        </p>
+                      )}
+                      {app.decisionDraft.rendered.body && (
+                        <p className="text-xs text-muted-foreground whitespace-pre-wrap">
+                          {app.decisionDraft.rendered.body}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {!canManageDecisions && (
                     <p className="text-xs text-muted-foreground">
