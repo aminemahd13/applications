@@ -500,6 +500,31 @@ export const VideoEmbedBlockSchema = z.object({
     }),
 });
 
+export const EmbedDocBlockSchema = z.object({
+    id: z.string(),
+    type: z.literal('EMBED_DOC'),
+    data: withSection({
+        title: z.string().optional(),
+        url: z.string().optional(),
+        caption: z.string().optional(),
+        height: z.number().int().min(320).max(1400).default(720),
+    }),
+});
+
+export const TextImageRightBlockSchema = z.object({
+    id: z.string(),
+    type: z.literal('TEXT_IMAGE_RIGHT'),
+    data: withSection({
+        heading: z.string().optional(),
+        text: z.string().optional(),
+        imageUrl: z.string().optional(),
+        assetKey: z.string().optional(),
+        alt: z.string().optional(),
+        caption: z.string().optional(),
+        cta: CtaLinkSchema.optional(),
+    }),
+});
+
 export const TestimonialsBlockSchema = z.object({
     id: z.string(),
     type: z.literal('TESTIMONIALS'),
@@ -568,6 +593,8 @@ export const BlockSchema = z.discriminatedUnion('type', [
     StickyAlertBarBlockSchema,
     TabsBlockSchema,
     VideoEmbedBlockSchema,
+    EmbedDocBlockSchema,
+    TextImageRightBlockSchema,
     TestimonialsBlockSchema,
     CustomCodeBlockSchema,
     RanksBlockSchema,

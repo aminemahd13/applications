@@ -21,6 +21,8 @@ import { RichTextBlock } from "./blocks/rich-text-block";
 import { ImageBlock } from "./blocks/image-block";
 import { GridBlock } from "./blocks/grid-block";
 import { VideoEmbedBlock } from "./blocks/video-embed-block";
+import { EmbedDocBlock } from "./blocks/embed-doc-block";
+import { TextImageRightBlock } from "./blocks/text-image-right-block";
 import { TestimonialsBlock } from "./blocks/testimonials-block";
 import { CustomCodeBlock } from "./blocks/custom-code-block";
 import { PartnerStripBlock } from "./blocks/partner-strip-block";
@@ -121,6 +123,10 @@ function SingleBlock({
       return <TabsBlock block={block} />;
     case "VIDEO_EMBED":
       return <VideoEmbedBlock block={block} />;
+    case "EMBED_DOC":
+      return <EmbedDocBlock block={block} />;
+    case "TEXT_IMAGE_RIGHT":
+      return <TextImageRightBlock block={block} />;
     case "TESTIMONIALS":
       return <TestimonialsBlock block={block} />;
     case "CUSTOM_CODE":
