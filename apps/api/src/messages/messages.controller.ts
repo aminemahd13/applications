@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Controller,
+  Delete,
   Get,
   Post,
   Body,
@@ -145,6 +146,19 @@ export class StaffMessagesController {
       dto,
     );
     return { data: result.items, nextCursor: result.nextCursor };
+  }
+
+  /**
+   * Delete a sent message (organizer/admin)
+   */
+  @Delete(':messageId')
+  @RequirePermission(Permission.EVENT_APPLICATION_DELETE)
+  async deleteMessage(
+    @Param('eventId') eventId: string,
+    @Param('messageId') messageId: string,
+  ) {
+    await this.messagesService.deleteMessage(eventId, messageId);
+    return { success: true };
   }
 }
 

@@ -366,9 +366,9 @@ export class ReviewsService {
   }
 
   /**
-   * Cancel a needs-info request (staff action)
+   * Delete a needs-info request (staff action)
    */
-  async cancelNeedsInfo(eventId: string, needsInfoId: string): Promise<void> {
+  async deleteNeedsInfo(eventId: string, needsInfoId: string): Promise<void> {
     const req = await this.prisma.needs_info_requests.findUnique({
       where: { id: needsInfoId },
       include: { applications: { select: { event_id: true } } },
@@ -377,12 +377,8 @@ export class ReviewsService {
       throw new NotFoundException('Needs-info request not found');
     }
 
-    await this.prisma.needs_info_requests.update({
+    await this.prisma.needs_info_requests.delete({
       where: { id: needsInfoId },
-      data: {
-        status: NeedsInfoStatus.CANCELED,
-        resolved_at: new Date(),
-      },
     });
   }
 }

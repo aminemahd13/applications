@@ -1,5 +1,6 @@
 import { DecisionStatus } from '@event-platform/shared';
 import { MessagesService } from './messages.service';
+import { NotFoundException } from '@nestjs/common';
 
 describe('MessagesService', () => {
   let service: MessagesService;
@@ -13,6 +14,9 @@ describe('MessagesService', () => {
       },
       users: {
         findMany: jest.fn(),
+      },
+      messages: {
+        deleteMany: jest.fn(),
       },
       message_recipients: {
         findMany: jest.fn(),
@@ -104,6 +108,28 @@ describe('MessagesService', () => {
         '<p>Plain body from composer</p>',
         [],
       );
+    });
+  });
+
+  describe('deleteMessage', () => {
+    it('deletes an event-scoped message', async () => {
+      mockPrisma.messages.deleteMany.mockResolvedValue({ count: 1 });
+
+      await expect(
+        service.deleteMessage('event-1', 'message-1'),
+      ).resolves.toBeUndefined();
+
+      expect(mockPrisma.messages.deleteMany).toHaveBeenCalledWith({
+        where: { id: 'message-1', event_id: 'event-1' },
+      });
+    });
+
+    it('throws when message does not exist in event scope', async () => {
+      mockPrisma.messages.deleteMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.deleteMessage('event-1', 'missing-message'),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });
