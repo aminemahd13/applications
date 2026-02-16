@@ -207,6 +207,18 @@ export class MicrositeMediaService {
       throw new NotFoundException('Asset not found');
     }
 
+    const asset = await this.prisma.file_objects.findFirst({
+      where: {
+        storage_key: storageKey,
+        status: 'COMMITTED',
+        events: { is: { status: { not: 'archived' } } },
+      },
+      select: { id: true },
+    });
+    if (!asset) {
+      throw new NotFoundException('Asset not found');
+    }
+
     return this.storageService.getPresignedGetUrl(storageKey, 3600);
   }
 
