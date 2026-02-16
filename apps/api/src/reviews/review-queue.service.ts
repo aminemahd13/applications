@@ -32,6 +32,25 @@ export class ReviewQueueService {
     const { cursor, limit, stepId, assignedTo, status, tags } = filter;
     const reviewerId = this.cls.get('actorId');
 
+    const reviewableSteps = await this.prisma.workflow_steps.findMany({
+      where: {
+        event_id: eventId,
+        review_required: true,
+        ...(stepId ? { id: stepId } : {}),
+      },
+      select: { id: true },
+    });
+    const reviewableStepIds = reviewableSteps.map((step) => step.id);
+    if (reviewableStepIds.length === 0) {
+      return {
+        data: [],
+        meta: {
+          nextCursor: null,
+          hasMore: false,
+        },
+      };
+    }
+
     // Build step state filter based on status
     let stepStateStatus: string[] = [];
     if (status === 'pending') {
@@ -72,7 +91,7 @@ export class ReviewQueueService {
         application_step_states: {
           where: {
             status: { in: stepStateStatus },
-            ...(stepId ? { step_id: stepId } : {}),
+            step_id: { in: reviewableStepIds },
             ...(status === 'resubmitted'
               ? { revision_cycle_count: { gt: 0 } }
               : {}),

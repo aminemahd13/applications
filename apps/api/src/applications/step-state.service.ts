@@ -237,10 +237,19 @@ export class StepStateService {
     stepId: string,
     submissionVersionId: string,
   ): Promise<void> {
+    const step = await this.prisma.workflow_steps.findUnique({
+      where: { id: stepId },
+      select: { review_required: true },
+    });
+    const nextStatus =
+      step?.review_required === false
+        ? StepStatus.APPROVED
+        : StepStatus.SUBMITTED;
+
     await this.prisma.application_step_states.updateMany({
       where: { application_id: applicationId, step_id: stepId },
       data: {
-        status: StepStatus.SUBMITTED,
+        status: nextStatus,
         latest_submission_version_id: submissionVersionId,
         current_draft_id: null, // Clear draft after submission
         last_activity_at: new Date(),
