@@ -246,11 +246,16 @@ export class SubmissionsService {
         },
       });
 
-      // Update step state to SUBMITTED within same transaction
+      const shouldRequireReview = Boolean(step.review_required);
+
+      // Update step state in the same transaction.
+      // Steps without review_required are auto-approved on submit.
       await tx.application_step_states.updateMany({
         where: { application_id: applicationId, step_id: stepId },
         data: {
-          status: StepStatus.SUBMITTED,
+          status: shouldRequireReview
+            ? StepStatus.SUBMITTED
+            : StepStatus.APPROVED,
           latest_submission_version_id: newSubmission.id,
           current_draft_id: null,
           last_activity_at: new Date(),
