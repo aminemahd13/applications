@@ -53,7 +53,7 @@ export async function getMicrosite(
 ): Promise<PublicMicrosite | null> {
   try {
     const res = await fetch(`${API_URL}/microsites/public/${eventSlug}`, {
-      next: { revalidate: 60 },
+      cache: "no-store",
     });
     if (!res.ok) return null;
     return res.json();
@@ -69,7 +69,7 @@ export async function getPage(
   try {
     const res = await fetch(
       `${API_URL}/microsites/public/${eventSlug}/pages/${pagePath}`,
-      { next: { revalidate: 60 } }
+      { cache: "no-store" }
     );
     if (!res.ok) return null;
     return res.json();

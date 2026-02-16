@@ -22,6 +22,37 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 
 const SENSITIVE_UPSTREAM_HEADERS = new Set(["cookie", "cookie2"]);
+const UPLOADS_PREFIX = "/uploads/";
+const MICROSITE_STORAGE_KEY_RE = /^events\/[^/]+\/microsite\/.+/i;
+
+function hasSignatureQueryParam(searchParams: URLSearchParams): boolean {
+  for (const key of searchParams.keys()) {
+    const normalized = key.toLowerCase();
+    if (normalized.startsWith("x-amz-")) return true;
+    if (normalized === "signature") return true;
+    if (normalized === "awsaccesskeyid") return true;
+  }
+  return false;
+}
+
+function extractStorageKeyFromUploadsPath(pathname: string): string | null {
+  if (!pathname.startsWith(UPLOADS_PREFIX)) return null;
+  const storageKey = pathname.slice(UPLOADS_PREFIX.length).replace(/^\/+/, "");
+  return storageKey.length > 0 ? storageKey : null;
+}
+
+function maybeRedirectMicrositeAsset(req: NextRequest): NextResponse | null {
+  const method = req.method.toUpperCase();
+  if (method !== "GET" && method !== "HEAD") return null;
+  if (hasSignatureQueryParam(req.nextUrl.searchParams)) return null;
+
+  const storageKey = extractStorageKeyFromUploadsPath(req.nextUrl.pathname);
+  if (!storageKey || !MICROSITE_STORAGE_KEY_RE.test(storageKey)) return null;
+
+  const resolverUrl = new URL("/api/v1/microsites/assets", req.url);
+  resolverUrl.searchParams.set("key", storageKey);
+  return NextResponse.redirect(resolverUrl, 302);
+}
 
 function normalizeAbsoluteUrl(value: string | undefined): string | null {
   const raw = (value ?? "").trim().replace(/\/+$/, "");
@@ -189,6 +220,11 @@ async function proxyToStorage(
 }
 
 async function handle(req: NextRequest): Promise<Response> {
+  const guardedMicrositeAssetRedirect = maybeRedirectMicrositeAsset(req);
+  if (guardedMicrositeAssetRedirect) {
+    return guardedMicrositeAssetRedirect;
+  }
+
   const method = req.method.toUpperCase();
   const shouldReadBody = method !== "GET" && method !== "HEAD";
   const body = shouldReadBody ? Buffer.from(await req.arrayBuffer()) : undefined;
