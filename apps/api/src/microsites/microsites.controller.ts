@@ -65,7 +65,8 @@ export class MicrositesController {
     @Param('eventId') eventId: string,
     @Body() body: z.infer<typeof UpdateMicrositeSettingsSchema>,
   ) {
-    return this.service.updateSettings(eventId, body);
+    const payload = UpdateMicrositeSettingsSchema.parse(body);
+    return this.service.updateSettings(eventId, payload);
   }
 
   @UseGuards(PermissionsGuard)
@@ -92,7 +93,8 @@ export class MicrositesController {
     @Param('eventId') eventId: string,
     @Body() body: z.infer<typeof CreateMicrositePageSchema>,
   ) {
-    return this.service.createPage(eventId, body);
+    const payload = CreateMicrositePageSchema.parse(body);
+    return this.service.createPage(eventId, payload);
   }
 
   @UseGuards(PermissionsGuard)
@@ -103,7 +105,8 @@ export class MicrositesController {
     @Param('pageId') pageId: string,
     @Body() body: z.infer<typeof UpdateMicrositePageSchema>,
   ) {
-    return this.service.updatePage(eventId, pageId, body);
+    const payload = UpdateMicrositePageSchema.parse(body);
+    return this.service.updatePage(eventId, pageId, payload);
   }
 
   @UseGuards(PermissionsGuard)
