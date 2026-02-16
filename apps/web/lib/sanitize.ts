@@ -15,7 +15,7 @@ const ALLOWED_ATTR = [
 ];
 
 export function sanitizeHtml(html: string): string {
-  if (typeof window === "undefined") return html;
+  if (typeof window === "undefined") return stripUnsafeHtml(html);
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS,
     ALLOWED_ATTR,
@@ -23,13 +23,35 @@ export function sanitizeHtml(html: string): string {
 }
 
 const SCRIPT_TAG_RE = /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi;
-const ON_EVENT_ATTR_RE = /\son\w+=(\"[^\"]*\"|'[^']*')/gi;
-const JS_URL_RE = /\s(href|src)\s*=\s*(['"])\s*javascript:[^'"]*\2/gi;
+const ON_EVENT_ATTR_RE =
+  /\s+on[a-z0-9_-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/gi;
+const URL_ATTR_RE = /\s+(href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+
+function isUnsafeUrlValue(value: string): boolean {
+  const normalized = value.replace(/[\u0000-\u001F\u007F\s]+/g, "").toLowerCase();
+  return normalized.startsWith("javascript:");
+}
 
 export function stripUnsafeHtml(html: string): string {
   if (!html) return "";
-  return html
+  const withoutScriptsAndHandlers = html
     .replace(SCRIPT_TAG_RE, "")
-    .replace(ON_EVENT_ATTR_RE, "")
-    .replace(JS_URL_RE, ' $1="#"');
+    .replace(ON_EVENT_ATTR_RE, "");
+
+  return withoutScriptsAndHandlers.replace(
+    URL_ATTR_RE,
+    (
+      original,
+      attr: string,
+      doubleQuotedValue: string | undefined,
+      singleQuotedValue: string | undefined,
+      unquotedValue: string | undefined,
+    ) => {
+      const value = doubleQuotedValue ?? singleQuotedValue ?? unquotedValue ?? "";
+      if (!isUnsafeUrlValue(value)) {
+        return original;
+      }
+      return ` ${attr}="#"`;
+    },
+  );
 }

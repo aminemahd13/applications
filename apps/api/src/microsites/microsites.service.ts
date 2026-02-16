@@ -184,9 +184,19 @@ export class MicrositesService {
       throw new NotFoundException('Page not found');
     }
 
-    // If slug passes (optional), check uniqueness
-    if (data.slug) {
-      const newSlug = data.slug.toLowerCase().replace(/[^a-z0-9-]/g, '');
+    // If slug is provided, normalize and re-validate invariants from create flow.
+    if (data.slug !== undefined) {
+      const newSlug = String(data.slug)
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, '');
+      if (!newSlug || newSlug.length === 0) {
+        throw new BadRequestException('Invalid slug');
+      }
+      if (newSlug === 'home') {
+        throw new BadRequestException('Slug "home" is reserved');
+      }
+
       if (newSlug !== page.slug) {
         const existing = await this.prisma.microsite_pages.findFirst({
           where: { microsite_id: page.microsite_id, slug: newSlug },
@@ -195,10 +205,10 @@ export class MicrositesService {
           throw new BadRequestException(
             `Page with slug '${newSlug}' already exists`,
           );
-
-        // Update slug in data payload
-        data.slug = newSlug;
       }
+
+      // Update slug in data payload.
+      data.slug = newSlug;
     }
 
     const existingSeo = (page.seo as Record<string, any>) ?? {};
