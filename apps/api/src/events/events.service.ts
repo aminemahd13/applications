@@ -2,8 +2,10 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { StorageService } from '../common/storage/storage.service';
 import {
   CreateEventDto,
   UpdateEventDto,
@@ -16,8 +18,12 @@ import {
 @Injectable()
 export class EventsService {
   private static readonly DEFAULT_SORT_FIELD = 'created_at';
+  private readonly logger = new Logger(EventsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storageService: StorageService,
+  ) {}
 
   private parseDateCursor(cursor?: string): Date | null {
     if (!cursor || typeof cursor !== 'string') return null;
@@ -403,10 +409,33 @@ export class EventsService {
       throw new ConflictException('Cannot delete a System Site');
     }
 
+    const fileObjects = await this.prisma.file_objects.findMany({
+      where: { event_id: id },
+      select: { storage_key: true },
+    });
+    const storageKeys = fileObjects
+      .map((file) => file.storage_key.trim())
+      .filter((key) => key.length > 0);
+
     await this.prisma.$transaction(async (tx) => {
       await tx.audit_logs.deleteMany({ where: { event_id: id } });
       await tx.events.delete({ where: { id } });
     });
+
+    if (storageKeys.length > 0) {
+      const uniqueKeys = Array.from(new Set(storageKeys));
+      const deletions = await Promise.allSettled(
+        uniqueKeys.map((key) => this.storageService.deleteObject(key)),
+      );
+      const failedCount = deletions.filter(
+        (result) => result.status === 'rejected',
+      ).length;
+      if (failedCount > 0) {
+        this.logger.warn(
+          `Hard delete removed event ${id} but failed to delete ${failedCount}/${uniqueKeys.length} storage objects`,
+        );
+      }
+    }
 
     return { success: true };
   }
