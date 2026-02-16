@@ -383,8 +383,9 @@ export class MicrositesService {
     const microsite = await this.prisma.microsites.findFirst({
       where: {
         published_version: { gt: 0 },
-        // Microsites can be published independently from application publishing.
-        events: { is: { slug } },
+        // Microsites can be published independently from application windows,
+        // but must not remain public after the event is archived (soft deleted).
+        events: { is: { slug, status: { not: 'archived' } } },
       },
       select: {
         id: true,
@@ -439,8 +440,9 @@ export class MicrositesService {
     const microsite = await this.prisma.microsites.findFirst({
       where: {
         published_version: { gt: 0 },
-        // Allow public microsite pages even when the event itself is not open for applications.
-        events: { is: { slug: eventSlug } },
+        // Allow public microsite pages independent of application windows,
+        // but hide them once the event is archived (soft deleted).
+        events: { is: { slug: eventSlug, status: { not: 'archived' } } },
       },
       select: { id: true, published_version: true },
     });
