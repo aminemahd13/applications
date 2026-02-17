@@ -2,7 +2,6 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { Prisma } from '@prisma/client';
@@ -13,10 +12,23 @@ import {
 } from '@event-platform/shared';
 import { z } from 'zod';
 
+type JsonRecord = Record<string, unknown>;
+
+function toJsonRecord(value: unknown): JsonRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return { ...(value as JsonRecord) };
+}
+
+function removeLegacyJsField(record: JsonRecord) {
+  if ('js' in record) {
+    delete record.js;
+  }
+}
+
 @Injectable()
 export class MicrositesService {
-  private readonly logger = new Logger(MicrositesService.name);
-
   constructor(private readonly prisma: PrismaService) {}
 
   // --- Admin: Settings ---
@@ -45,38 +57,60 @@ export class MicrositesService {
     data: z.infer<typeof UpdateMicrositeSettingsSchema>,
   ) {
     const microsite = await this.ensureMicrosite(eventId);
-    const currentSettings = microsite.settings as Record<string, any>;
-    const newSettings = {
+    const currentSettingsResult = UpdateMicrositeSettingsSchema.safeParse(
+      microsite.settings,
+    );
+    const currentSettings = currentSettingsResult.success
+      ? currentSettingsResult.data
+      : {};
+
+    const newSettings: z.infer<typeof UpdateMicrositeSettingsSchema> = {
       ...currentSettings,
       ...data,
-      design: {
-        ...(currentSettings.design ?? {}),
-        ...((data as any).design ?? {}),
-      },
-      branding: {
-        ...(currentSettings.branding ?? {}),
-        ...((data as any).branding ?? {}),
-      },
-      navigation: {
-        ...(currentSettings.navigation ?? {}),
-        ...((data as any).navigation ?? {}),
-      },
-      footer: {
-        ...(currentSettings.footer ?? {}),
-        ...((data as any).footer ?? {}),
-      },
-      customCode: {
-        ...(currentSettings.customCode ?? {}),
-        ...((data as any).customCode ?? {}),
-      },
     };
-    if ((newSettings as any).customCode?.js) {
-      delete (newSettings as any).customCode.js;
+
+    if (currentSettings.design || data.design) {
+      newSettings.design = {
+        ...(currentSettings.design ?? data.design ?? {}),
+        ...(data.design ?? {}),
+      } as NonNullable<z.infer<typeof UpdateMicrositeSettingsSchema>['design']>;
     }
+    if (currentSettings.branding || data.branding) {
+      newSettings.branding = {
+        ...(currentSettings.branding ?? data.branding ?? {}),
+        ...(data.branding ?? {}),
+      };
+    }
+    if (currentSettings.navigation || data.navigation) {
+      newSettings.navigation = {
+        ...(currentSettings.navigation ?? data.navigation ?? {}),
+        ...(data.navigation ?? {}),
+      } as NonNullable<
+        z.infer<typeof UpdateMicrositeSettingsSchema>['navigation']
+      >;
+    }
+    if (currentSettings.footer || data.footer) {
+      newSettings.footer = {
+        ...(currentSettings.footer ?? data.footer ?? {}),
+        ...(data.footer ?? {}),
+      } as NonNullable<z.infer<typeof UpdateMicrositeSettingsSchema>['footer']>;
+    }
+    if (currentSettings.customCode || data.customCode) {
+      newSettings.customCode = {
+        ...(currentSettings.customCode ?? data.customCode ?? {}),
+        ...(data.customCode ?? {}),
+      };
+    }
+
+    const sanitizedCustomCode = toJsonRecord(newSettings.customCode);
+    removeLegacyJsField(sanitizedCustomCode);
+    newSettings.customCode = sanitizedCustomCode as z.infer<
+      typeof UpdateMicrositeSettingsSchema
+    >['customCode'];
 
     return this.prisma.microsites.update({
       where: { id: microsite.id },
-      data: { settings: newSettings },
+      data: { settings: newSettings as Prisma.InputJsonValue },
     });
   }
 
@@ -147,16 +181,17 @@ export class MicrositesService {
     if (existing)
       throw new BadRequestException(`Page with slug '${slug}' already exists`);
 
-    const seo = {
-      ...(data.seo ?? {}),
-      customCode: {
-        ...((data.seo as any)?.customCode ?? {}),
-        ...((data as any).customCode ?? {}),
-      },
-    } as Record<string, any>;
-    if (seo.customCode?.js) {
-      delete seo.customCode.js;
-    }
+    const seoBase = toJsonRecord(data.seo as unknown);
+    const mergedCustomCode = {
+      ...toJsonRecord(seoBase.customCode),
+      ...toJsonRecord(data.customCode as unknown),
+    };
+    removeLegacyJsField(mergedCustomCode);
+
+    const seo: JsonRecord = {
+      ...seoBase,
+      customCode: mergedCustomCode,
+    };
 
     return this.prisma.microsite_pages.create({
       data: {
@@ -165,7 +200,7 @@ export class MicrositesService {
         title: data.title,
         position: data.position,
         blocks: (data.blocks ?? []) as unknown as Prisma.InputJsonValue,
-        seo,
+        seo: seo as Prisma.InputJsonValue,
         visibility: data.visibility,
       },
     });
@@ -211,31 +246,43 @@ export class MicrositesService {
       data.slug = newSlug;
     }
 
-    const existingSeo = (page.seo as Record<string, any>) ?? {};
-    const incomingSeo = (data.seo as Record<string, any>) ?? {};
+    const existingSeo = toJsonRecord(page.seo);
+    const incomingSeo = toJsonRecord(data.seo as unknown);
+    const incomingCustomCode = toJsonRecord(data.customCode as unknown);
     const mergedSeo =
-      data.seo || (data as any).customCode
+      data.seo || data.customCode
         ? {
             ...existingSeo,
             ...incomingSeo,
             customCode: {
-              ...(existingSeo.customCode ?? {}),
-              ...(incomingSeo.customCode ?? {}),
-              ...((data as any).customCode ?? {}),
+              ...toJsonRecord(existingSeo.customCode),
+              ...toJsonRecord(incomingSeo.customCode),
+              ...incomingCustomCode,
             },
           }
         : undefined;
-    if (mergedSeo?.customCode?.js) {
-      delete mergedSeo.customCode.js;
+    if (mergedSeo?.customCode) {
+      removeLegacyJsField(mergedSeo.customCode);
     }
 
-    const { customCode: _customCode, ...safeData } = data as any;
+    const updateData: Prisma.microsite_pagesUpdateInput = {};
+    if (data.slug !== undefined) updateData.slug = data.slug;
+    if (data.title !== undefined) updateData.title = data.title;
+    if (data.position !== undefined) updateData.position = data.position;
+    if (data.visibility !== undefined) updateData.visibility = data.visibility;
+    if (data.blocks !== undefined) {
+      updateData.blocks = data.blocks as unknown as Prisma.InputJsonValue;
+    }
 
     return this.prisma.microsite_pages.update({
       where: { id: pageId },
       data: {
-        ...safeData,
-        ...(mergedSeo ? { seo: mergedSeo } : {}),
+        ...updateData,
+        ...(mergedSeo
+          ? { seo: mergedSeo as Prisma.InputJsonValue }
+          : data.seo !== undefined
+            ? { seo: data.seo as unknown as Prisma.InputJsonValue }
+            : {}),
       },
     });
   }
@@ -330,7 +377,7 @@ export class MicrositesService {
     });
   }
 
-  async rollback(eventId: string, targetVersion: number, actorUserId: string) {
+  async rollback(eventId: string, targetVersion: number) {
     return this.prisma.$transaction(async (tx) => {
       // Lock row
       await tx.$executeRaw`SELECT 1 FROM microsites WHERE event_id = ${eventId}::uuid FOR UPDATE`;

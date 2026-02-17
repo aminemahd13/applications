@@ -32,6 +32,13 @@ interface UserSession {
   email: string;
 }
 
+interface RequestWithUserContext {
+  session?: {
+    user?: Partial<UserSession> | null;
+  } | null;
+  user?: Partial<UserSession> | null;
+}
+
 @Controller()
 export class MicrositesController {
   constructor(
@@ -39,7 +46,7 @@ export class MicrositesController {
     private readonly mediaService: MicrositeMediaService,
   ) {}
 
-  private requireUserId(req: any): string {
+  private requireUserId(req: RequestWithUserContext): string {
     const user = (req?.session?.user ??
       req?.user) as Partial<UserSession> | null;
     if (!user?.id) {
@@ -173,7 +180,10 @@ export class MicrositesController {
   @UseGuards(PermissionsGuard)
   @RequirePermission(Permission.EVENT_MICROSITE_PUBLISH)
   @Post('admin/events/:eventId/microsite/publish')
-  async publish(@Param('eventId') eventId: string, @Req() req: any) {
+  async publish(
+    @Param('eventId') eventId: string,
+    @Req() req: RequestWithUserContext,
+  ) {
     return this.service.publish(eventId, this.requireUserId(req));
   }
 
@@ -190,11 +200,10 @@ export class MicrositesController {
   async rollback(
     @Param('eventId') eventId: string,
     @Body('version') version: number,
-    @Req() req: any,
   ) {
     if (typeof version !== 'number')
       throw new BadRequestException('Version required');
-    return this.service.rollback(eventId, version, this.requireUserId(req));
+    return this.service.rollback(eventId, version);
   }
 
   @UseGuards(PermissionsGuard)
