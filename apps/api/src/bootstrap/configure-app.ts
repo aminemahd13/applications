@@ -1,9 +1,16 @@
 import { INestApplication } from '@nestjs/common';
 import Redis from 'ioredis';
 import { ZodExceptionFilter } from '../common/filters/zod-exception.filter';
+import type { NextFunction, Request, Response } from 'express';
+import session, { Session, SessionData, Store } from 'express-session';
 
-const session = require('express-session');
-const RedisStore = require('connect-redis').default;
+type RedisStoreConstructor = new (options: {
+  client: Redis;
+  prefix?: string;
+}) => Store;
+const { default: RedisStore } = require('connect-redis') as {
+  default: RedisStoreConstructor;
+};
 
 const IDLE_TTL_MS = 1000 * 60 * 60; // 1 hour idle timeout
 const ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 14; // 14 days absolute timeout
@@ -11,6 +18,24 @@ const ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 14; // 14 days absolute timeout
 export interface AppRuntimeResources {
   close: () => Promise<void>;
 }
+
+interface HttpAdapterLike {
+  getInstance: <TServer = unknown>() => TServer;
+}
+
+interface NestAppWithAdapter {
+  getHttpAdapter: () => HttpAdapterLike;
+}
+
+interface SessionDataWithMetadata extends SessionData {
+  createdAt?: number;
+}
+
+type SessionWithMetadata = Session & Partial<SessionDataWithMetadata>;
+
+type RequestWithSession = Request & {
+  session?: SessionWithMetadata;
+};
 
 // Production environment validation - fail fast on boot
 export function validateProductionEnv() {
@@ -85,13 +110,20 @@ export function configureHttpApp(app: INestApplication): AppRuntimeResources {
   // Trust proxy for production (behind Nginx/Cloudflare)
   // Required for secure cookies to work behind reverse proxy
   if (process.env.NODE_ENV === 'production') {
-    (app as any).getHttpAdapter().getInstance().set('trust proxy', 1);
+    const adapter = (app as unknown as NestAppWithAdapter).getHttpAdapter();
+    adapter
+      .getInstance<{ set: (name: string, value: number) => void }>()
+      .set('trust proxy', 1);
   }
 
   // Initialize Redis
   const redisClient = new Redis(
     process.env.REDIS_URL || 'redis://localhost:6379',
   );
+  const redisStore = new RedisStore({
+    client: redisClient,
+    prefix: 'sess:',
+  });
 
   // Configure Session with Redis Store
   // - rolling: false -> avoid per-request session writes for anonymous/public traffic
@@ -99,7 +131,7 @@ export function configureHttpApp(app: INestApplication): AppRuntimeResources {
   // - Absolute TTL is checked via session.createdAt in middleware
   app.use(
     session({
-      store: new RedisStore({ client: redisClient, prefix: 'sess:' }),
+      store: redisStore,
       secret: process.env.SESSION_SECRET || 'dev_secret_unsafe',
       resave: false,
       saveUninitialized: false,
@@ -116,17 +148,20 @@ export function configureHttpApp(app: INestApplication): AppRuntimeResources {
   );
 
   // Absolute TTL middleware - check session.createdAt
-  app.use((req: any, res: any, next: any) => {
-    if (req.session) {
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const request = req as RequestWithSession;
+    const sessionState = request.session;
+
+    if (sessionState) {
       // Set createdAt on first request
-      if (!req.session.createdAt) {
-        req.session.createdAt = Date.now();
+      if (typeof sessionState.createdAt !== 'number') {
+        sessionState.createdAt = Date.now();
       }
 
       // Check absolute TTL (14 days)
-      const age = Date.now() - req.session.createdAt;
+      const age = Date.now() - sessionState.createdAt;
       if (age > ABSOLUTE_TTL_MS) {
-        return req.session.destroy((err: any) => {
+        return sessionState.destroy((err?: unknown) => {
           if (err) console.error('Session destroy error:', err);
           res.clearCookie('sid');
           res.status(401).json({ error: 'Session expired (absolute TTL)' });

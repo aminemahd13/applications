@@ -22,4 +22,7 @@ async function bootstrap() {
     throw error;
   }
 }
-bootstrap();
+void bootstrap().catch((error: unknown) => {
+  console.error('Application bootstrap failed:', error);
+  process.exit(1);
+});
