@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "jest --config jest.config.cjs --runInBand"
   },
   "dependencies": {
     "@event-platform/schemas": "*",

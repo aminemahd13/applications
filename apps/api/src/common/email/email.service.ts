@@ -39,6 +39,10 @@ export class EmailService implements OnModuleInit {
         'SMTP_HOST is not set. Falling back to localhost; outbound email will fail unless an SMTP server is running in this container.',
       );
     }
+    if (process.env.NODE_ENV === 'test') {
+      this.logger.log('Skipping SMTP connectivity verification in test mode.');
+      return;
+    }
 
     try {
       await this.transporter.verify();

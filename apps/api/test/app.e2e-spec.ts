@@ -1,29 +1,30 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
+import { E2EAppHandle, createE2EApp } from './test-app.factory';
 
 describe('AppController (e2e)', () => {
-  let app: INestApplication<App>;
+  let appHandle: E2EAppHandle;
 
-  beforeEach(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication();
-    await app.init();
+  beforeAll(async () => {
+    appHandle = await createE2EApp();
   });
 
-  afterEach(async () => {
-    await app.close();
+  afterAll(async () => {
+    await appHandle.close();
   });
 
-  it('/ (GET)', () => {
-    return request(app.getHttpServer())
-      .get('/')
-      .expect(200)
-      .expect('Hello World!');
+  it('/api/v1/ (GET)', () => {
+    const server = appHandle.app.getHttpServer() as App;
+    return request(server).get('/api/v1/').expect(200).expect('Hello World!');
+  });
+
+  it('/api/v1/auth/csrf (GET) returns token and cookie', async () => {
+    const server = appHandle.app.getHttpServer() as App;
+    const response = await request(server).get('/api/v1/auth/csrf').expect(200);
+
+    expect(response.body).toHaveProperty('csrfToken');
+    expect(response.headers['set-cookie']).toEqual(
+      expect.arrayContaining([expect.stringContaining('csrf_token=')]),
+    );
   });
 });
