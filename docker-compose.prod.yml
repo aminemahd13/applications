@@ -18,7 +18,7 @@ services:
     image: redis:7-alpine
     container_name: event_platform_redis
     restart: always
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    command: redis-server --requirepass ${REDIS_PASSWORD:-example}
     networks:
       - event_platform_net
 
@@ -41,6 +41,8 @@ services:
       dockerfile: apps/api/Dockerfile
     container_name: event_platform_api
     restart: always
+    env_file:
+      - ./.env
     depends_on:
       - postgres
       - redis
@@ -53,8 +55,8 @@ services:
       
       # Database & Redis
       # Note: We use the service names 'postgres' and 'redis' as hostnames within the Docker network
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-event_platform}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-event_platform}}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-example}@redis:6379}
       
       # Security
       JWT_SECRET: ${JWT_SECRET}
@@ -66,11 +68,11 @@ services:
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
       
       # S3 / MinIO Storage
-      MINIO_ENDPOINT: minio
-      MINIO_PORT: 9000
-      MINIO_USE_SSL: "false"
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_PORT: ${MINIO_PORT:-9000}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-uploads}
       STORAGE_PUBLIC_ENDPOINT: ${STORAGE_PUBLIC_ENDPOINT:-}
       
@@ -104,6 +106,8 @@ services:
         NEXT_PUBLIC_ROUTING_MODE: ${NEXT_PUBLIC_ROUTING_MODE:-path}
     container_name: event_platform_web
     restart: always
+    env_file:
+      - ./.env
     depends_on:
       - api
     ports:
@@ -119,7 +123,7 @@ services:
       # API & Assets
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
       # Server-side Next.js calls (RSC/middleware) should use internal Docker network.
-      INTERNAL_API_URL: http://api:3000/api/v1
+      INTERNAL_API_URL: ${INTERNAL_API_URL:-http://api:3000/api/v1}
       # If using external S3/CDN directly, set this. Otherwise leave empty for proxying or relative paths.
       NEXT_PUBLIC_ASSET_HOST: ${NEXT_PUBLIC_ASSET_HOST-/uploads}
       NEXT_PUBLIC_DIRECT_ASSET_HOST: ${NEXT_PUBLIC_DIRECT_ASSET_HOST:-}
