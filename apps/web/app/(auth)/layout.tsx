@@ -23,7 +23,7 @@ export default function AuthLayout({
         <div className="relative z-10 flex flex-col justify-center px-12 text-primary-foreground">
           <div className="flex items-center gap-3 mb-8">
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 backdrop-blur font-bold text-xl">
-              M&M
+              M
             </div>
             <span className="text-2xl font-bold">Math&Maroc</span>
           </div>
@@ -43,7 +43,7 @@ export default function AuthLayout({
         <div className="flex items-center justify-between p-4">
           <div className="lg:hidden flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
-              M&M
+              M
             </div>
             <span className="font-semibold">Math&Maroc</span>
           </div>
