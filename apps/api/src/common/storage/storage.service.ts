@@ -1,21 +1,27 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  CreateBucketCommand,
+  HeadBucketCommand,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createHash } from 'crypto';
 
 @Injectable()
-export class StorageService {
+export class StorageService implements OnModuleInit {
   private s3Client: S3Client;
   private signingS3Client: S3Client;
   private bucket: string;
   private logger = new Logger(StorageService.name);
+
+  async onModuleInit(): Promise<void> {
+    await this.ensureBucketExists();
+  }
 
   private resolveStorageEndpoint(
     rawEndpoint: string | undefined,
@@ -247,5 +253,58 @@ export class StorageService {
       hash.update(chunk);
     }
     return hash.digest('hex');
+  }
+
+  private async ensureBucketExists(): Promise<void> {
+    try {
+      await this.s3Client.send(
+        new HeadBucketCommand({
+          Bucket: this.bucket,
+        }),
+      );
+      return;
+    } catch (error) {
+      const statusCode =
+        (error as { $metadata?: { httpStatusCode?: number } })?.$metadata
+          ?.httpStatusCode ?? 0;
+      const name = (error as { name?: string })?.name ?? '';
+      const missingBucket =
+        statusCode === 404 ||
+        name === 'NotFound' ||
+        name === 'NoSuchBucket';
+
+      if (!missingBucket) {
+        this.logger.warn(
+          `Bucket check skipped for "${this.bucket}" (${name || 'unknown'}${statusCode ? ` ${statusCode}` : ''})`,
+        );
+        return;
+      }
+    }
+
+    try {
+      await this.s3Client.send(
+        new CreateBucketCommand({
+          Bucket: this.bucket,
+        }),
+      );
+      this.logger.log(`Created missing storage bucket "${this.bucket}"`);
+    } catch (error) {
+      const statusCode =
+        (error as { $metadata?: { httpStatusCode?: number } })?.$metadata
+          ?.httpStatusCode ?? 0;
+      const name = (error as { name?: string })?.name ?? '';
+      const alreadyExists =
+        statusCode === 409 ||
+        name === 'BucketAlreadyExists' ||
+        name === 'BucketAlreadyOwnedByYou';
+
+      if (alreadyExists) {
+        return;
+      }
+
+      this.logger.error(
+        `Failed to create storage bucket "${this.bucket}" (${name || 'unknown'}${statusCode ? ` ${statusCode}` : ''})`,
+      );
+    }
   }
 }
