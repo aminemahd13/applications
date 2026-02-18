@@ -99,6 +99,55 @@ describe('MicrositesService', () => {
     });
   });
 
+  it('allows empty slug when creating the homepage', async () => {
+    prisma.microsites.upsert.mockResolvedValue({ id: 'ms-1' });
+    prisma.microsite_pages.findFirst.mockResolvedValue(null);
+    let createInput:
+      | {
+          data: { slug: string };
+        }
+      | undefined;
+    prisma.microsite_pages.create.mockImplementation((input) => {
+      createInput = input as { data: { slug: string } };
+      return Promise.resolve(input);
+    });
+
+    await service.createPage('event-1', {
+      slug: '',
+      title: 'Home',
+      position: 0,
+      blocks: [],
+      seo: {},
+      customCode: {},
+      visibility: 'PUBLIC',
+    });
+
+    expect(prisma.microsite_pages.findFirst).toHaveBeenCalledWith({
+      where: { microsite_id: 'ms-1' },
+      orderBy: { position: 'asc' },
+      select: { id: true },
+    });
+    expect(createInput).toBeDefined();
+    expect((createInput as { data: { slug: string } }).data.slug).toBe('');
+  });
+
+  it('rejects empty slug when creating a non-home page', async () => {
+    prisma.microsites.upsert.mockResolvedValue({ id: 'ms-1' });
+    prisma.microsite_pages.findFirst.mockResolvedValue({ id: 'page-1' });
+
+    await expect(
+      service.createPage('event-1', {
+        slug: '',
+        title: 'FAQ',
+        position: 1,
+        blocks: [],
+        seo: {},
+        customCode: {},
+        visibility: 'PUBLIC',
+      }),
+    ).rejects.toThrow('Only the homepage can use an empty slug');
+  });
+
   it('merges and sanitizes SEO custom code on create', async () => {
     prisma.microsites.upsert.mockResolvedValue({ id: 'ms-1' });
     prisma.microsite_pages.findFirst.mockResolvedValue(null);
@@ -210,6 +259,56 @@ describe('MicrositesService', () => {
       css: '.hero { color: blue; }',
     });
     expect(customCode).not.toHaveProperty('js');
+  });
+
+  it('allows empty slug when updating the homepage', async () => {
+    prisma.microsite_pages.findUnique.mockResolvedValue({
+      id: 'page-1',
+      slug: 'landing',
+      microsite_id: 'ms-1',
+      microsites: { event_id: 'event-1' },
+      seo: {},
+    });
+    prisma.microsite_pages.findFirst
+      .mockResolvedValueOnce({ id: 'page-1' })
+      .mockResolvedValueOnce(null);
+    let updateInput:
+      | {
+          data: { slug: string };
+        }
+      | undefined;
+    prisma.microsite_pages.update.mockImplementation((input) => {
+      updateInput = input as { data: { slug: string } };
+      return Promise.resolve(input);
+    });
+
+    await service.updatePage('event-1', 'page-1', { slug: '' });
+
+    expect(prisma.microsite_pages.findFirst).toHaveBeenNthCalledWith(1, {
+      where: { microsite_id: 'ms-1' },
+      orderBy: { position: 'asc' },
+      select: { id: true },
+    });
+    expect(prisma.microsite_pages.findFirst).toHaveBeenNthCalledWith(2, {
+      where: { microsite_id: 'ms-1', slug: '' },
+    });
+    expect(updateInput).toBeDefined();
+    expect((updateInput as { data: { slug: string } }).data.slug).toBe('');
+  });
+
+  it('rejects empty slug when updating a non-home page', async () => {
+    prisma.microsite_pages.findUnique.mockResolvedValue({
+      id: 'page-2',
+      slug: 'faq',
+      microsite_id: 'ms-1',
+      microsites: { event_id: 'event-1' },
+      seo: {},
+    });
+    prisma.microsite_pages.findFirst.mockResolvedValue({ id: 'page-1' });
+
+    await expect(
+      service.updatePage('event-1', 'page-2', { slug: '' }),
+    ).rejects.toThrow('Only the homepage can use an empty slug');
   });
 
   it('uses root-page alias when fetching public home page', async () => {
