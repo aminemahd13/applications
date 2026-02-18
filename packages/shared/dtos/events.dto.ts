@@ -89,7 +89,7 @@ export const CheckinCertificateConfigSchema = z.object({
     template: z.object({
         text: CertificateTemplateTextSchema.optional().default({}),
         style: CertificateTemplateStyleSchema.optional().default({}),
-    }).optional().default({}),
+    }).optional().default(() => ({ text: {}, style: {} })),
 }).passthrough();
 
 export type CheckinCertificateConfig = z.infer<typeof CheckinCertificateConfigSchema>;
@@ -98,7 +98,10 @@ export const CheckinConfigSchema = z.object({
     enabled: z.boolean().optional().default(false),
     allowSelfCheckin: z.boolean().optional().default(false),
     qrCodeRequired: z.boolean().optional().default(true),
-    certificate: CheckinCertificateConfigSchema.optional().default({}),
+    certificate: CheckinCertificateConfigSchema.optional().default(() => ({
+        publishMode: 'checkin' as const,
+        template: { text: {}, style: {} },
+    })),
 }).passthrough();
 
 export type CheckinConfig = z.infer<typeof CheckinConfigSchema>;
