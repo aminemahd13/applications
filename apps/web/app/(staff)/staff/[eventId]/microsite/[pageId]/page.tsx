@@ -95,7 +95,11 @@ import {
   resolveMicrositeThemeClass,
 } from "@/components/microsite/theme/runtime";
 import { toast } from "sonner";
-import type { Block as SharedBlock, MicrositeSettings as SharedMicrositeSettings } from "@event-platform/shared";
+import {
+  UpdateMicrositePageSchema,
+  type Block as SharedBlock,
+  type MicrositeSettings as SharedMicrositeSettings,
+} from "@event-platform/shared";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -259,6 +263,23 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(new Error("Failed to read file"));
     reader.readAsDataURL(file);
   });
+}
+
+function parseOptionalNumber(value: string): number | undefined {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseOptionalBoundedInt(
+  value: string,
+  min: number,
+  max: number,
+): number | undefined {
+  const parsed = parseOptionalNumber(value);
+  if (parsed === undefined) return undefined;
+  const rounded = Math.round(parsed);
+  return Math.min(max, Math.max(min, rounded));
 }
 
 function getDefaultData(type: BlockType): BlockData {
@@ -536,9 +557,31 @@ function getDefaultData(type: BlockType): BlockData {
 }
 
 function sanitizeBlocksForSave(inputBlocks: Block[]): Block[] {
+  function sanitizeJson(value: unknown): unknown {
+    if (value === null || value === undefined) return undefined;
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value : undefined;
+    }
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => sanitizeJson(item))
+        .filter((item) => item !== undefined);
+    }
+    if (typeof value === "object") {
+      const result: Record<string, unknown> = {};
+      for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+        const sanitized = sanitizeJson(nestedValue);
+        if (sanitized !== undefined) {
+          result[key] = sanitized;
+        }
+      }
+      return result;
+    }
+    return value;
+  }
+
   return inputBlocks.map((block) => {
-    if (block.type !== "CUSTOM_CODE") return block;
-    const data = { ...(block.data ?? {}) } as Record<string, unknown>;
+    const data = (sanitizeJson(block.data ?? {}) ?? {}) as Record<string, unknown>;
     if ("js" in data) delete data.js;
     return { ...block, data };
   });
@@ -546,8 +589,22 @@ function sanitizeBlocksForSave(inputBlocks: Block[]): Block[] {
 
 function sanitizeSeoForSave(inputSeo: Record<string, unknown> | undefined): Record<string, unknown> {
   const safeSeo = { ...(inputSeo ?? {}) } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(safeSeo)) {
+    if (value === null || value === undefined) {
+      delete safeSeo[key];
+      continue;
+    }
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      delete safeSeo[key];
+    }
+  }
   if (safeSeo.customCode && typeof safeSeo.customCode === "object" && !Array.isArray(safeSeo.customCode)) {
     const customCode = { ...(safeSeo.customCode as Record<string, unknown>) };
+    for (const [key, value] of Object.entries(customCode)) {
+      if (value === null || value === undefined) {
+        delete customCode[key];
+      }
+    }
     if ("js" in customCode) delete customCode.js;
     safeSeo.customCode = customCode;
   }
@@ -555,13 +612,17 @@ function sanitizeSeoForSave(inputSeo: Record<string, unknown> | undefined): Reco
 }
 
 function buildSavePayload(inputBlocks: Block[], inputPage: MicrositePage | null) {
-  return {
+  const payload: Record<string, unknown> = {
     blocks: sanitizeBlocksForSave(inputBlocks),
-    title: inputPage?.title ?? "",
-    slug: inputPage?.slug ?? "",
-    visibility: inputPage?.visibility ?? "HIDDEN",
     seo: sanitizeSeoForSave((inputPage?.seo ?? {}) as Record<string, unknown>),
+    title: String(inputPage?.title ?? "").trim(),
+    slug: String(inputPage?.slug ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, ""),
+    visibility: inputPage?.visibility === "PUBLIC" ? "PUBLIC" : "HIDDEN",
   };
+  return payload;
 }
 
 function getBlockSearchText(block: Block): string {
@@ -1312,7 +1373,9 @@ function SectionSettings({
             <Input
               type="number"
               value={background.overlayOpacity ?? ""}
-              onChange={(e) => setBackground({ overlayOpacity: Number(e.target.value) })}
+              onChange={(e) =>
+                setBackground({ overlayOpacity: parseOptionalBoundedInt(e.target.value, 0, 100) })
+              }
               placeholder="40"
             />
           </div>
@@ -1429,8 +1492,8 @@ function SectionSettings({
           <Label>Animation Delay (ms)</Label>
           <Input
             type="number"
-            value={section.animationDelayMs ?? 0}
-            onChange={(e) => setSection({ animationDelayMs: Number(e.target.value) })}
+            value={section.animationDelayMs ?? ""}
+            onChange={(e) => setSection({ animationDelayMs: parseOptionalBoundedInt(e.target.value, 0, 2000) })}
             min={0}
             max={2000}
           />
@@ -2643,7 +2706,9 @@ function BlockInspector({
             <Input
               type="number"
               value={String(data.intervalMs ?? 3500)}
-              onChange={(e) => updateField("intervalMs", Number(e.target.value))}
+              onChange={(e) =>
+                updateField("intervalMs", parseOptionalBoundedInt(e.target.value, 1000, 10000) ?? 3500)
+              }
             />
           </div>
           <ArrayItemsEditor
@@ -3619,6 +3684,7 @@ export default function MicrositePageEditor() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const leftPanelRef = useRef<HTMLElement | null>(null);
   const rightPanelRef = useRef<HTMLElement | null>(null);
+  const saveValidationRef = useRef<string | null>(null);
 
   // Undo/redo stack
   const [history, setHistory] = useState<Block[][]>([]);
@@ -3890,11 +3956,29 @@ export default function MicrositePageEditor() {
   }
 
   const save = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    const parsedPayload = UpdateMicrositePageSchema.safeParse(savePayload);
+    if (!parsedPayload.success) {
+      const firstIssue = parsedPayload.error.issues[0];
+      const issuePath = firstIssue?.path?.join(".") || "payload";
+      const message = `${issuePath}: ${firstIssue?.message ?? "Invalid data"}`;
+
+      if (saveValidationRef.current !== message) {
+        toast.error(`Unable to save page. Fix: ${message}`);
+        saveValidationRef.current = message;
+      }
+      if (silent && autoSaveEnabled) {
+        setAutoSaveEnabled(false);
+        toast.error("Auto-save paused because page data is invalid.");
+      }
+      return;
+    }
+
+    saveValidationRef.current = null;
     setIsSaving(true);
     try {
       await apiClient(`/admin/events/${eventId}/microsite/pages/${pageId}`, {
         method: "PATCH",
-        body: savePayload,
+        body: parsedPayload.data,
         csrfToken: csrfToken ?? undefined,
       });
       setSavedSnapshot(currentSnapshot);
@@ -3905,7 +3989,7 @@ export default function MicrositePageEditor() {
     } finally {
       setIsSaving(false);
     }
-  }, [csrfToken, currentSnapshot, eventId, pageId, savePayload]);
+  }, [autoSaveEnabled, csrfToken, currentSnapshot, eventId, pageId, savePayload]);
 
   useEffect(() => {
     if (!autoSaveEnabled || !isDirty || isSaving) return;
