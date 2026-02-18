@@ -142,3 +142,38 @@ describe('ApplicationsService completion credentials', () => {
     expect(verification.verification.signatureValid).toBe(true);
   });
 });
+
+describe('ApplicationsService applicant visibility', () => {
+  it('only resolves my application for published events', async () => {
+    const mockPrisma = {
+      applications: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const mockCls = {
+      get: jest.fn((key: string) => (key === 'actorId' ? 'user-1' : undefined)),
+    };
+    const stepStateService = {
+      ensureStepStates: jest.fn(),
+    };
+
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      mockCls as any,
+      stepStateService as any,
+    );
+
+    const result = await service.findMyApplication('event-1');
+
+    expect(result).toBeNull();
+    expect(mockPrisma.applications.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          event_id: 'event-1',
+          applicant_user_id: 'user-1',
+          events: { is: { status: 'published' } },
+        }),
+      }),
+    );
+  });
+});

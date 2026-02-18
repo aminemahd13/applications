@@ -19,7 +19,10 @@ export class SelfApplicationsController {
     const actorId = this.cls.get('actorId');
 
     const applications = await this.prisma.applications.findMany({
-      where: { applicant_user_id: actorId },
+      where: {
+        applicant_user_id: actorId,
+        events: { is: { status: 'published' } },
+      },
       orderBy: { updated_at: 'desc' },
       include: {
         events: {

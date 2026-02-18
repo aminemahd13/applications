@@ -638,7 +638,11 @@ export class ApplicationsService {
     const userId = this.cls.get('actorId');
 
     let app: any = await (this.prisma as any).applications.findFirst({
-      where: { event_id: eventId, applicant_user_id: userId },
+      where: {
+        event_id: eventId,
+        applicant_user_id: userId,
+        events: { is: { status: 'published' } },
+      },
       include: {
         users_applications_applicant_user_idTousers: {
           select: {
@@ -692,7 +696,11 @@ export class ApplicationsService {
     );
     if (updated) {
       app = await (this.prisma as any).applications.findFirst({
-        where: { id: app.id, event_id: eventId },
+        where: {
+          id: app.id,
+          event_id: eventId,
+          events: { is: { status: 'published' } },
+        },
         include: {
           users_applications_applicant_user_idTousers: {
             select: {
