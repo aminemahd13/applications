@@ -23,33 +23,18 @@ export default function AuthLayout({
         <div className="relative z-10 flex flex-col justify-center px-12 text-primary-foreground">
           <div className="flex items-center gap-3 mb-8">
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 backdrop-blur font-bold text-xl">
-              M
+              M&M
             </div>
             <span className="text-2xl font-bold">Math&Maroc</span>
           </div>
           <h1 className="text-4xl font-bold leading-tight mb-4">
-            Your gateway to
-            <br />
-            mathematical excellence
+            Unlocking the scientific <br/> 
+            potential of Moroccan youth
           </h1>
           <p className="text-lg text-primary-foreground/80 max-w-md">
             Apply to competitions, training camps, and academic programs.
             Track your applications and connect with the community.
           </p>
-          <div className="mt-12 grid grid-cols-3 gap-6">
-            <div>
-              <div className="text-3xl font-bold">50+</div>
-              <div className="text-sm text-primary-foreground/70">Events</div>
-            </div>
-            <div>
-              <div className="text-3xl font-bold">5k+</div>
-              <div className="text-sm text-primary-foreground/70">Applicants</div>
-            </div>
-            <div>
-              <div className="text-3xl font-bold">98%</div>
-              <div className="text-sm text-primary-foreground/70">Satisfaction</div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -58,7 +43,7 @@ export default function AuthLayout({
         <div className="flex items-center justify-between p-4">
           <div className="lg:hidden flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
-              M
+              M&M
             </div>
             <span className="font-semibold">Math&Maroc</span>
           </div>
