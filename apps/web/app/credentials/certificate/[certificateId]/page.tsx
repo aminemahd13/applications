@@ -29,7 +29,39 @@ interface CertificatePayload {
   recipient: {
     name: string;
   };
+  template?: {
+    text?: {
+      title?: string;
+      subtitle?: string;
+      completionText?: string;
+      footerText?: string;
+    };
+    style?: {
+      primaryColor?: string;
+      secondaryColor?: string;
+      backgroundColor?: string;
+      textColor?: string;
+      borderColor?: string;
+    };
+  };
 }
+
+const DEFAULT_CERTIFICATE_TEMPLATE = {
+  text: {
+    title: "Certificate of Completion",
+    subtitle: "This certifies that",
+    completionText: "has successfully completed",
+    footerText:
+      "Verification available via the secure credential link below.",
+  },
+  style: {
+    primaryColor: "#2563eb",
+    secondaryColor: "#1d4ed8",
+    backgroundColor: "#ffffff",
+    textColor: "#0f172a",
+    borderColor: "#cbd5e1",
+  },
+} as const;
 
 export default function CertificatePage() {
   const params = useParams();
@@ -67,6 +99,7 @@ export default function CertificatePage() {
             recipient: {
               name: raw.recipient?.name ?? "Attendee",
             },
+            template: raw.template,
           });
         }
       } catch {
@@ -99,6 +132,15 @@ export default function CertificatePage() {
     );
   }
 
+  const templateText = {
+    ...DEFAULT_CERTIFICATE_TEMPLATE.text,
+    ...(certificate.template?.text ?? {}),
+  };
+  const templateStyle = {
+    ...DEFAULT_CERTIFICATE_TEMPLATE.style,
+    ...(certificate.template?.style ?? {}),
+  };
+
   return (
     <div className="mx-auto max-w-4xl space-y-4 p-6">
       <div className="flex flex-wrap items-center justify-between gap-2 print:hidden">
@@ -117,14 +159,30 @@ export default function CertificatePage() {
         </div>
       </div>
 
-      <Card className="overflow-hidden border-2 print:shadow-none">
-        <div className="bg-primary p-10 text-center text-primary-foreground print:bg-white print:text-black print:border-b">
-          <p className="text-xs uppercase tracking-[0.35em]">Certificate of Completion</p>
+      <Card
+        className="overflow-hidden border-2 print:shadow-none"
+        style={{ borderColor: templateStyle.borderColor }}
+      >
+        <div
+          className="p-10 text-center print:border-b"
+          style={{
+            background: `linear-gradient(140deg, ${templateStyle.primaryColor} 0%, ${templateStyle.secondaryColor} 100%)`,
+            color: templateStyle.backgroundColor,
+          }}
+        >
+          <p className="text-xs uppercase tracking-[0.35em]">{templateText.title}</p>
+          <p className="mt-2 text-xs uppercase tracking-wide opacity-80">{templateText.subtitle}</p>
           <h2 className="mt-4 text-3xl font-semibold">{certificate.recipient.name}</h2>
-          <p className="mt-2 text-sm opacity-90">has successfully completed</p>
+          <p className="mt-2 text-sm opacity-90">{templateText.completionText}</p>
           <p className="mt-1 text-lg font-medium">{certificate.event.title}</p>
         </div>
-        <CardContent className="space-y-6 p-8">
+        <CardContent
+          className="space-y-6 p-8"
+          style={{
+            backgroundColor: templateStyle.backgroundColor,
+            color: templateStyle.textColor,
+          }}
+        >
           <div className="flex flex-wrap items-center gap-3">
             {certificate.status === "ISSUED" ? (
               <Badge>Issued</Badge>
@@ -167,7 +225,7 @@ export default function CertificatePage() {
             )}
           </div>
 
-          <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <div className="rounded-lg border p-3 text-xs text-muted-foreground">
             Verification link:{" "}
             <a
               href={certificate.verifiableCredentialUrl}
@@ -178,6 +236,8 @@ export default function CertificatePage() {
               {certificate.verifiableCredentialUrl}
             </a>
           </div>
+
+          <p className="text-center text-xs text-muted-foreground">{templateText.footerText}</p>
 
           <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
             <Award className="h-4 w-4" />
