@@ -49,9 +49,13 @@ function maybeRedirectMicrositeAsset(req: NextRequest): NextResponse | null {
   const storageKey = extractStorageKeyFromUploadsPath(req.nextUrl.pathname);
   if (!storageKey || !MICROSITE_STORAGE_KEY_RE.test(storageKey)) return null;
 
-  const resolverUrl = new URL("/api/v1/microsites/assets", req.url);
-  resolverUrl.searchParams.set("key", storageKey);
-  return NextResponse.redirect(resolverUrl, 302);
+  const relativeResolverPath = `/api/v1/microsites/assets?key=${encodeURIComponent(storageKey)}`;
+  return new NextResponse(null, {
+    status: 302,
+    headers: {
+      location: relativeResolverPath,
+    },
+  });
 }
 
 function normalizeAbsoluteUrl(value: string | undefined): string | null {
