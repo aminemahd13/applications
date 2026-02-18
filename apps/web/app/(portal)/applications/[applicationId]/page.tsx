@@ -6,12 +6,14 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import {
   ArrowRight,
+  Award,
   Calendar,
   AlertCircle,
   CheckCircle2,
   Clock,
   PartyPopper,
   QrCode,
+  ShieldCheck,
   Ticket,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,6 +43,15 @@ interface ApplicationDetail {
   eventTitle: string;
   decisionStatus: string;
   decisionPublishedAt?: string;
+  completionCredential?: {
+    certificateId: string;
+    credentialId: string;
+    certificateUrl: string;
+    verifiableCredentialUrl: string;
+    issuedAt: string;
+    revokedAt: string | null;
+    status: "ISSUED" | "REVOKED";
+  };
   stepStates: StepState[];
   submissionHistory?: Array<{
     id: string;
@@ -98,6 +109,20 @@ export default function ApplicationWorkspacePage() {
             raw.eventTitle ?? (match as any).eventTitle ?? "Event",
           decisionStatus: raw.decisionStatus ?? "NONE",
           decisionPublishedAt: raw.decisionPublishedAt,
+          completionCredential:
+            raw.completionCredential &&
+            typeof raw.completionCredential === "object"
+              ? {
+                  certificateId: raw.completionCredential.certificateId,
+                  credentialId: raw.completionCredential.credentialId,
+                  certificateUrl: raw.completionCredential.certificateUrl,
+                  verifiableCredentialUrl:
+                    raw.completionCredential.verifiableCredentialUrl,
+                  issuedAt: raw.completionCredential.issuedAt,
+                  revokedAt: raw.completionCredential.revokedAt ?? null,
+                  status: raw.completionCredential.status ?? "ISSUED",
+                }
+              : undefined,
           stepStates: (raw.stepStates ?? []).map((s: any) => ({
             id: s.stepId ?? s.id,
             stepId: s.stepId ?? s.id,
@@ -142,6 +167,10 @@ export default function ApplicationWorkspacePage() {
 
   const allStepsComplete = completedSteps === app.stepStates.length && app.stepStates.length > 0;
   const showTicketBanner = app.decisionStatus === "ACCEPTED" && allStepsComplete;
+  const completionCredential =
+    app.completionCredential?.status === "ISSUED"
+      ? app.completionCredential
+      : undefined;
 
   const decisionColors: Record<string, string> = {
     ACCEPTED: "border-success bg-success/5",
@@ -214,6 +243,52 @@ export default function ApplicationWorkspacePage() {
                   View Ticket
                 </Link>
               </Button>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+
+      {completionCredential && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.2 }}
+        >
+          <Card className="border-primary/30 bg-primary/5">
+            <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-start gap-3">
+                <div className="rounded-full bg-primary/10 p-2">
+                  <Award className="h-5 w-5 text-primary" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold">Completion credential issued</p>
+                  <p className="text-xs text-muted-foreground">
+                    Issued {new Date(completionCredential.issuedAt).toLocaleDateString()}
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" asChild>
+                  <a
+                    href={completionCredential.certificateUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <Award className="mr-1.5 h-3.5 w-3.5" />
+                    Certificate
+                  </a>
+                </Button>
+                <Button size="sm" asChild>
+                  <a
+                    href={completionCredential.verifiableCredentialUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
+                    Verify
+                  </a>
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </motion.div>
@@ -308,6 +383,24 @@ export default function ApplicationWorkspacePage() {
                         <QrCode className="mr-1 h-3 w-3" />
                         QR ready
                       </Link>
+                    </Button>
+                  </div>
+                </>
+              )}
+              {completionCredential && (
+                <>
+                  <Separator className="my-1" />
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-muted-foreground">Credential</span>
+                    <Button variant="link" size="sm" className="h-auto p-0 text-xs" asChild>
+                      <a
+                        href={completionCredential.certificateUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Award className="mr-1 h-3 w-3" />
+                        Issued
+                      </a>
                     </Button>
                   </div>
                 </>

@@ -12,6 +12,7 @@ import {
   ApplicationSummary,
   ApplicationDetail,
   ApplicantProfile,
+  CompletionCredential,
   BulkApplicationTagsDto,
   BulkAssignReviewerDto,
   BulkDecisionDraftDto,
@@ -26,6 +27,7 @@ import {
 } from '@event-platform/shared';
 import { StepStateService } from './step-state.service';
 import * as jwt from 'jsonwebtoken';
+import { createHmac } from 'node:crypto';
 
 @Injectable()
 export class ApplicationsService {
@@ -414,7 +416,7 @@ export class ApplicationsService {
     eventId: string,
     applicationId: string,
   ): Promise<ApplicationDetail> {
-    let app = await this.prisma.applications.findFirst({
+    let app: any = await (this.prisma as any).applications.findFirst({
       where: { id: applicationId, event_id: eventId },
       include: {
         users_applications_applicant_user_idTousers: {
@@ -460,7 +462,7 @@ export class ApplicationsService {
       eventId,
     );
     if (updated) {
-      app = await this.prisma.applications.findFirst({
+      app = await (this.prisma as any).applications.findFirst({
         where: { id: applicationId, event_id: eventId },
         include: {
           users_applications_applicant_user_idTousers: {
@@ -496,6 +498,14 @@ export class ApplicationsService {
           },
           attendance_records: {
             select: { status: true },
+          },
+          completion_credentials: {
+            select: {
+              certificate_id: true,
+              credential_id: true,
+              issued_at: true,
+              revoked_at: true,
+            },
           },
         },
       });
@@ -627,7 +637,7 @@ export class ApplicationsService {
   async findMyApplication(eventId: string): Promise<ApplicationDetail | null> {
     const userId = this.cls.get('actorId');
 
-    let app = await this.prisma.applications.findFirst({
+    let app: any = await (this.prisma as any).applications.findFirst({
       where: { event_id: eventId, applicant_user_id: userId },
       include: {
         users_applications_applicant_user_idTousers: {
@@ -664,6 +674,14 @@ export class ApplicationsService {
         attendance_records: {
           select: { status: true },
         },
+        completion_credentials: {
+          select: {
+            certificate_id: true,
+            credential_id: true,
+            issued_at: true,
+            revoked_at: true,
+          },
+        },
       },
     });
 
@@ -673,7 +691,7 @@ export class ApplicationsService {
       eventId,
     );
     if (updated) {
-      app = await this.prisma.applications.findFirst({
+      app = await (this.prisma as any).applications.findFirst({
         where: { id: app.id, event_id: eventId },
         include: {
           users_applications_applicant_user_idTousers: {
@@ -709,6 +727,14 @@ export class ApplicationsService {
           },
           attendance_records: {
             select: { status: true },
+          },
+          completion_credentials: {
+            select: {
+              certificate_id: true,
+              credential_id: true,
+              issued_at: true,
+              revoked_at: true,
+            },
           },
         },
       });
@@ -1746,6 +1772,13 @@ export class ApplicationsService {
 
     if (
       app.attendance_records &&
+      app.attendance_records.status === 'CHECKED_IN'
+    ) {
+      return 'CHECKED_IN';
+    }
+
+    if (
+      app.attendance_records &&
       app.attendance_records.status === 'CONFIRMED'
     ) {
       return 'CONFIRMED';
@@ -1816,6 +1849,9 @@ export class ApplicationsService {
         ? null
         : app.assigned_reviewer_id,
       applicantProfile: applicantProfile ?? undefined,
+      completionCredential: this.toCompletionCredential(
+        app.completion_credentials ?? null,
+      ),
       stepStates: stepStates.map((ss: any) => ({
         id: `${ss.application_id}:${ss.step_id}`,
         stepId: ss.step_id,
@@ -2068,6 +2104,81 @@ export class ApplicationsService {
     return baseUrl.replace(/\/+$/, '');
   }
 
+  private getCredentialIssuerName(): string {
+    const issuer = (process.env.CREDENTIAL_ISSUER ?? '').trim();
+    if (issuer.length > 0) return issuer;
+    return 'Math&Maroc Event Platform';
+  }
+
+  private getCredentialSigningSecret(): string {
+    const explicit = (process.env.CREDENTIAL_SIGNING_SECRET ?? '').trim();
+    if (explicit.length > 0) return explicit;
+    return this.getJwtSecret();
+  }
+
+  private getCompletionCredentialLinks(
+    certificateId: string,
+    credentialId: string,
+  ): { certificateUrl: string; verifiableCredentialUrl: string } {
+    const appBaseUrl = this.getAppBaseUrl();
+    return {
+      certificateUrl: `${appBaseUrl}/credentials/certificate/${certificateId}`,
+      verifiableCredentialUrl: `${appBaseUrl}/credentials/verify/${credentialId}`,
+    };
+  }
+
+  private buildCompletionCredentialSignature(input: {
+    applicationId: string;
+    applicantUserId: string;
+    eventId: string;
+    certificateId: string;
+    credentialId: string;
+    issuedAt: Date;
+    checkedInAt: Date;
+  }): string {
+    const payload = [
+      input.applicationId,
+      input.applicantUserId,
+      input.eventId,
+      input.certificateId,
+      input.credentialId,
+      input.issuedAt.toISOString(),
+      input.checkedInAt.toISOString(),
+    ].join('|');
+
+    return createHmac('sha256', this.getCredentialSigningSecret())
+      .update(payload)
+      .digest('hex');
+  }
+
+  private toCompletionCredential(
+    record:
+      | {
+          certificate_id: string;
+          credential_id: string;
+          issued_at: Date;
+          revoked_at: Date | null;
+        }
+      | null
+      | undefined,
+  ): CompletionCredential | undefined {
+    if (!record) return undefined;
+
+    const links = this.getCompletionCredentialLinks(
+      record.certificate_id,
+      record.credential_id,
+    );
+    return {
+      certificateId: record.certificate_id,
+      credentialId: record.credential_id,
+      certificateUrl: links.certificateUrl,
+      verifiableCredentialUrl: links.verifiableCredentialUrl,
+      issuedAt: record.issued_at,
+      revokedAt: record.revoked_at ?? null,
+      status: record.revoked_at ? 'REVOKED' : 'ISSUED',
+    };
+  }
+
   private toFilenameSafePart(value: string): string {
     const normalized = value
       .trim()
@@ -2190,6 +2301,337 @@ export class ApplicationsService {
     }
     if (typeof value === 'number') return value !== 0;
     return fallback;
+  }
+
+  async getCompletionCredentialForApplication(
+    eventId: string,
+    applicationId: string,
+  ): Promise<CompletionCredential | null> {
+    const app = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+      select: {
+        id: true,
+        attendance_records: {
+          select: {
+            status: true,
+            checked_in_at: true,
+          },
+        },
+      },
+    });
+    if (!app) throw new NotFoundException('Application not found');
+
+    const existing = await (this.prisma as any).completion_credentials.findUnique({
+      where: { application_id: applicationId },
+      select: {
+        certificate_id: true,
+        credential_id: true,
+        issued_at: true,
+        revoked_at: true,
+      },
+    });
+    if (existing) {
+      return this.toCompletionCredential(existing) ?? null;
+    }
+
+    if (
+      app.attendance_records?.status === 'CHECKED_IN' &&
+      app.attendance_records.checked_in_at
+    ) {
+      return this.issueCompletionCredential(eventId, applicationId, {
+        checkedInAt: app.attendance_records.checked_in_at,
+      });
+    }
+
+    return null;
+  }
+
+  async issueCompletionCredential(
+    eventId: string,
+    applicationId: string,
+    options?: { checkedInAt?: Date | null },
+  ): Promise<CompletionCredential> {
+    const app = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+      select: {
+        id: true,
+        event_id: true,
+        applicant_user_id: true,
+        attendance_records: {
+          select: {
+            status: true,
+            checked_in_at: true,
+          },
+        },
+      },
+    });
+    if (!app) throw new NotFoundException('Application not found');
+
+    if (
+      app.attendance_records?.status !== 'CHECKED_IN' ||
+      !app.attendance_records.checked_in_at
+    ) {
+      throw new BadRequestException(
+        'Completion credential can only be issued after check-in',
+      );
+    }
+
+    const checkedInAt = options?.checkedInAt ?? app.attendance_records.checked_in_at;
+    const existing = await (this.prisma as any).completion_credentials.findUnique({
+      where: { application_id: applicationId },
+      select: {
+        certificate_id: true,
+        credential_id: true,
+        issued_at: true,
+        revoked_at: true,
+      },
+    });
+
+    const certificateId = existing?.certificate_id ?? crypto.randomUUID();
+    const credentialId = existing?.credential_id ?? crypto.randomUUID();
+    const issuedAt =
+      !existing || existing.revoked_at ? checkedInAt : existing.issued_at;
+
+    const signature = this.buildCompletionCredentialSignature({
+      applicationId,
+      applicantUserId: app.applicant_user_id,
+      eventId,
+      certificateId,
+      credentialId,
+      issuedAt,
+      checkedInAt,
+    });
+
+    const now = new Date();
+    const record = existing
+      ? await (this.prisma as any).completion_credentials.update({
+          where: { application_id: applicationId },
+          data: {
+            event_id: eventId,
+            credential_signature: signature,
+            issued_at: issuedAt,
+            revoked_at: null,
+            updated_at: now,
+          },
+          select: {
+            certificate_id: true,
+            credential_id: true,
+            issued_at: true,
+            revoked_at: true,
+          },
+        })
+      : await (this.prisma as any).completion_credentials.create({
+          data: {
+            application_id: applicationId,
+            event_id: eventId,
+            certificate_id: certificateId,
+            credential_id: credentialId,
+            credential_signature: signature,
+            issued_at: issuedAt,
+            revoked_at: null,
+            created_at: now,
+            updated_at: now,
+          },
+          select: {
+            certificate_id: true,
+            credential_id: true,
+            issued_at: true,
+            revoked_at: true,
+          },
+        });
+
+    const credential = this.toCompletionCredential(record);
+    if (!credential) {
+      throw new Error('Failed to create completion credential');
+    }
+    return credential;
+  }
+
+  async revokeCompletionCredential(
+    eventId: string,
+    applicationId: string,
+  ): Promise<void> {
+    const now = new Date();
+    await (this.prisma as any).completion_credentials.updateMany({
+      where: {
+        application_id: applicationId,
+        event_id: eventId,
+        revoked_at: null,
+      },
+      data: {
+        revoked_at: now,
+        updated_at: now,
+      },
+    });
+  }
+
+  async getPublicCertificate(certificateId: string): Promise<any> {
+    const record = await (this.prisma as any).completion_credentials.findUnique({
+      where: { certificate_id: certificateId },
+      include: {
+        events: {
+          select: {
+            id: true,
+            title: true,
+            slug: true,
+            status: true,
+            start_at: true,
+            end_at: true,
+            venue_name: true,
+            venue_address: true,
+          },
+        },
+        applications: {
+          select: {
+            id: true,
+            applicant_user_id: true,
+            attendance_records: {
+              select: {
+                checked_in_at: true,
+              },
+            },
+            users_applications_applicant_user_idTousers: {
+              select: {
+                applicant_profiles: { select: { full_name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!record) throw new NotFoundException('Certificate not found');
+
+    const attendeeName =
+      record.applications.users_applications_applicant_user_idTousers
+        ?.applicant_profiles?.full_name?.trim() || 'Attendee';
+    const checkedInAt =
+      record.applications.attendance_records?.checked_in_at ?? record.issued_at;
+    const links = this.getCompletionCredentialLinks(
+      record.certificate_id,
+      record.credential_id,
+    );
+    const location =
+      record.events.venue_name?.trim() ||
+      record.events.venue_address?.trim() ||
+      undefined;
+
+    return {
+      certificateId: record.certificate_id,
+      credentialId: record.credential_id,
+      status: record.revoked_at ? 'REVOKED' : 'ISSUED',
+      issuedAt: record.issued_at,
+      checkedInAt,
+      revokedAt: record.revoked_at,
+      issuer: this.getCredentialIssuerName(),
+      certificateUrl: links.certificateUrl,
+      verifiableCredentialUrl: links.verifiableCredentialUrl,
+      event: {
+        id: record.events.id,
+        title: record.events.title,
+        slug: record.events.slug,
+        status: record.events.status,
+        startAt: record.events.start_at,
+        endAt: record.events.end_at,
+        location,
+      },
+      recipient: {
+        name: attendeeName,
+      },
+      verification: {
+        algorithm: 'HMAC-SHA256',
+        signature: record.credential_signature,
+      },
+    };
+  }
+
+  async verifyCredential(credentialId: string): Promise<any> {
+    const record = await (this.prisma as any).completion_credentials.findUnique({
+      where: { credential_id: credentialId },
+      include: {
+        events: {
+          select: {
+            id: true,
+            title: true,
+            slug: true,
+            status: true,
+          },
+        },
+        applications: {
+          select: {
+            id: true,
+            applicant_user_id: true,
+            attendance_records: {
+              select: {
+                checked_in_at: true,
+              },
+            },
+            users_applications_applicant_user_idTousers: {
+              select: {
+                applicant_profiles: { select: { full_name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!record) throw new NotFoundException('Credential not found');
+
+    const checkedInAt =
+      record.applications.attendance_records?.checked_in_at ?? record.issued_at;
+    const expectedSignature = this.buildCompletionCredentialSignature({
+      applicationId: record.application_id,
+      applicantUserId: record.applications.applicant_user_id,
+      eventId: record.event_id,
+      certificateId: record.certificate_id,
+      credentialId: record.credential_id,
+      issuedAt: record.issued_at,
+      checkedInAt,
+    });
+    const signatureValid = expectedSignature === record.credential_signature;
+    const isRevoked = Boolean(record.revoked_at);
+    const eventStatus = String(record.events.status ?? '').toLowerCase();
+    const isArchivedEvent = eventStatus === 'archived';
+    // Archived events remain valid for verification as long as the credential itself is intact.
+    const valid = signatureValid && !isRevoked;
+    const links = this.getCompletionCredentialLinks(
+      record.certificate_id,
+      record.credential_id,
+    );
+
+    return {
+      valid,
+      status: isRevoked ? 'REVOKED' : signatureValid ? 'VALID' : 'INVALID',
+      issuer: this.getCredentialIssuerName(),
+      issuedAt: record.issued_at,
+      revokedAt: record.revoked_at,
+      certificateUrl: links.certificateUrl,
+      verifiableCredentialUrl: links.verifiableCredentialUrl,
+      credential: {
+        id: record.credential_id,
+        certificateId: record.certificate_id,
+        applicationId: record.application_id,
+        event: {
+          id: record.events.id,
+          title: record.events.title,
+          slug: record.events.slug,
+          status: record.events.status,
+        },
+        recipient: {
+          name:
+            record.applications.users_applications_applicant_user_idTousers
+              ?.applicant_profiles?.full_name ?? 'Attendee',
+        },
+        checkedInAt,
+      },
+      eventArchived: isArchivedEvent,
+      verification: {
+        algorithm: 'HMAC-SHA256',
+        signature: record.credential_signature,
+        signatureValid,
+      },
+    };
   }
 
   /**

@@ -187,10 +187,21 @@ export interface ApplicantProfile {
     links?: string[];
 }
 
+export interface CompletionCredential {
+    certificateId: string;
+    credentialId: string;
+    certificateUrl: string;
+    verifiableCredentialUrl: string;
+    issuedAt: Date;
+    revokedAt: Date | null;
+    status: "ISSUED" | "REVOKED";
+}
+
 export interface ApplicationDetail extends ApplicationSummary {
     internalNotes: string | null;
     assignedReviewerId: string | null;
     applicantProfile?: ApplicantProfile;
+    completionCredential?: CompletionCredential;
     stepStates: StepStateResponse[];
 }
 

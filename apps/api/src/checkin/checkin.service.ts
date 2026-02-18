@@ -8,12 +8,14 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
 import { Prisma } from '@event-platform/db';
 import * as jwt from 'jsonwebtoken';
+import { ApplicationsService } from '../applications/applications.service';
 
 @Injectable()
 export class CheckinService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cls: ClsService,
+    private readonly applicationsService: ApplicationsService,
   ) {}
 
   private readBoolean(value: unknown, fallback: boolean): boolean {
@@ -230,6 +232,14 @@ export class CheckinService {
           checked_in_by: null,
         },
       });
+      try {
+        await this.applicationsService.revokeCompletionCredential(
+          eventId,
+          record.application_id,
+        );
+      } catch {
+        // Best-effort: check-in rollback should not fail if credential revocation fails.
+      }
     }
 
     // Mark the checkin record as undone
@@ -322,14 +332,34 @@ export class CheckinService {
 
     if (checkinStatus === 'SUCCESS') {
       // Update attendance record
+      const checkedInAt = new Date();
       await this.prisma.attendance_records.update({
         where: { application_id: applicationId },
         data: {
           status: 'CHECKED_IN',
-          checked_in_at: new Date(),
+          checked_in_at: checkedInAt,
           checked_in_by: staffUserId,
         },
       });
+
+      try {
+        await this.applicationsService.issueCompletionCredential(
+          eventId,
+          applicationId,
+          { checkedInAt },
+        );
+      } catch {
+        // Best-effort: keep check-in successful even if credential issuance fails.
+      }
+    } else if (checkinStatus === 'ALREADY_CHECKED_IN') {
+      try {
+        await this.applicationsService.issueCompletionCredential(
+          eventId,
+          applicationId,
+        );
+      } catch {
+        // Best-effort: keep check-in response stable on issuance failures.
+      }
     }
 
     const applicantName =
@@ -424,6 +454,24 @@ export class CheckinService {
           checked_in_by: staffUserId,
         },
       });
+      try {
+        await this.applicationsService.issueCompletionCredential(
+          eventId,
+          applicationId,
+          { checkedInAt },
+        );
+      } catch {
+        // Best-effort: keep check-in successful even if credential issuance fails.
+      }
+    } else if (checkinStatus === 'ALREADY_CHECKED_IN') {
+      try {
+        await this.applicationsService.issueCompletionCredential(
+          eventId,
+          applicationId,
+        );
+      } catch {
+        // Best-effort: keep check-in response stable on issuance failures.
+      }
     }
 
     const applicantName =

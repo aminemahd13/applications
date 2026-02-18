@@ -42,6 +42,7 @@ const APP_ROUTE_SEGMENTS = new Set([
   "forgot-password",
   "reset-password",
   "verify-email",
+  "credentials",
   "admin",
   "dashboard",
   "events",
