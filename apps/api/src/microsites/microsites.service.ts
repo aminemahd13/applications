@@ -168,18 +168,36 @@ export class MicrositesService {
     const microsite = await this.ensureMicrosite(eventId);
 
     // Slug normalization: lowercase, alphanumeric + hyphens
-    const slug = (data.slug ?? '').toLowerCase().replace(/[^a-z0-9-]/g, '');
-    if (!slug || slug.length === 0)
-      throw new BadRequestException('Invalid slug');
+    const slug = String(data.slug ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '');
     if (slug === 'home')
       throw new BadRequestException('Slug "home" is reserved');
 
-    // Check uniqueness
-    const existing = await this.prisma.microsite_pages.findFirst({
-      where: { microsite_id: microsite.id, slug: slug },
-    });
-    if (existing)
-      throw new BadRequestException(`Page with slug '${slug}' already exists`);
+    if (slug.length === 0) {
+      // Empty slug is reserved for the homepage/root page only.
+      const existingRoot = await this.prisma.microsite_pages.findFirst({
+        where: { microsite_id: microsite.id },
+        orderBy: { position: 'asc' },
+        select: { id: true },
+      });
+      if (existingRoot) {
+        throw new BadRequestException(
+          'Only the homepage can use an empty slug',
+        );
+      }
+    } else {
+      // Check uniqueness for non-empty slugs.
+      const existing = await this.prisma.microsite_pages.findFirst({
+        where: { microsite_id: microsite.id, slug: slug },
+      });
+      if (existing) {
+        throw new BadRequestException(
+          `Page with slug '${slug}' already exists`,
+        );
+      }
+    }
 
     const seoBase = toJsonRecord(data.seo as unknown);
     const mergedCustomCode = {
@@ -225,11 +243,21 @@ export class MicrositesService {
         .trim()
         .toLowerCase()
         .replace(/[^a-z0-9-]/g, '');
-      if (!newSlug || newSlug.length === 0) {
-        throw new BadRequestException('Invalid slug');
-      }
       if (newSlug === 'home') {
         throw new BadRequestException('Slug "home" is reserved');
+      }
+
+      if (newSlug.length === 0) {
+        const rootPage = await this.prisma.microsite_pages.findFirst({
+          where: { microsite_id: page.microsite_id },
+          orderBy: { position: 'asc' },
+          select: { id: true },
+        });
+        if (!rootPage || rootPage.id !== page.id) {
+          throw new BadRequestException(
+            'Only the homepage can use an empty slug',
+          );
+        }
       }
 
       if (newSlug !== page.slug) {

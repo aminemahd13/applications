@@ -709,7 +709,8 @@ export type MicrositeSettings = z.infer<typeof MicrositeSettingsSchema>;
 
 
 export const CreateMicrositePageSchema = z.object({
-    slug: z.string().regex(/^[a-z0-9-]+$/).max(60),
+    // Empty slug is allowed for homepage/root page.
+    slug: z.string().regex(/^[a-z0-9-]*$/).max(60),
     title: z.string().min(1),
     position: z.number().int().default(0),
     blocks: z.array(BlockSchema).default([]),

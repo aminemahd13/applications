@@ -153,13 +153,23 @@ export default function MicrositePage_() {
   async function createPage() {
     if (!newPageTitle.trim()) return;
     try {
+      const explicitSlug = newPageSlug
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "");
+      const generatedSlug = newPageTitle
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^a-z0-9-]/g, "");
+      const slug = explicitSlug || (pages.length === 0 ? "" : generatedSlug);
+
       const res = await apiClient<unknown>(
         `/admin/events/${eventId}/microsite/pages`,
         {
           method: "POST",
           body: {
             title: newPageTitle,
-            slug: newPageSlug || newPageTitle.toLowerCase().replace(/\s+/g, "-"),
+            slug,
           },
           csrfToken: csrfToken ?? undefined,
         }
@@ -1346,6 +1356,9 @@ export default function MicrositePage_() {
             <div className="space-y-2">
               <Label className="text-sm">Slug</Label>
               <Input value={newPageSlug} onChange={(e) => setNewPageSlug(e.target.value)} placeholder="about-the-event" />
+              <p className="text-xs text-muted-foreground">
+                Leave blank on the first page to create the homepage route.
+              </p>
             </div>
           </div>
           <DialogFooter>
