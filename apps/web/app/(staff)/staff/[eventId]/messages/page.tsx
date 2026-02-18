@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Send,
@@ -55,6 +55,37 @@ interface SentMessage {
   readCount: number;
 }
 
+function normalizeMessage(raw: any): SentMessage {
+  return {
+    id: raw.id,
+    subject: raw.title ?? raw.subject ?? "(no subject)",
+    type: raw.type ?? "ANNOUNCEMENT",
+    recipientCount: raw.recipientCount ?? 0,
+    sentAt: raw.createdAt ?? raw.sentAt ?? new Date().toISOString(),
+    readCount: raw.readCount ?? 0,
+  };
+}
+
+function unpackMessagesPayload(raw: any): {
+  items: SentMessage[];
+  nextCursor: string | null;
+} {
+  const list: any[] = Array.isArray(raw)
+    ? raw
+    : Array.isArray(raw?.data)
+      ? raw.data
+      : [];
+  const parsedNextCursor =
+    typeof raw?.nextCursor === "string" && raw.nextCursor.length > 0
+      ? raw.nextCursor
+      : null;
+
+  return {
+    items: list.map(normalizeMessage),
+    nextCursor: parsedNextCursor,
+  };
+}
+
 export default function MessagesPage() {
   const params = useParams();
   const eventId = params.eventId as string;
@@ -76,44 +107,13 @@ export default function MessagesPage() {
   const [composeFilter, setComposeFilter] = useState("all");
   const [isSending, setIsSending] = useState(false);
 
-  function normalizeMessage(raw: any): SentMessage {
-    return {
-      id: raw.id,
-      subject: raw.title ?? raw.subject ?? "(no subject)",
-      type: raw.type ?? "ANNOUNCEMENT",
-      recipientCount: raw.recipientCount ?? 0,
-      sentAt: raw.createdAt ?? raw.sentAt ?? new Date().toISOString(),
-      readCount: raw.readCount ?? 0,
-    };
-  }
-
-  function unpackMessagesPayload(raw: any): {
-    items: SentMessage[];
-    nextCursor: string | null;
-  } {
-    const list: any[] = Array.isArray(raw)
-      ? raw
-      : Array.isArray(raw?.data)
-        ? raw.data
-        : [];
-    const parsedNextCursor =
-      typeof raw?.nextCursor === "string" && raw.nextCursor.length > 0
-        ? raw.nextCursor
-        : null;
-
-    return {
-      items: list.map(normalizeMessage),
-      nextCursor: parsedNextCursor,
-    };
-  }
-
-  async function fetchMessages(
+  const fetchMessages = useCallback(async (
     cursor?: string
-  ): Promise<{ items: SentMessage[]; nextCursor: string | null }> {
+  ): Promise<{ items: SentMessage[]; nextCursor: string | null }> => {
     const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
     const res = await apiClient<any>(`/events/${eventId}/messages${query}`);
     return unpackMessagesPayload(res);
-  }
+  }, [eventId]);
 
   useEffect(() => {
     (async () => {
@@ -127,7 +127,7 @@ export default function MessagesPage() {
         setIsLoading(false);
       }
     })();
-  }, [eventId]);
+  }, [fetchMessages]);
 
   async function handleSend() {
     if (!composeSubject.trim() || !composeBody.trim()) {

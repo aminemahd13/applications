@@ -1,5 +1,4 @@
 ﻿import type { Metadata } from "next";
-import Script from "next/script";
 import { Providers } from "@/components/providers";
 import { apiClient } from "@/lib/api";
 import { PublicPlatformSettings } from "@/components/providers/platform-settings-provider";
