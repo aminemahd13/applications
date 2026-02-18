@@ -21,6 +21,7 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { Permission } from '@event-platform/shared';
 import {
   ApplicationFilterSchema,
+  BulkApplicationIdsSchema,
   BulkApplicationTagsSchema,
   BulkAssignReviewerSchema,
   BulkDecisionDraftSchema,
@@ -393,6 +394,23 @@ export class ApplicationsController {
     const result = await this.applicationsService.getTicket(
       eventId,
       applicationId,
+    );
+    return { data: result };
+  }
+
+  /**
+   * Bulk issue completion credentials (manual issuance mode support)
+   */
+  @Post('completion-credentials/issue')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async bulkIssueCompletionCredentials(
+    @Param('eventId') eventId: string,
+    @Body() body: any,
+  ) {
+    const dto = BulkApplicationIdsSchema.parse(body);
+    const result = await this.applicationsService.issueCompletionCredentialsBulk(
+      eventId,
+      dto.applicationIds,
     );
     return { data: result };
   }

@@ -29,6 +29,24 @@ export class CheckinService {
     return fallback;
   }
 
+  private toRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {};
+    }
+    return value as Record<string, unknown>;
+  }
+
+  private shouldAutoIssueCompletionCredential(
+    checkinConfig: Record<string, unknown>,
+  ): boolean {
+    const certificate = this.toRecord(checkinConfig.certificate);
+    const publishMode =
+      typeof certificate.publishMode === 'string'
+        ? certificate.publishMode.trim().toLowerCase()
+        : '';
+    return publishMode !== 'manual';
+  }
+
   private async getCheckinConfig(
     eventId: string,
   ): Promise<Record<string, unknown>> {
@@ -254,7 +272,9 @@ export class CheckinService {
   /* ================================================================ */
 
   async scanTicket(eventId: string, token: string): Promise<any> {
-    await this.assertCheckinEnabled(eventId);
+    const config = await this.assertCheckinEnabled(eventId);
+    const autoIssueCompletionCredential =
+      this.shouldAutoIssueCompletionCredential(config);
     const staffUserId = this.cls.get('actorId');
     const secret = process.env.JWT_SECRET;
     if (!secret)
@@ -342,23 +362,27 @@ export class CheckinService {
         },
       });
 
-      try {
-        await this.applicationsService.issueCompletionCredential(
-          eventId,
-          applicationId,
-          { checkedInAt },
-        );
-      } catch {
-        // Best-effort: keep check-in successful even if credential issuance fails.
+      if (autoIssueCompletionCredential) {
+        try {
+          await this.applicationsService.issueCompletionCredential(
+            eventId,
+            applicationId,
+            { checkedInAt },
+          );
+        } catch {
+          // Best-effort: keep check-in successful even if credential issuance fails.
+        }
       }
     } else if (checkinStatus === 'ALREADY_CHECKED_IN') {
-      try {
-        await this.applicationsService.issueCompletionCredential(
-          eventId,
-          applicationId,
-        );
-      } catch {
-        // Best-effort: keep check-in response stable on issuance failures.
+      if (autoIssueCompletionCredential) {
+        try {
+          await this.applicationsService.issueCompletionCredential(
+            eventId,
+            applicationId,
+          );
+        } catch {
+          // Best-effort: keep check-in response stable on issuance failures.
+        }
       }
     }
 
@@ -397,6 +421,8 @@ export class CheckinService {
   async manualCheckin(eventId: string, applicationId: string): Promise<any> {
     const config = await this.assertCheckinEnabled(eventId);
     const qrCodeRequired = this.readBoolean(config.qrCodeRequired, true);
+    const autoIssueCompletionCredential =
+      this.shouldAutoIssueCompletionCredential(config);
     if (qrCodeRequired) {
       throw new BadRequestException(
         'Manual check-in is disabled for this event',
@@ -454,23 +480,27 @@ export class CheckinService {
           checked_in_by: staffUserId,
         },
       });
-      try {
-        await this.applicationsService.issueCompletionCredential(
-          eventId,
-          applicationId,
-          { checkedInAt },
-        );
-      } catch {
-        // Best-effort: keep check-in successful even if credential issuance fails.
+      if (autoIssueCompletionCredential) {
+        try {
+          await this.applicationsService.issueCompletionCredential(
+            eventId,
+            applicationId,
+            { checkedInAt },
+          );
+        } catch {
+          // Best-effort: keep check-in successful even if credential issuance fails.
+        }
       }
     } else if (checkinStatus === 'ALREADY_CHECKED_IN') {
-      try {
-        await this.applicationsService.issueCompletionCredential(
-          eventId,
-          applicationId,
-        );
-      } catch {
-        // Best-effort: keep check-in response stable on issuance failures.
+      if (autoIssueCompletionCredential) {
+        try {
+          await this.applicationsService.issueCompletionCredential(
+            eventId,
+            applicationId,
+          );
+        } catch {
+          // Best-effort: keep check-in response stable on issuance failures.
+        }
       }
     }
 

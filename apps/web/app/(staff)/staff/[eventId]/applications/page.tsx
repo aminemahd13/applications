@@ -16,6 +16,7 @@ import {
   UserCheck,
   Mail,
   CheckCircle2,
+  Award,
 } from "lucide-react";
 import {
   useReactTable,
@@ -202,12 +203,14 @@ export default function ApplicationsListPage() {
   const canAssignReviewers = hasPermission(Permission.EVENT_APPLICATION_LIST);
   const canDraftDecisions = hasPermission(Permission.EVENT_DECISION_DRAFT);
   const canSendMessages = hasPermission(Permission.EVENT_MESSAGES_SEND);
+  const canIssueCredentials = hasPermission(Permission.EVENT_UPDATE);
 
   const [applications, setApplications] = useState<Application[]>([]);
   const [reviewers, setReviewers] = useState<ReviewerOption[]>([]);
   const [decisionTemplates, setDecisionTemplates] = useState<DecisionTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
+  const [isIssuingCredentials, setIsIssuingCredentials] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isApplyingBulk, setIsApplyingBulk] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -372,6 +375,56 @@ export default function ApplicationsListPage() {
       toast.error("Could not delete application");
     } finally {
       setIsDeleting(false);
+    }
+  }
+
+  async function issueSelectedCredentials() {
+    if (!canIssueCredentials || selectedApplicationIds.length === 0 || isIssuingCredentials) {
+      return;
+    }
+    setIsIssuingCredentials(true);
+    try {
+      const result = await apiClient<{
+        data?: {
+          requested?: number;
+          issued?: number;
+          alreadyIssued?: number;
+          skippedNotCheckedIn?: number;
+          notFound?: string[];
+          failed?: Array<{ applicationId: string; reason: string }>;
+        };
+      }>(`/events/${eventId}/applications/completion-credentials/issue`, {
+        method: "POST",
+        body: { applicationIds: selectedApplicationIds },
+        csrfToken: csrfToken ?? undefined,
+      });
+
+      const summary = result?.data ?? {};
+      const issued = Number(summary.issued ?? 0);
+      const alreadyIssued = Number(summary.alreadyIssued ?? 0);
+      const skippedNotCheckedIn = Number(summary.skippedNotCheckedIn ?? 0);
+      const failedCount = Array.isArray(summary.failed) ? summary.failed.length : 0;
+      const notFoundCount = Array.isArray(summary.notFound) ? summary.notFound.length : 0;
+
+      if (issued > 0) {
+        toast.success(
+          `Issued ${issued} credential${issued === 1 ? "" : "s"}. Already issued: ${alreadyIssued}. Skipped (not checked-in): ${skippedNotCheckedIn}.`
+        );
+      } else {
+        toast.info(
+          `No new credentials issued. Already issued: ${alreadyIssued}. Skipped (not checked-in): ${skippedNotCheckedIn}.`
+        );
+      }
+
+      if (failedCount > 0 || notFoundCount > 0) {
+        toast.warning(
+          `Issues: ${failedCount} failed, ${notFoundCount} not found.`
+        );
+      }
+    } catch {
+      toast.error("Could not issue completion credentials.");
+    } finally {
+      setIsIssuingCredentials(false);
     }
   }
 
@@ -852,6 +905,15 @@ export default function ApplicationsListPage() {
             >
               <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
               Decision draft
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={issueSelectedCredentials}
+              disabled={!canIssueCredentials || isIssuingCredentials}
+            >
+              <Award className="mr-1.5 h-3.5 w-3.5" />
+              {isIssuingCredentials ? "Issuing..." : "Issue credentials"}
             </Button>
             <Button
               size="sm"

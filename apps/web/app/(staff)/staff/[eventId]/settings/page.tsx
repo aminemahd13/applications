@@ -10,6 +10,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { PageHeader, FormSkeleton } from "@/components/shared";
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -25,6 +32,24 @@ interface CheckinConfig {
   enabled?: boolean;
   allowSelfCheckin?: boolean;
   qrCodeRequired?: boolean;
+  certificate?: {
+    publishMode?: "checkin" | "manual";
+    template?: {
+      text?: {
+        title?: string;
+        subtitle?: string;
+        completionText?: string;
+        footerText?: string;
+      };
+      style?: {
+        primaryColor?: string;
+        secondaryColor?: string;
+        backgroundColor?: string;
+        textColor?: string;
+        borderColor?: string;
+      };
+    };
+  };
 }
 
 interface EventSettings {
@@ -41,6 +66,66 @@ interface EventSettings {
   requiresEmailVerification: boolean;
   decisionConfig: DecisionConfig;
   checkinConfig: CheckinConfig;
+}
+
+const DEFAULT_CERTIFICATE_TEMPLATE = {
+  text: {
+    title: "Certificate of Completion",
+    subtitle: "This certifies that",
+    completionText: "has successfully completed",
+    footerText:
+      "Verification available via the secure credential link below.",
+  },
+  style: {
+    primaryColor: "#2563eb",
+    secondaryColor: "#1d4ed8",
+    backgroundColor: "#ffffff",
+    textColor: "#0f172a",
+    borderColor: "#cbd5e1",
+  },
+} as const;
+
+function normalizeCheckinConfig(raw: unknown): CheckinConfig {
+  const base = raw && typeof raw === "object" ? (raw as CheckinConfig) : {};
+  const certificate = base.certificate ?? {};
+  const template = certificate.template ?? {};
+  const text = template.text ?? {};
+  const style = template.style ?? {};
+
+  return {
+    enabled: Boolean(base.enabled ?? false),
+    allowSelfCheckin: Boolean(base.allowSelfCheckin ?? false),
+    qrCodeRequired: base.qrCodeRequired ?? true,
+    certificate: {
+      publishMode:
+        certificate.publishMode === "manual" ? "manual" : "checkin",
+      template: {
+        text: {
+          title: text.title ?? DEFAULT_CERTIFICATE_TEMPLATE.text.title,
+          subtitle: text.subtitle ?? DEFAULT_CERTIFICATE_TEMPLATE.text.subtitle,
+          completionText:
+            text.completionText ??
+            DEFAULT_CERTIFICATE_TEMPLATE.text.completionText,
+          footerText:
+            text.footerText ?? DEFAULT_CERTIFICATE_TEMPLATE.text.footerText,
+        },
+        style: {
+          primaryColor:
+            style.primaryColor ?? DEFAULT_CERTIFICATE_TEMPLATE.style.primaryColor,
+          secondaryColor:
+            style.secondaryColor ??
+            DEFAULT_CERTIFICATE_TEMPLATE.style.secondaryColor,
+          backgroundColor:
+            style.backgroundColor ??
+            DEFAULT_CERTIFICATE_TEMPLATE.style.backgroundColor,
+          textColor:
+            style.textColor ?? DEFAULT_CERTIFICATE_TEMPLATE.style.textColor,
+          borderColor:
+            style.borderColor ?? DEFAULT_CERTIFICATE_TEMPLATE.style.borderColor,
+        },
+      },
+    },
+  };
 }
 
 function toLocalDateTimeInput(value?: string): string {
@@ -97,7 +182,7 @@ export default function SettingsPage() {
           isPublished: raw.status === "PUBLISHED" || raw.status === "published" || raw.isPublished === true,
           requiresEmailVerification: raw.requiresEmailVerification ?? false,
           decisionConfig: raw.decisionConfig ?? {},
-          checkinConfig: raw.checkinConfig ?? {},
+          checkinConfig: normalizeCheckinConfig(raw.checkinConfig ?? {}),
         });
       } catch (err) {
         console.error("Failed to load event settings:", err);
@@ -125,7 +210,7 @@ export default function SettingsPage() {
           publishStatus: settings.isPublished ? "PUBLISHED" : "DRAFT",
           requiresEmailVerification: settings.requiresEmailVerification,
           decisionConfig: settings.decisionConfig,
-          checkinConfig: settings.checkinConfig,
+          checkinConfig: normalizeCheckinConfig(settings.checkinConfig),
         },
         csrfToken: csrfToken ?? undefined,
       });
@@ -146,8 +231,97 @@ export default function SettingsPage() {
     setSettings({ ...settings, checkinConfig: { ...settings.checkinConfig, [key]: value } });
   }
 
+  function updateCertificatePublishMode(mode: "checkin" | "manual") {
+    if (!settings) return;
+    setSettings({
+      ...settings,
+      checkinConfig: {
+        ...settings.checkinConfig,
+        certificate: {
+          ...(settings.checkinConfig.certificate ?? {}),
+          publishMode: mode,
+          template: settings.checkinConfig.certificate?.template ?? {
+            text: { ...DEFAULT_CERTIFICATE_TEMPLATE.text },
+            style: { ...DEFAULT_CERTIFICATE_TEMPLATE.style },
+          },
+        },
+      },
+    });
+  }
+
+  function updateCertificateText<
+    K extends keyof NonNullable<
+      NonNullable<NonNullable<CheckinConfig["certificate"]>["template"]>["text"]
+    >,
+  >(key: K, value: string) {
+    if (!settings) return;
+    const checkinConfig = normalizeCheckinConfig(settings.checkinConfig);
+    setSettings({
+      ...settings,
+      checkinConfig: {
+        ...checkinConfig,
+        certificate: {
+          ...(checkinConfig.certificate ?? {}),
+          template: {
+            ...(checkinConfig.certificate?.template ?? {}),
+            text: {
+              ...(checkinConfig.certificate?.template?.text ??
+                DEFAULT_CERTIFICATE_TEMPLATE.text),
+              [key]: value,
+            },
+            style:
+              checkinConfig.certificate?.template?.style ??
+              DEFAULT_CERTIFICATE_TEMPLATE.style,
+          },
+        },
+      },
+    });
+  }
+
+  function updateCertificateStyle<
+    K extends keyof NonNullable<
+      NonNullable<NonNullable<CheckinConfig["certificate"]>["template"]>["style"]
+    >,
+  >(key: K, value: string) {
+    if (!settings) return;
+    const checkinConfig = normalizeCheckinConfig(settings.checkinConfig);
+    setSettings({
+      ...settings,
+      checkinConfig: {
+        ...checkinConfig,
+        certificate: {
+          ...(checkinConfig.certificate ?? {}),
+          template: {
+            ...(checkinConfig.certificate?.template ?? {}),
+            text:
+              checkinConfig.certificate?.template?.text ??
+              DEFAULT_CERTIFICATE_TEMPLATE.text,
+            style: {
+              ...(checkinConfig.certificate?.template?.style ??
+                DEFAULT_CERTIFICATE_TEMPLATE.style),
+              [key]: value,
+            },
+          },
+        },
+      },
+    });
+  }
+
   if (isLoading) return <FormSkeleton />;
   if (!settings) return null;
+
+  const checkinConfig = normalizeCheckinConfig(settings.checkinConfig);
+  const certificateTemplate =
+    checkinConfig.certificate?.template ?? {
+      text: { ...DEFAULT_CERTIFICATE_TEMPLATE.text },
+      style: { ...DEFAULT_CERTIFICATE_TEMPLATE.style },
+    };
+  const certificateText = certificateTemplate.text ?? {
+    ...DEFAULT_CERTIFICATE_TEMPLATE.text,
+  };
+  const certificateStyle = certificateTemplate.style ?? {
+    ...DEFAULT_CERTIFICATE_TEMPLATE.style,
+  };
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -277,9 +451,9 @@ export default function SettingsPage() {
               <Label className="text-sm">Enable check-in</Label>
               <p className="text-xs text-muted-foreground">Enable the check-in system for this event.</p>
             </div>
-            <Switch checked={settings.checkinConfig.enabled ?? false} onCheckedChange={(v) => updateCheckinConfig("enabled", v)} />
+            <Switch checked={checkinConfig.enabled ?? false} onCheckedChange={(v) => updateCheckinConfig("enabled", v)} />
           </div>
-          {settings.checkinConfig.enabled && (
+          {checkinConfig.enabled && (
             <>
               <Separator />
               <div className="flex items-center justify-between">
@@ -287,14 +461,119 @@ export default function SettingsPage() {
                   <Label className="text-sm">Allow self check-in</Label>
                   <p className="text-xs text-muted-foreground">Attendees can check themselves in without staff scanning.</p>
                 </div>
-                <Switch checked={settings.checkinConfig.allowSelfCheckin ?? false} onCheckedChange={(v) => updateCheckinConfig("allowSelfCheckin", v)} />
+                <Switch checked={checkinConfig.allowSelfCheckin ?? false} onCheckedChange={(v) => updateCheckinConfig("allowSelfCheckin", v)} />
               </div>
               <div className="flex items-center justify-between">
                 <div>
                   <Label className="text-sm">Require QR code</Label>
                   <p className="text-xs text-muted-foreground">QR code scan is required for check-in.</p>
                 </div>
-                <Switch checked={settings.checkinConfig.qrCodeRequired ?? true} onCheckedChange={(v) => updateCheckinConfig("qrCodeRequired", v)} />
+                <Switch checked={checkinConfig.qrCodeRequired ?? true} onCheckedChange={(v) => updateCheckinConfig("qrCodeRequired", v)} />
+              </div>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <Label className="text-sm">Certificate publish mode</Label>
+                <p className="text-xs text-muted-foreground">
+                  Choose whether certificates are issued automatically at check-in or only when staff publishes manually.
+                </p>
+                <Select
+                  value={checkinConfig.certificate?.publishMode ?? "checkin"}
+                  onValueChange={(value) =>
+                    updateCertificatePublishMode(value as "checkin" | "manual")
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="checkin">Automatic on check-in</SelectItem>
+                    <SelectItem value="manual">Manual publish only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label className="text-sm">Certificate title</Label>
+                  <Input
+                    value={certificateText.title ?? ""}
+                    onChange={(e) => updateCertificateText("title", e.target.value)}
+                    placeholder="Certificate of Completion"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Subtitle</Label>
+                  <Input
+                    value={certificateText.subtitle ?? ""}
+                    onChange={(e) => updateCertificateText("subtitle", e.target.value)}
+                    placeholder="This certifies that"
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label className="text-sm">Completion text</Label>
+                  <Input
+                    value={certificateText.completionText ?? ""}
+                    onChange={(e) => updateCertificateText("completionText", e.target.value)}
+                    placeholder="has successfully completed"
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label className="text-sm">Footer text</Label>
+                  <Textarea
+                    value={certificateText.footerText ?? ""}
+                    onChange={(e) => updateCertificateText("footerText", e.target.value)}
+                    rows={2}
+                    placeholder="Verification available via the secure credential link below."
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm">Certificate style</Label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Primary color</Label>
+                    <Input
+                      type="color"
+                      value={certificateStyle.primaryColor ?? DEFAULT_CERTIFICATE_TEMPLATE.style.primaryColor}
+                      onChange={(e) => updateCertificateStyle("primaryColor", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Secondary color</Label>
+                    <Input
+                      type="color"
+                      value={certificateStyle.secondaryColor ?? DEFAULT_CERTIFICATE_TEMPLATE.style.secondaryColor}
+                      onChange={(e) => updateCertificateStyle("secondaryColor", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Background color</Label>
+                    <Input
+                      type="color"
+                      value={certificateStyle.backgroundColor ?? DEFAULT_CERTIFICATE_TEMPLATE.style.backgroundColor}
+                      onChange={(e) => updateCertificateStyle("backgroundColor", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Text color</Label>
+                    <Input
+                      type="color"
+                      value={certificateStyle.textColor ?? DEFAULT_CERTIFICATE_TEMPLATE.style.textColor}
+                      onChange={(e) => updateCertificateStyle("textColor", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Border color</Label>
+                    <Input
+                      type="color"
+                      value={certificateStyle.borderColor ?? DEFAULT_CERTIFICATE_TEMPLATE.style.borderColor}
+                      onChange={(e) => updateCertificateStyle("borderColor", e.target.value)}
+                    />
+                  </div>
+                </div>
               </div>
             </>
           )}

@@ -31,6 +31,23 @@ import { createHmac } from 'node:crypto';
 
 @Injectable()
 export class ApplicationsService {
+  private static readonly HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+  private static readonly DEFAULT_CERTIFICATE_TEMPLATE = {
+    text: {
+      title: 'Certificate of Completion',
+      subtitle: 'This certifies that',
+      completionText: 'has successfully completed',
+      footerText: 'Verification available via the secure credential link below.',
+    },
+    style: {
+      primaryColor: '#2563eb',
+      secondaryColor: '#1d4ed8',
+      backgroundColor: '#ffffff',
+      textColor: '#0f172a',
+      borderColor: '#cbd5e1',
+    },
+  } as const;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cls: ClsService,
@@ -190,6 +207,45 @@ export class ApplicationsService {
       },
     });
 
+    const completionCredentialRows =
+      applications.length > 0
+        ? await (this.prisma as any).completion_credentials.findMany({
+            where: {
+              event_id: eventId,
+              application_id: {
+                in: applications.map((application) => application.id),
+              },
+            },
+            select: {
+              application_id: true,
+              certificate_id: true,
+              credential_id: true,
+              issued_at: true,
+              revoked_at: true,
+            },
+          })
+        : [];
+    const completionCredentialByApplicationId = new Map<
+      string,
+      {
+        application_id: string;
+        certificate_id: string;
+        credential_id: string;
+        issued_at: Date;
+        revoked_at: Date | null;
+      }
+    >(
+      completionCredentialRows.map(
+        (row: {
+          application_id: string;
+          certificate_id: string;
+          credential_id: string;
+          issued_at: Date;
+          revoked_at: Date | null;
+        }) => [row.application_id, row],
+      ),
+    );
+
     const submissionVersionIds = Array.from(
       new Set(
         applications.flatMap((application) =>
@@ -328,6 +384,15 @@ export class ApplicationsService {
       'uploadedFileCount',
       'uploadedFileIds',
       'uploadedFiles',
+      'completionCredentialStatus',
+      'certificateId',
+      'credentialId',
+      'certificatePath',
+      'verificationPath',
+      'certificateUrl',
+      'verificationUrl',
+      'credentialIssuedAt',
+      'credentialRevokedAt',
       'staffApplicationPath',
       'adminApplicationPath',
       'staffApplicationUrl',
@@ -367,6 +432,24 @@ export class ApplicationsService {
       const staffApplicationPath = `/staff/${eventId}/applications/${application.id}`;
       const adminApplicationPath = `/admin/events/${eventId}/applications/${application.id}`;
       const responseValues = responseValuesByApplicationId.get(application.id);
+      const completion = completionCredentialByApplicationId.get(application.id);
+      const credentialStatus = completion
+        ? completion.revoked_at
+          ? 'REVOKED'
+          : 'ISSUED'
+        : 'NOT_ISSUED';
+      const credentialLinks = completion
+        ? this.getCompletionCredentialLinks(
+            completion.certificate_id,
+            completion.credential_id,
+          )
+        : null;
+      const certificatePath = completion
+        ? `/credentials/certificate/${completion.certificate_id}`
+        : '';
+      const verificationPath = completion
+        ? `/credentials/verify/${completion.credential_id}`
+        : '';
 
       return [
         application.id,
@@ -390,6 +473,15 @@ export class ApplicationsService {
         fileIds.length,
         fileIds.join(' | '),
         uploadedFiles,
+        credentialStatus,
+        completion?.certificate_id ?? '',
+        completion?.credential_id ?? '',
+        certificatePath,
+        verificationPath,
+        credentialLinks?.certificateUrl ?? '',
+        credentialLinks?.verifiableCredentialUrl ?? '',
+        this.toIsoString(completion?.issued_at),
+        this.toIsoString(completion?.revoked_at),
         staffApplicationPath,
         adminApplicationPath,
         `${appBaseUrl}${staffApplicationPath}`,
@@ -2311,6 +2403,121 @@ export class ApplicationsService {
     return fallback;
   }
 
+  private toRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {};
+    }
+    return value as Record<string, unknown>;
+  }
+
+  private readTemplateText(
+    value: unknown,
+    fallback: string,
+    maxLength: number,
+  ): string {
+    if (typeof value !== 'string') return fallback;
+    const trimmed = value.trim();
+    if (!trimmed) return fallback;
+    return trimmed.length <= maxLength
+      ? trimmed
+      : trimmed.slice(0, maxLength).trim();
+  }
+
+  private readHexColor(value: unknown, fallback: string): string {
+    if (typeof value !== 'string') return fallback;
+    const trimmed = value.trim();
+    return ApplicationsService.HEX_COLOR_PATTERN.test(trimmed)
+      ? trimmed
+      : fallback;
+  }
+
+  private getCredentialPublishModeFromCheckinConfig(
+    checkinConfig: Record<string, unknown>,
+  ): 'checkin' | 'manual' {
+    const certificate = this.toRecord(checkinConfig.certificate);
+    const rawMode =
+      typeof certificate.publishMode === 'string'
+        ? certificate.publishMode.trim().toLowerCase()
+        : '';
+    return rawMode === 'manual' ? 'manual' : 'checkin';
+  }
+
+  private async getCredentialPublishMode(
+    eventId: string,
+  ): Promise<'checkin' | 'manual'> {
+    const event = await this.prisma.events.findUnique({
+      where: { id: eventId },
+      select: { checkin_config: true },
+    });
+    const checkinConfig = this.toRecord(event?.checkin_config);
+    return this.getCredentialPublishModeFromCheckinConfig(checkinConfig);
+  }
+
+  private getCertificateTemplateFromCheckinConfig(
+    checkinConfig: Record<string, unknown>,
+  ): {
+    text: {
+      title: string;
+      subtitle: string;
+      completionText: string;
+      footerText: string;
+    };
+    style: {
+      primaryColor: string;
+      secondaryColor: string;
+      backgroundColor: string;
+      textColor: string;
+      borderColor: string;
+    };
+  } {
+    const certificate = this.toRecord(checkinConfig.certificate);
+    const template = this.toRecord(certificate.template);
+    const text = this.toRecord(template.text);
+    const style = this.toRecord(template.style);
+
+    const defaults = ApplicationsService.DEFAULT_CERTIFICATE_TEMPLATE;
+
+    return {
+      text: {
+        title: this.readTemplateText(text.title, defaults.text.title, 120),
+        subtitle: this.readTemplateText(
+          text.subtitle,
+          defaults.text.subtitle,
+          200,
+        ),
+        completionText: this.readTemplateText(
+          text.completionText,
+          defaults.text.completionText,
+          240,
+        ),
+        footerText: this.readTemplateText(
+          text.footerText,
+          defaults.text.footerText,
+          300,
+        ),
+      },
+      style: {
+        primaryColor: this.readHexColor(
+          style.primaryColor,
+          defaults.style.primaryColor,
+        ),
+        secondaryColor: this.readHexColor(
+          style.secondaryColor,
+          defaults.style.secondaryColor,
+        ),
+        backgroundColor: this.readHexColor(
+          style.backgroundColor,
+          defaults.style.backgroundColor,
+        ),
+        textColor: this.readHexColor(style.textColor, defaults.style.textColor),
+        borderColor: this.readHexColor(
+          style.borderColor,
+          defaults.style.borderColor,
+        ),
+      },
+    };
+  }
+
   async getCompletionCredentialForApplication(
     eventId: string,
     applicationId: string,
@@ -2346,9 +2553,12 @@ export class ApplicationsService {
       app.attendance_records?.status === 'CHECKED_IN' &&
       app.attendance_records.checked_in_at
     ) {
-      return this.issueCompletionCredential(eventId, applicationId, {
-        checkedInAt: app.attendance_records.checked_in_at,
-      });
+      const publishMode = await this.getCredentialPublishMode(eventId);
+      if (publishMode === 'checkin') {
+        return this.issueCompletionCredential(eventId, applicationId, {
+          checkedInAt: app.attendance_records.checked_in_at,
+        });
+      }
     }
 
     return null;
@@ -2455,6 +2665,113 @@ export class ApplicationsService {
     return credential;
   }
 
+  async issueCompletionCredentialsBulk(
+    eventId: string,
+    applicationIds: string[],
+  ): Promise<{
+    requested: number;
+    issued: number;
+    alreadyIssued: number;
+    skippedNotCheckedIn: number;
+    notFound: string[];
+    failed: Array<{ applicationId: string; reason: string }>;
+  }> {
+    const uniqueIds = Array.from(
+      new Set(
+        applicationIds
+          .map((id) => String(id).trim())
+          .filter((id) => id.length > 0),
+      ),
+    );
+
+    if (uniqueIds.length === 0) {
+      return {
+        requested: 0,
+        issued: 0,
+        alreadyIssued: 0,
+        skippedNotCheckedIn: 0,
+        notFound: [],
+        failed: [],
+      };
+    }
+
+    const applications = await (this.prisma as any).applications.findMany({
+      where: {
+        event_id: eventId,
+        id: { in: uniqueIds },
+      },
+      include: {
+        attendance_records: {
+          select: {
+            status: true,
+            checked_in_at: true,
+          },
+        },
+        completion_credentials: {
+          select: {
+            revoked_at: true,
+          },
+        },
+      },
+    });
+
+    const byId = new Map<string, any>(
+      applications.map((application: any) => [application.id, application]),
+    );
+    const notFound: string[] = [];
+    const failed: Array<{ applicationId: string; reason: string }> = [];
+    let issued = 0;
+    let alreadyIssued = 0;
+    let skippedNotCheckedIn = 0;
+
+    for (const applicationId of uniqueIds) {
+      const application = byId.get(applicationId);
+      if (!application) {
+        notFound.push(applicationId);
+        continue;
+      }
+
+      if (
+        application.completion_credentials &&
+        application.completion_credentials.revoked_at === null
+      ) {
+        alreadyIssued += 1;
+        continue;
+      }
+
+      const checkedInAt = application.attendance_records?.checked_in_at ?? null;
+      const isCheckedIn =
+        application.attendance_records?.status === 'CHECKED_IN' && checkedInAt;
+
+      if (!isCheckedIn) {
+        skippedNotCheckedIn += 1;
+        continue;
+      }
+
+      try {
+        await this.issueCompletionCredential(eventId, applicationId, {
+          checkedInAt,
+        });
+        issued += 1;
+      } catch (error) {
+        const reason =
+          error instanceof Error && error.message
+            ? error.message
+            : 'Failed to issue credential';
+        failed.push({ applicationId, reason });
+      }
+    }
+
+    return {
+      requested: uniqueIds.length,
+      issued,
+      alreadyIssued,
+      skippedNotCheckedIn,
+      notFound,
+      failed,
+    };
+  }
+
   async revokeCompletionCredential(
     eventId: string,
     applicationId: string,
@@ -2487,6 +2804,7 @@ export class ApplicationsService {
             end_at: true,
             venue_name: true,
             venue_address: true,
+            checkin_config: true,
           },
         },
         applications: {
@@ -2523,6 +2841,8 @@ export class ApplicationsService {
       record.events.venue_name?.trim() ||
       record.events.venue_address?.trim() ||
       undefined;
+    const checkinConfig = this.toRecord(record.events.checkin_config);
+    const template = this.getCertificateTemplateFromCheckinConfig(checkinConfig);
 
     return {
       certificateId: record.certificate_id,
@@ -2550,6 +2870,7 @@ export class ApplicationsService {
         algorithm: 'HMAC-SHA256',
         signature: record.credential_signature,
       },
+      template,
     };
   }
 

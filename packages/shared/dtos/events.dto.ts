@@ -63,9 +63,42 @@ export const DecisionConfigSchema = z.object({
 
 export type DecisionConfig = z.infer<typeof DecisionConfigSchema>;
 
+const HexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+
+export const CertificateTemplateTextSchema = z.object({
+    title: z.string().max(120).optional(),
+    subtitle: z.string().max(200).optional(),
+    completionText: z.string().max(240).optional(),
+    footerText: z.string().max(300).optional(),
+}).passthrough();
+
+export type CertificateTemplateText = z.infer<typeof CertificateTemplateTextSchema>;
+
+export const CertificateTemplateStyleSchema = z.object({
+    primaryColor: HexColorSchema.optional(),
+    secondaryColor: HexColorSchema.optional(),
+    backgroundColor: HexColorSchema.optional(),
+    textColor: HexColorSchema.optional(),
+    borderColor: HexColorSchema.optional(),
+}).passthrough();
+
+export type CertificateTemplateStyle = z.infer<typeof CertificateTemplateStyleSchema>;
+
+export const CheckinCertificateConfigSchema = z.object({
+    publishMode: z.enum(['checkin', 'manual']).optional().default('checkin'),
+    template: z.object({
+        text: CertificateTemplateTextSchema.optional().default({}),
+        style: CertificateTemplateStyleSchema.optional().default({}),
+    }).optional().default({}),
+}).passthrough();
+
+export type CheckinCertificateConfig = z.infer<typeof CheckinCertificateConfigSchema>;
+
 export const CheckinConfigSchema = z.object({
     enabled: z.boolean().optional().default(false),
     allowSelfCheckin: z.boolean().optional().default(false),
+    qrCodeRequired: z.boolean().optional().default(true),
+    certificate: CheckinCertificateConfigSchema.optional().default({}),
 }).passthrough();
 
 export type CheckinConfig = z.infer<typeof CheckinConfigSchema>;
