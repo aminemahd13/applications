@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useEventBasePath } from "@/hooks/use-event-base-path";
 import {
@@ -241,7 +241,7 @@ export default function ApplicationsListPage() {
   const [isSavingTemplate, setIsSavingTemplate] = useState(false);
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
 
-  async function refreshApplications() {
+  const refreshApplications = useCallback(async () => {
     const res = await apiClient<
       | Application[]
       | { data: Array<Record<string, unknown>>; meta?: unknown }
@@ -254,15 +254,15 @@ export default function ApplicationsListPage() {
     const mapped: Application[] = raw.map(normalizeApplication);
     setApplications(mapped);
     setSelectedIds((prev) => prev.filter((id) => mapped.some((app) => app.id === id)));
-  }
+  }, [eventId]);
 
-  async function refreshDecisionTemplates() {
+  const refreshDecisionTemplates = useCallback(async () => {
     if (!canDraftDecisions) return;
     const templateRes = await apiClient<{ data?: DecisionTemplate[] }>(
       `/events/${eventId}/decision-templates`,
     ).catch(() => ({ data: [] }));
     setDecisionTemplates(Array.isArray(templateRes.data) ? templateRes.data : []);
-  }
+  }, [canDraftDecisions, eventId]);
 
   function resetTemplateEditor() {
     setEditingTemplateId(null);
@@ -292,7 +292,13 @@ export default function ApplicationsListPage() {
         setIsLoading(false);
       }
     })();
-  }, [canAssignReviewers, canDraftDecisions, eventId]);
+  }, [
+    canAssignReviewers,
+    canDraftDecisions,
+    eventId,
+    refreshApplications,
+    refreshDecisionTemplates,
+  ]);
 
   const filteredData = useMemo(
     () => applications.filter((a) => matchesStatusFilter(a.status, statusFilter)),

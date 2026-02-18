@@ -1,8 +1,8 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Loader2, AlertTriangle } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 
 export interface PublicPlatformSettings {
   platformName: string;
@@ -41,7 +41,7 @@ export function PlatformSettingsProvider({
   children,
   initialSettings,
 }: PlatformSettingsProviderProps) {
-  const [settings, setSettings] = useState<PublicPlatformSettings>(
+  const [settings] = useState<PublicPlatformSettings>(
     initialSettings || DEFAULT_SETTINGS
   );
   const pathname = usePathname();

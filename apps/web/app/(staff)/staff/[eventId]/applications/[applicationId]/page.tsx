@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -880,7 +880,7 @@ export default function ApplicationDetailPage() {
   const canDeleteApplication = hasPermission(Permission.EVENT_APPLICATION_DELETE);
   const canDeleteNeedsInfo = canDeleteApplication;
 
-  const loadApplication = async (silent = false) => {
+  const loadApplication = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true);
     try {
       const res = await apiClient<
@@ -942,17 +942,17 @@ export default function ApplicationDetailPage() {
       setApp(detail);
       if (detail.decision) setDraftDecision(detail.decision);
       setSelectedDecisionTemplateId(detail.decisionDraft?.templateId ?? "__none__");
-      if (!composeActionStepId && detail.steps.length > 0) {
-        setComposeActionStepId(detail.steps[0].id);
+      if (detail.steps.length > 0) {
+        setComposeActionStepId((current) => current || detail.steps[0].id);
       }
     } catch {
       /* handled */
     } finally {
       if (!silent) setIsLoading(false);
     }
-  };
+  }, [eventId, appId]);
 
-  async function loadDecisionTemplates() {
+  const loadDecisionTemplates = useCallback(async () => {
     if (!canManageDecisions) return;
     try {
       const res = await apiClient<{ data?: DecisionTemplate[] }>(
@@ -965,14 +965,14 @@ export default function ApplicationDetailPage() {
     } catch {
       /* handled */
     }
-  }
+  }, [canManageDecisions, eventId]);
 
   useEffect(() => {
     loadApplication();
     loadDecisionTemplates();
-  }, [eventId, appId, canManageDecisions]);
+  }, [loadApplication, loadDecisionTemplates]);
 
-  async function loadMessages() {
+  const loadMessages = useCallback(async () => {
     if (!canReadMessages) return;
     setIsLoadingMessages(true);
     try {
@@ -990,9 +990,9 @@ export default function ApplicationDetailPage() {
     } finally {
       setIsLoadingMessages(false);
     }
-  }
+  }, [canReadMessages, eventId, appId]);
 
-  async function loadNeedsInfo() {
+  const loadNeedsInfo = useCallback(async () => {
     setIsLoadingNeedsInfo(true);
     try {
       const res = await apiClient<any>(
@@ -1009,9 +1009,9 @@ export default function ApplicationDetailPage() {
     } finally {
       setIsLoadingNeedsInfo(false);
     }
-  }
+  }, [eventId, appId]);
 
-  async function loadAudit() {
+  const loadAudit = useCallback(async () => {
     if (!canViewAudit) return;
     setIsLoadingAudit(true);
     try {
@@ -1029,13 +1029,13 @@ export default function ApplicationDetailPage() {
     } finally {
       setIsLoadingAudit(false);
     }
-  }
+  }, [canViewAudit, eventId, appId]);
 
   useEffect(() => {
     loadMessages();
     loadNeedsInfo();
     loadAudit();
-  }, [eventId, appId, canReadMessages, canViewAudit]);
+  }, [loadMessages, loadNeedsInfo, loadAudit]);
 
   useEffect(() => {
     if (!showRequestInfo) return;
