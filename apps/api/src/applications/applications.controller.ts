@@ -398,6 +398,27 @@ export class ApplicationsController {
   }
 
   /**
+   * Get completion credential links for an application
+   * Requires: Owner of application OR organizer
+   */
+  @Get(':applicationId/completion-credential')
+  @RequirePermission(
+    Permission.SELF_APPLICATION_READ,
+    Permission.EVENT_APPLICATION_READ_BASIC,
+  )
+  async getCompletionCredential(
+    @Param('eventId') eventId: string,
+    @Param('applicationId') applicationId: string,
+  ) {
+    await this.verifyOwnershipOrOrganizer(eventId, applicationId);
+    const result = await this.applicationsService.getCompletionCredentialForApplication(
+      eventId,
+      applicationId,
+    );
+    return { data: result };
+  }
+
+  /**
    * Helper: Verify current user owns application or is organizer
    */
   private async verifyOwnershipOrOrganizer(
