@@ -14,6 +14,7 @@ import {
   NeedsInfoResponse,
   NeedsInfoStatus,
   StepStatus,
+  Permission,
 } from '@event-platform/shared';
 import { StepStateService } from '../applications/step-state.service';
 import { ApplicationsService } from '../applications/applications.service';
@@ -314,9 +315,20 @@ export class ReviewsService {
   ): Promise<NeedsInfoResponse[]> {
     const app = await this.prisma.applications.findFirst({
       where: { id: applicationId, event_id: eventId },
-      select: { id: true },
+      select: { id: true, applicant_user_id: true },
     });
     if (!app) throw new NotFoundException('Application not found');
+
+    const actorId = this.cls.get('actorId');
+    const permissions = (this.cls.get('permissions') ?? []) as string[];
+    const canReadAnyApplication =
+      permissions.includes(Permission.EVENT_APPLICATION_READ_BASIC) ||
+      permissions.includes(Permission.EVENT_APPLICATION_READ_FULL) ||
+      permissions.includes(Permission.EVENT_APPLICATION_READ_SENSITIVE) ||
+      permissions.includes(Permission.ADMIN_EVENTS_MANAGE);
+    if (!canReadAnyApplication && app.applicant_user_id !== actorId) {
+      throw new ForbiddenException("Cannot access another user's application");
+    }
 
     const where: any = { application_id: applicationId };
     if (stepId) where.step_id = stepId;
