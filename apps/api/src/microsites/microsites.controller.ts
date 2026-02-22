@@ -18,6 +18,7 @@ import { MicrositeMediaService } from './microsite-media.service';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permission } from '@event-platform/shared';
 import { SkipCsrf } from '../common/decorators/skip-csrf.decorator';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import {
@@ -216,6 +217,7 @@ export class MicrositesController {
   // --- Public Endpoints ---
 
   @SkipCsrf()
+  @SkipThrottle()
   @Get('microsites/assets')
   async getPublicAsset(@Query('key') key: string, @Res() res: Response) {
     if (typeof key !== 'string' || !key.trim()) {
@@ -231,6 +233,7 @@ export class MicrositesController {
   }
 
   @SkipCsrf()
+  @SkipThrottle()
   @Get('microsites/public/:slug')
   async getPublicMicrosite(
     @Param('slug') slug: string,
@@ -248,6 +251,7 @@ export class MicrositesController {
   }
 
   @SkipCsrf()
+  @SkipThrottle()
   @Get('microsites/public/:slug/pages/:pageSlug')
   async getPublicPage(
     @Param('slug') slug: string,
