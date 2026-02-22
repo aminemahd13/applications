@@ -180,7 +180,10 @@ export class ReviewsController {
    * Get needs-info requests for application
    */
   @Get('applications/:applicationId/needs-info')
-  @RequirePermission(Permission.EVENT_APPLICATION_READ_BASIC)
+  @RequirePermission(
+    Permission.EVENT_APPLICATION_READ_BASIC,
+    Permission.SELF_APPLICATION_READ,
+  )
   async getNeedsInfo(
     @Param('eventId') eventId: string,
     @Param('applicationId') applicationId: string,
