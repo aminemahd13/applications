@@ -75,7 +75,7 @@ To update the application code:
 
 2. **Rebuild Containers**:
    ```bash
-   docker-compose -f docker-compose.prod.yml up -d --build
+   docker compose -f docker-compose.prod.yml up -d --build
    ```
    *Note: This effectively re-deploys with zero-downtime (rolling update if you have multiple replicas, but with single compose it's a brief restart).*
 
