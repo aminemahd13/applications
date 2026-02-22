@@ -253,7 +253,7 @@ export default function DashboardPage() {
               return (
                 <Link
                   key={app.id}
-                  href={`/applications/event/${app.eventSlug}`}
+                  href={`/applications/${app.id}`}
                   className="flex items-center justify-between p-2.5 rounded-lg hover:bg-warning/5 transition-colors"
                 >
                   <div className="flex items-center gap-3 min-w-0">
@@ -400,7 +400,7 @@ export default function DashboardPage() {
                         className="flex-1 group-hover:bg-primary/5"
                         asChild
                       >
-                        <Link href={`/applications/event/${app.eventSlug}`}>
+                        <Link href={`/applications/${app.id}`}>
                           {app.nextAction ? "Continue" : "View"}
                           <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-0.5" />
                         </Link>

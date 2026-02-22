@@ -416,7 +416,9 @@ export default function EventsPage() {
             const existingApplication = applicationsBySlug[event.slug];
             const hasApplication = Boolean(existingApplication?.id);
             const canStart = event.applicationsStatus === "OPEN";
-            const applicationHref = `/applications/event/${event.slug}`;
+            const applicationHref = hasApplication
+              ? `/applications/${existingApplication.id}`
+              : `/applications/event/${event.slug}`;
             const ctaHref = hasApplication || canStart ? applicationHref : `/events/${event.slug}`;
             const ctaLabel = hasApplication
               ? existingApplication?.nextAction

@@ -14,15 +14,12 @@ interface EventSummary {
   slug: string;
 }
 
-interface ApplicationStepState {
-  stepId: string;
-  stepIndex?: number;
-  status: string;
-}
-
 interface ApplicationDetail {
   id: string;
-  stepStates?: ApplicationStepState[];
+}
+
+function getApplicationDestination(application: ApplicationDetail): string {
+  return `/applications/${application.id}`;
 }
 
 function unwrapResponseData<T>(payload: unknown): T | null {
@@ -34,22 +31,6 @@ function unwrapResponseData<T>(payload: unknown): T | null {
     return data as T;
   }
   return root as T;
-}
-
-function findNextStep(states: ApplicationStepState[] | undefined): ApplicationStepState | null {
-  if (!states || states.length === 0) return null;
-  const actionable = states
-    .filter((state) => state.status === "UNLOCKED" || state.status === "NEEDS_REVISION")
-    .sort((a, b) => (a.stepIndex ?? 9999) - (b.stepIndex ?? 9999));
-  return actionable[0] ?? null;
-}
-
-function getApplicationDestination(application: ApplicationDetail): string {
-  const nextStep = findNextStep(application.stepStates);
-  if (nextStep?.stepId) {
-    return `/applications/${application.id}/steps/${nextStep.stepId}`;
-  }
-  return `/applications/${application.id}`;
 }
 
 function redirectToLogin() {
