@@ -36,6 +36,10 @@ import { PageHeader, EmptyState, CardSkeleton, ConfirmDialog } from "@/component
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { uploadMicrositeAsset } from "@/lib/microsite-media";
+import {
+  readMicrositeAutoPublishPreference,
+  writeMicrositeAutoPublishPreference,
+} from "@/lib/microsite-auto-publish";
 import { MediaLibraryDialog } from "@/components/microsite/media-library-dialog";
 import {
   MICROSITE_DESIGN_PRESETS,
@@ -73,6 +77,7 @@ export default function MicrositePage_() {
   const [isPublishing, setIsPublishing] = useState(false);
   const [isMicrositePublished, setIsMicrositePublished] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [autoPublishEnabled, setAutoPublishEnabled] = useState(false);
   const [showCreatePage, setShowCreatePage] = useState(false);
   const [newPageTitle, setNewPageTitle] = useState("");
   const [newPageSlug, setNewPageSlug] = useState("");
@@ -142,6 +147,32 @@ export default function MicrositePage_() {
     })();
   }, [eventId]);
 
+  useEffect(() => {
+    setAutoPublishEnabled(readMicrositeAutoPublishPreference(eventId));
+  }, [eventId]);
+
+  function handleAutoPublishChange(nextEnabled: boolean) {
+    setAutoPublishEnabled(nextEnabled);
+    writeMicrositeAutoPublishPreference(eventId, nextEnabled);
+  }
+
+  async function refreshPages() {
+    const pagesRes = await apiClient<unknown>(
+      `/admin/events/${eventId}/microsite/pages`
+    );
+    const rawPages = unwrapApiArray(pagesRes);
+    setPages(withHomeFlag(rawPages.map(normalizePage)));
+  }
+
+  async function publishLatestDraft() {
+    await apiClient(`/admin/events/${eventId}/microsite/publish`, {
+      method: "POST",
+      csrfToken: csrfToken ?? undefined,
+    });
+    await refreshPages();
+    setIsMicrositePublished(true);
+  }
+
   async function uploadAsset(file: File) {
     return uploadMicrositeAsset(eventId, file, csrfToken ?? undefined);
   }
@@ -190,11 +221,7 @@ export default function MicrositePage_() {
         method: "POST",
         csrfToken: csrfToken ?? undefined,
       });
-      const pagesRes = await apiClient<unknown>(
-        `/admin/events/${eventId}/microsite/pages`
-      );
-      const rawPages = unwrapApiArray(pagesRes);
-      setPages(withHomeFlag(rawPages.map(normalizePage)));
+      await refreshPages();
       setIsMicrositePublished(nextPublished);
       toast.success(nextPublished ? "Microsite published!" : "Microsite unpublished!");
     } catch { /* handled */ }
@@ -230,7 +257,26 @@ export default function MicrositePage_() {
         body: safeSettings,
         csrfToken: csrfToken ?? undefined,
       });
-      toast.success("Microsite settings saved");
+
+      let didAutoPublish = false;
+      let autoPublishFailed = false;
+      if (autoPublishEnabled && isMicrositePublished) {
+        setIsPublishing(true);
+        try {
+          await publishLatestDraft();
+          didAutoPublish = true;
+        } catch {
+          autoPublishFailed = true;
+        } finally {
+          setIsPublishing(false);
+        }
+      }
+
+      if (autoPublishFailed) {
+        toast.success("Microsite settings saved, but auto-publish failed");
+      } else {
+        toast.success(didAutoPublish ? "Microsite settings saved and published" : "Microsite settings saved");
+      }
     } catch {
       /* handled */
     } finally {
@@ -407,6 +453,16 @@ export default function MicrositePage_() {
             <Plus className="mr-1.5 h-4 w-4" />
             New page
           </Button>
+          <div className="flex items-center gap-2 rounded-md border px-3 py-1.5">
+            <Label htmlFor="microsite-auto-publish-toggle" className="text-xs text-muted-foreground">
+              Auto publish
+            </Label>
+            <Switch
+              id="microsite-auto-publish-toggle"
+              checked={autoPublishEnabled}
+              onCheckedChange={handleAutoPublishChange}
+            />
+          </div>
           <div className="flex items-center gap-2 rounded-md border px-3 py-1.5">
             <Label htmlFor="microsite-publish-toggle" className="text-xs text-muted-foreground">
               {isMicrositePublished ? "Published" : "Unpublished"}

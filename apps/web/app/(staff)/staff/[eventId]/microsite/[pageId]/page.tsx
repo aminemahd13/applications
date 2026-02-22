@@ -84,6 +84,10 @@ import { ConfirmDialog } from "@/components/shared";
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { uploadMicrositeAsset } from "@/lib/microsite-media";
+import {
+  readMicrositeAutoPublishPreference,
+  writeMicrositeAutoPublishPreference,
+} from "@/lib/microsite-auto-publish";
 import { cn } from "@/lib/utils";
 import {
   getMicrositeStyleVariables,
@@ -3678,6 +3682,8 @@ export default function MicrositePageEditor() {
   } | null>(null);
   const [blockListQuery, setBlockListQuery] = useState("");
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
+  const [autoPublishEnabled, setAutoPublishEnabled] = useState(false);
+  const [isMicrositePublished, setIsMicrositePublished] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [showChecklist, setShowChecklist] = useState(false);
@@ -3811,6 +3817,18 @@ export default function MicrositePageEditor() {
     [],
   );
 
+  useEffect(() => {
+    setAutoPublishEnabled(readMicrositeAutoPublishPreference(eventId));
+  }, [eventId]);
+
+  const handleAutoPublishChange = useCallback(
+    (nextEnabled: boolean) => {
+      setAutoPublishEnabled(nextEnabled);
+      writeMicrositeAutoPublishPreference(eventId, nextEnabled);
+    },
+    [eventId],
+  );
+
   // Push to history whenever blocks change (debounced)
   const pushHistory = useCallback(
     (newBlocks: Block[]) => {
@@ -3856,9 +3874,14 @@ export default function MicrositePageEditor() {
           const rawSite = unwrapApiObject(siteResponse);
           setSiteSettings(normalizeMicrositeSettings(rawSite.settings));
           const events = rawSite.events as { slug?: unknown } | undefined;
+          const publishedVersion = Number(
+            rawSite.publishedVersion ?? rawSite.published_version ?? 0,
+          );
+          setIsMicrositePublished(publishedVersion > 0);
           setEventSlug(typeof events?.slug === "string" ? events.slug : "");
         } else {
           setSiteSettings(DEFAULT_MICROSITE_SETTINGS);
+          setIsMicrositePublished(false);
           setEventSlug("");
         }
       } catch {
@@ -3983,13 +4006,39 @@ export default function MicrositePageEditor() {
       });
       setSavedSnapshot(currentSnapshot);
       setLastSavedAt(new Date().toISOString());
-      if (!silent) toast.success("Page saved successfully");
+
+      let didAutoPublish = false;
+      let autoPublishFailed = false;
+      if (autoPublishEnabled && isMicrositePublished) {
+        try {
+          await apiClient(`/admin/events/${eventId}/microsite/publish`, {
+            method: "POST",
+            csrfToken: csrfToken ?? undefined,
+          });
+          didAutoPublish = true;
+        } catch {
+          autoPublishFailed = true;
+          if (silent && autoPublishEnabled) {
+            setAutoPublishEnabled(false);
+            writeMicrositeAutoPublishPreference(eventId, false);
+            toast.error("Auto-publish paused because publishing failed.");
+          }
+        }
+      }
+
+      if (!silent) {
+        if (autoPublishFailed) {
+          toast.success("Page saved, but auto-publish failed");
+        } else {
+          toast.success(didAutoPublish ? "Page saved and published" : "Page saved successfully");
+        }
+      }
     } catch {
       /* handled */
     } finally {
       setIsSaving(false);
     }
-  }, [autoSaveEnabled, csrfToken, currentSnapshot, eventId, pageId, savePayload]);
+  }, [autoPublishEnabled, autoSaveEnabled, csrfToken, currentSnapshot, eventId, isMicrositePublished, pageId, savePayload]);
 
   useEffect(() => {
     if (!autoSaveEnabled || !isDirty || isSaving) return;
@@ -4305,6 +4354,17 @@ export default function MicrositePageEditor() {
                 size="sm"
                 checked={autoSaveEnabled}
                 onCheckedChange={setAutoSaveEnabled}
+              />
+            </div>
+            <div className="flex shrink-0 items-center gap-2 rounded-md border bg-background px-2.5 py-1.5">
+              <Label htmlFor="microsite-auto-publish" className="text-[11px] text-muted-foreground">
+                Auto-publish
+              </Label>
+              <Switch
+                id="microsite-auto-publish"
+                size="sm"
+                checked={autoPublishEnabled}
+                onCheckedChange={handleAutoPublishChange}
               />
             </div>
           </div>
