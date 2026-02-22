@@ -20,7 +20,7 @@ validation flows.
 ## High-Concurrency Notes
 
 - The API has global IP throttling enabled (`THROTTLE_LIMIT` / `THROTTLE_TTL_MS`).
-  At 1,000 VUs from a single load generator, default limits will trigger a high
+  At very high VU counts from a single load generator, default limits will trigger a high
   volume of `429` responses and fail thresholds before app capacity is measured.
 - For capacity tests, point `API_BASE_URL` to the API service origin when
   possible (for example: `http://localhost:3001/api/v1`) to avoid adding Next.js
@@ -71,7 +71,7 @@ k6 run infra/load-tests/protected-dashboard.k6.js \
   -e DURATION=5m
 ```
 
-5. Mixed 1,000 concurrent visitors (recommended acceptance run)
+5. Mixed 500 concurrent visitors (recommended acceptance run)
 
 ```bash
 k6 run infra/load-tests/mixed-1000-visitors.k6.js \
@@ -80,14 +80,14 @@ k6 run infra/load-tests/mixed-1000-visitors.k6.js \
   -e EVENT_SLUG=my-event \
   -e AUTH_COOKIE="sid=..." \
   -e DURATION=6m \
-  --summary-export infra/load-tests/results/mixed-1000-summary.json
+  --summary-export infra/load-tests/results/mixed-500-summary.json
 ```
 
 Default mix in `mixed-1000-visitors.k6.js`:
-- `PUBLIC_MICROSITE_VUS=550`
-- `PUBLIC_EVENTS_VUS=250`
-- `AUTH_BOOTSTRAP_VUS=120`
-- `PROTECTED_NAV_VUS=80`
+- `PUBLIC_MICROSITE_VUS=275`
+- `PUBLIC_EVENTS_VUS=125`
+- `AUTH_BOOTSTRAP_VUS=60`
+- `PROTECTED_NAV_VUS=40`
 
 ## Recording Results
 

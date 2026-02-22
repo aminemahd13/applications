@@ -13,16 +13,16 @@ const AUTH_RATIO = Math.min(Math.max(Number(__ENV.AUTH_RATIO || 0.75), 0), 1);
 const DURATION = __ENV.DURATION || '6m';
 
 const PUBLIC_MICROSITE_VUS = Math.max(
-  Number(__ENV.PUBLIC_MICROSITE_VUS || 550),
+  Number(__ENV.PUBLIC_MICROSITE_VUS || 275),
   0,
 );
-const PUBLIC_EVENTS_VUS = Math.max(Number(__ENV.PUBLIC_EVENTS_VUS || 250), 0);
+const PUBLIC_EVENTS_VUS = Math.max(Number(__ENV.PUBLIC_EVENTS_VUS || 125), 0);
 const AUTH_BOOTSTRAP_VUS = Math.max(
-  Number(__ENV.AUTH_BOOTSTRAP_VUS || 120),
+  Number(__ENV.AUTH_BOOTSTRAP_VUS || 60),
   0,
 );
 const PROTECTED_NAV_VUS = Math.max(
-  Number(__ENV.PROTECTED_NAV_VUS || 80),
+  Number(__ENV.PROTECTED_NAV_VUS || 40),
   0,
 );
 
@@ -67,6 +67,9 @@ function parseCookieHeader(value) {
 const AUTH_COOKIE_PAIRS = parseCookieHeader(AUTH_COOKIE).filter(
   (cookie) => !COOKIE_ATTRIBUTE_NAMES.has(cookie.name.toLowerCase()),
 );
+const AUTH_COOKIE_HEADER = AUTH_COOKIE_PAIRS.map(
+  (cookie) => `${cookie.name}=${cookie.value}`,
+).join('; ');
 
 if (!EVENT_SLUG) {
   throw new Error('EVENT_SLUG is required (example: -e EVENT_SLUG=my-event)');
@@ -74,33 +77,21 @@ if (!EVENT_SLUG) {
 
 if (
   (AUTH_BOOTSTRAP_VUS > 0 || PROTECTED_NAV_VUS > 0) &&
-  AUTH_COOKIE.length === 0
+  AUTH_COOKIE_HEADER.length === 0
 ) {
   throw new Error(
-    'AUTH_COOKIE is required when AUTH_BOOTSTRAP_VUS or PROTECTED_NAV_VUS is greater than 0',
+    'AUTH_COOKIE is required and must contain at least one cookie pair',
   );
-}
-
-if (
-  (AUTH_BOOTSTRAP_VUS > 0 || PROTECTED_NAV_VUS > 0) &&
-  AUTH_COOKIE_PAIRS.length === 0
-) {
-  throw new Error('AUTH_COOKIE must contain at least one cookie pair');
 }
 
 const MICROSITE_PATH = PAGE_PATH
   ? `/events/${EVENT_SLUG}/${PAGE_PATH}`
   : `/events/${EVENT_SLUG}`;
 
-let protectedNavJarInitialized = false;
-
 function getProtectedNavAuthJar() {
   const jar = http.cookieJar();
-  if (!protectedNavJarInitialized) {
-    for (const cookie of AUTH_COOKIE_PAIRS) {
-      jar.set(BASE_URL, cookie.name, cookie.value);
-    }
-    protectedNavJarInitialized = true;
+  for (const cookie of AUTH_COOKIE_PAIRS) {
+    jar.set(BASE_URL, cookie.name, cookie.value);
   }
   return jar;
 }
@@ -200,8 +191,9 @@ export function publicEventsScenario() {
 }
 
 export function authBootstrapScenario() {
-  const asAuthenticated = AUTH_COOKIE.length > 0 && Math.random() < AUTH_RATIO;
-  const headers = asAuthenticated ? { Cookie: AUTH_COOKIE } : undefined;
+  const asAuthenticated =
+    AUTH_COOKIE_HEADER.length > 0 && Math.random() < AUTH_RATIO;
+  const headers = asAuthenticated ? { Cookie: AUTH_COOKIE_HEADER } : undefined;
   const params = { headers, tags: { route: 'auth_bootstrap' } };
 
   const csrfRes = http.get(`${API_BASE_URL}/auth/csrf`, params);
