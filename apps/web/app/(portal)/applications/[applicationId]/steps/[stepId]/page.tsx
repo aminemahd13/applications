@@ -1292,30 +1292,6 @@ export default function StepFormPage() {
                       </div>
                     )}
 
-                    {field.type === "FILE" &&
-                      (typeof field.maxFileSizeMB === "number" ||
-                        typeof field.maxFiles === "number" ||
-                        (field.allowedMimeTypes?.length ?? 0) > 0) && (
-                        <p className="text-xs text-muted-foreground">
-                          {[
-                            typeof field.maxFileSizeMB === "number"
-                              ? `Max ${field.maxFileSizeMB} MB per file`
-                              : null,
-                            typeof field.maxFiles === "number"
-                              ? `Up to ${field.maxFiles} file${field.maxFiles === 1 ? "" : "s"}`
-                              : null,
-                            (field.allowedMimeTypes?.length ?? 0) > 0
-                              ? `Allowed: ${field.allowedMimeTypes?.join(", ")}`
-                              : null,
-                          ]
-                            .filter(
-                              (text): text is string =>
-                                typeof text === "string" && text.length > 0
-                            )
-                            .join(" | ")}
-                        </p>
-                      )}
-
                     {showFieldIssue && fieldIssue && (
                       <p className="text-xs text-destructive">{fieldIssue}</p>
                     )}
