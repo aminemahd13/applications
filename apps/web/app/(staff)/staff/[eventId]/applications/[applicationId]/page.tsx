@@ -2001,8 +2001,8 @@ export default function ApplicationDetailPage() {
                 return (
                   <Card key={step.id}>
                     <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
                           <CardTitle className="text-base">{step.title}</CardTitle>
                           {stepNeedsInfo.some((r) => r.status === "OPEN") && (
                             <Badge variant="outline" className="text-warning border-warning/40">
@@ -2010,7 +2010,7 @@ export default function ApplicationDetailPage() {
                             </Badge>
                           )}
                         </div>
-                        <StatusBadge status={step.status} />
+                        <StatusBadge status={step.status} className="self-start shrink-0" />
                       </div>
                       {step.submittedAt && (
                         <p className="text-xs text-muted-foreground">
@@ -2078,7 +2078,7 @@ export default function ApplicationDetailPage() {
                         </div>
                       </CardContent>
                     )}
-                    <CardFooter className="border-t flex items-center justify-between gap-2">
+                    <CardFooter className="border-t flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
                       <span className="text-xs text-muted-foreground">
                         {step.latestSubmissionVersionId
                           ? "Ready for review actions"

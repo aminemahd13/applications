@@ -124,17 +124,17 @@ export function StepTimeline({
 
             {/* Content */}
             <div className="flex-1 min-w-0 pt-0.5">
-              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
                 <span
                   className={cn(
-                    "text-sm font-medium truncate",
+                    "min-w-0 text-sm font-medium leading-snug break-words [overflow-wrap:anywhere]",
                     isActive && "text-primary",
                     status === "LOCKED" && "text-muted-foreground"
                   )}
                 >
                   {step.title}
                 </span>
-                <StatusBadge status={status} />
+                <StatusBadge status={status} className="w-fit self-start shrink-0" />
               </div>
               {step.deadline && (
                 <p className="text-xs text-muted-foreground mt-0.5">
