@@ -11,6 +11,37 @@ const AUTH_RATIO = Math.min(Math.max(Number(__ENV.AUTH_RATIO || 0.5), 0), 1);
 const VUS = Number(__ENV.VUS || 250);
 const DURATION = __ENV.DURATION || '5m';
 const SLEEP_SECONDS = Number(__ENV.SLEEP_MS || 150) / 1000;
+const COOKIE_ATTRIBUTE_NAMES = new Set([
+  'path',
+  'domain',
+  'expires',
+  'max-age',
+  'secure',
+  'httponly',
+  'samesite',
+]);
+
+function parseCookieHeader(value) {
+  return value
+    .split(';')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0 && part.includes('='))
+    .map((part) => {
+      const index = part.indexOf('=');
+      return {
+        name: part.slice(0, index).trim(),
+        value: part.slice(index + 1).trim(),
+      };
+    })
+    .filter((cookie) => cookie.name.length > 0 && cookie.value.length > 0);
+}
+
+const AUTH_COOKIE_PAIRS = parseCookieHeader(AUTH_COOKIE).filter(
+  (cookie) => !COOKIE_ATTRIBUTE_NAMES.has(cookie.name.toLowerCase()),
+);
+const AUTH_COOKIE_HEADER = AUTH_COOKIE_PAIRS.map(
+  (cookie) => `${cookie.name}=${cookie.value}`,
+).join('; ');
 
 export const options = {
   vus: VUS,
@@ -30,8 +61,9 @@ function parseJson(body) {
 }
 
 export default function () {
-  const asAuthenticated = AUTH_COOKIE.length > 0 && Math.random() < AUTH_RATIO;
-  const headers = asAuthenticated ? { Cookie: AUTH_COOKIE } : undefined;
+  const asAuthenticated =
+    AUTH_COOKIE_HEADER.length > 0 && Math.random() < AUTH_RATIO;
+  const headers = asAuthenticated ? { Cookie: AUTH_COOKIE_HEADER } : undefined;
   const params = { headers, tags: { route: 'auth_bootstrap' } };
 
   const csrfRes = http.get(`${API_BASE_URL}/auth/csrf`, params);

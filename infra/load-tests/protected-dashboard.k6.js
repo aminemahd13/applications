@@ -36,7 +36,9 @@ function parseCookieHeader(value) {
 }
 
 if (!AUTH_COOKIE) {
-  throw new Error('AUTH_COOKIE is required (example: -e AUTH_COOKIE=\"sid=...\" )');
+  throw new Error(
+    'AUTH_COOKIE is required (example: -e AUTH_COOKIE="sid=...")',
+  );
 }
 
 const AUTH_COOKIE_PAIRS = parseCookieHeader(AUTH_COOKIE).filter(
@@ -47,15 +49,10 @@ if (AUTH_COOKIE_PAIRS.length === 0) {
   throw new Error('AUTH_COOKIE must contain at least one cookie pair');
 }
 
-let authJarInitialized = false;
-
 function getAuthJar() {
   const jar = http.cookieJar();
-  if (!authJarInitialized) {
-    for (const cookie of AUTH_COOKIE_PAIRS) {
-      jar.set(BASE_URL, cookie.name, cookie.value);
-    }
-    authJarInitialized = true;
+  for (const cookie of AUTH_COOKIE_PAIRS) {
+    jar.set(BASE_URL, cookie.name, cookie.value);
   }
   return jar;
 }

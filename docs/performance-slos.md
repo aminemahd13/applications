@@ -1,6 +1,6 @@
 # Performance SLOs And Pass/Fail Gates
 
-Target scope: single-machine deployment (1 API + 1 Web), with up to ~1000
+Target scope: single-machine deployment (1 API + 1 Web), with up to ~500
 concurrent visitors under mixed public/authenticated traffic.
 
 ## API Latency Targets
