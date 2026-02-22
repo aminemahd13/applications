@@ -22,7 +22,7 @@ import { LoginSchema, SignupSchema } from '@event-platform/shared';
 import * as express from 'express';
 import * as crypto from 'crypto';
 import { SkipCsrf } from '../common/decorators/skip-csrf.decorator';
-import { Throttle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 
 @Controller('auth')
 export class AuthController {
@@ -39,6 +39,7 @@ export class AuthController {
   }
 
   @Get('csrf')
+  @SkipThrottle()
   getCsrf(
     @Session() session: any,
     @Res({ passthrough: true }) res: express.Response,
@@ -59,6 +60,7 @@ export class AuthController {
 
   @Get('session')
   @SkipCsrf()
+  @SkipThrottle()
   getSession(
     @Session() session: any,
     @Res({ passthrough: true }) res: express.Response,
@@ -137,6 +139,7 @@ export class AuthController {
   }
 
   @Get('me')
+  @SkipThrottle()
   async getMe(@Session() session: any) {
     if (!session?.user?.id) {
       return { user: null };

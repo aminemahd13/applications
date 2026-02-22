@@ -2,6 +2,7 @@ import { Controller, Get, Param, Query, Res } from '@nestjs/common';
 import { EventsService } from './events.service';
 import { EventFilterDto, EventFilterSchema } from '@event-platform/shared';
 import { SkipCsrf } from '../common/decorators/skip-csrf.decorator';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 
 /**
@@ -19,6 +20,7 @@ export class PublicEventsController {
    */
   @Get()
   @SkipCsrf()
+  @SkipThrottle()
   async findAll(
     @Query() query: any,
     @Res({ passthrough: true }) res: Response,
@@ -33,6 +35,7 @@ export class PublicEventsController {
    */
   @Get(':slug')
   @SkipCsrf()
+  @SkipThrottle()
   async findBySlug(
     @Param('slug') slug: string,
     @Res({ passthrough: true }) res: Response,
