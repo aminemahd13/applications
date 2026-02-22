@@ -162,6 +162,17 @@ function isProtectedRoute(pathname: string): boolean {
   return PROTECTED_SEGMENTS.has(first);
 }
 
+function hasAuthenticatedUser(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false;
+
+  const root = payload as Record<string, unknown>;
+  const candidate = "user" in root ? root.user : root;
+  if (!candidate || typeof candidate !== "object") return false;
+
+  const user = candidate as Record<string, unknown>;
+  return typeof user.id === "string" && user.id.length > 0;
+}
+
 async function validateSession(req: NextRequest): Promise<boolean> {
   const cookie = req.headers.get("cookie") ?? "";
 
@@ -180,7 +191,12 @@ async function validateSession(req: NextRequest): Promise<boolean> {
         continue;
       }
 
-      return res.ok;
+      if (!res.ok) {
+        return false;
+      }
+
+      const payload = await res.json().catch(() => null);
+      return hasAuthenticatedUser(payload);
     } catch {
       continue;
     }
