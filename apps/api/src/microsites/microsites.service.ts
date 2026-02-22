@@ -29,7 +29,75 @@ function removeLegacyJsField(record: JsonRecord) {
 
 @Injectable()
 export class MicrositesService {
+  private static readonly PUBLIC_CACHE_TTL_MS = Math.max(
+    Number(process.env.MICROSITES_PUBLIC_CACHE_TTL_MS ?? 30_000),
+    5_000,
+  );
+  private static readonly PUBLIC_CACHE_MAX_ENTRIES = Math.max(
+    Number(process.env.MICROSITES_PUBLIC_CACHE_MAX_ENTRIES ?? 2_000),
+    200,
+  );
+  private readonly publicMicrositeCache = new Map<
+    string,
+    { value: any; expiresAt: number }
+  >();
+  private readonly publicPageCache = new Map<
+    string,
+    { value: any; expiresAt: number }
+  >();
+
   constructor(private readonly prisma: PrismaService) {}
+
+  private getCachedEntry<T>(
+    cache: Map<string, { value: T; expiresAt: number }>,
+    key: string,
+  ): T | null {
+    const entry = cache.get(key);
+    if (!entry) return null;
+    if (entry.expiresAt <= Date.now()) {
+      cache.delete(key);
+      return null;
+    }
+    return entry.value;
+  }
+
+  private setCachedEntry<T>(
+    cache: Map<string, { value: T; expiresAt: number }>,
+    key: string,
+    value: T,
+  ) {
+    const now = Date.now();
+    cache.set(key, {
+      value,
+      expiresAt: now + MicrositesService.PUBLIC_CACHE_TTL_MS,
+    });
+
+    if (cache.size <= MicrositesService.PUBLIC_CACHE_MAX_ENTRIES) return;
+
+    for (const [cacheKey, entry] of cache) {
+      if (entry.expiresAt <= now) {
+        cache.delete(cacheKey);
+      }
+      if (cache.size <= MicrositesService.PUBLIC_CACHE_MAX_ENTRIES) {
+        return;
+      }
+    }
+
+    const overflow = cache.size - MicrositesService.PUBLIC_CACHE_MAX_ENTRIES;
+    if (overflow <= 0) return;
+
+    let removed = 0;
+    for (const cacheKey of cache.keys()) {
+      cache.delete(cacheKey);
+      removed += 1;
+      if (removed >= overflow) break;
+    }
+  }
+
+  private invalidatePublicCaches() {
+    this.publicMicrositeCache.clear();
+    this.publicPageCache.clear();
+  }
 
   // --- Admin: Settings ---
 
@@ -108,10 +176,12 @@ export class MicrositesService {
       typeof UpdateMicrositeSettingsSchema
     >['customCode'];
 
-    return this.prisma.microsites.update({
+    const updated = await this.prisma.microsites.update({
       where: { id: microsite.id },
       data: { settings: newSettings as Prisma.InputJsonValue },
     });
+    this.invalidatePublicCaches();
+    return updated;
   }
 
   // --- Admin: Pages ---
@@ -225,7 +295,7 @@ export class MicrositesService {
       customCode: mergedCustomCode,
     };
 
-    return this.prisma.microsite_pages.create({
+    const created = await this.prisma.microsite_pages.create({
       data: {
         microsite_id: microsite.id,
         slug: slug,
@@ -236,6 +306,8 @@ export class MicrositesService {
         visibility: data.visibility,
       },
     });
+    this.invalidatePublicCaches();
+    return created;
   }
 
   async updatePage(
@@ -315,7 +387,7 @@ export class MicrositesService {
       updateData.blocks = data.blocks as unknown as Prisma.InputJsonValue;
     }
 
-    return this.prisma.microsite_pages.update({
+    const updated = await this.prisma.microsite_pages.update({
       where: { id: pageId },
       data: {
         ...updateData,
@@ -326,6 +398,8 @@ export class MicrositesService {
             : {}),
       },
     });
+    this.invalidatePublicCaches();
+    return updated;
   }
 
   async deletePage(eventId: string, pageId: string) {
@@ -336,13 +410,17 @@ export class MicrositesService {
     if (!page || page.microsites.event_id !== eventId) {
       throw new NotFoundException('Page not found');
     }
-    return this.prisma.microsite_pages.delete({ where: { id: pageId } });
+    const deleted = await this.prisma.microsite_pages.delete({
+      where: { id: pageId },
+    });
+    this.invalidatePublicCaches();
+    return deleted;
   }
 
   // --- Admin: Publish & Rollback ---
 
   async publish(eventId: string, actorUserId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // 1. Lock Microsite using raw SQL
       await tx.$executeRaw`SELECT 1 FROM microsites WHERE event_id = ${eventId}::uuid FOR UPDATE`;
 
@@ -399,10 +477,12 @@ export class MicrositesService {
 
       return { version: nextVersion };
     });
+    this.invalidatePublicCaches();
+    return result;
   }
 
   async unpublish(eventId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT 1 FROM microsites WHERE event_id = ${eventId}::uuid FOR UPDATE`;
 
       const microsite = await tx.microsites.findUniqueOrThrow({
@@ -416,10 +496,12 @@ export class MicrositesService {
 
       return { version: 0 };
     });
+    this.invalidatePublicCaches();
+    return result;
   }
 
   async rollback(eventId: string, targetVersion: number) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // Lock row
       await tx.$executeRaw`SELECT 1 FROM microsites WHERE event_id = ${eventId}::uuid FOR UPDATE`;
 
@@ -462,6 +544,8 @@ export class MicrositesService {
 
       return { version: targetVersion };
     });
+    this.invalidatePublicCaches();
+    return result;
   }
 
   async getVersions(eventId: string) {
@@ -478,12 +562,21 @@ export class MicrositesService {
   // --- Public ---
 
   async getPublicMicrosite(slug: string) {
+    const normalizedSlug = slug.trim().toLowerCase();
+    const cached = this.getCachedEntry(
+      this.publicMicrositeCache,
+      normalizedSlug,
+    );
+    if (cached) {
+      return cached;
+    }
+
     const microsite = await this.prisma.microsites.findFirst({
       where: {
         published_version: { gt: 0 },
         // Microsites can be published independently from application windows,
         // but must not remain public after the event is archived (soft deleted).
-        events: { is: { slug, status: { not: 'archived' } } },
+        events: { is: { slug: normalizedSlug, status: { not: 'archived' } } },
       },
       select: {
         id: true,
@@ -521,9 +614,10 @@ export class MicrositesService {
     if (!versionRecord)
       throw new NotFoundException('Published version data missing');
 
-    const rootPageSlug = pages.find((p) => p.slug.length === 0)?.slug ?? pages[0]?.slug;
+    const rootPageSlug =
+      pages.find((p) => p.slug.length === 0)?.slug ?? pages[0]?.slug;
 
-    return {
+    const response = {
       settings: versionRecord.settings,
       nav: pages.map((p) => ({
         label: p.title,
@@ -534,27 +628,38 @@ export class MicrositesService {
       })),
       publishedVersion,
     };
+    this.setCachedEntry(this.publicMicrositeCache, normalizedSlug, response);
+    return response;
   }
 
   async getPublicPage(eventSlug: string, pageSlug: string) {
+    const normalizedEventSlug = eventSlug.trim().toLowerCase();
+    const normalizedSlug = String(pageSlug || '')
+      .trim()
+      .toLowerCase();
+    const useRootPageAlias = !normalizedSlug || normalizedSlug === 'home';
+    const cacheKey = `${normalizedEventSlug}:${useRootPageAlias ? '__home__' : normalizedSlug}`;
+    const cachedPage = this.getCachedEntry(this.publicPageCache, cacheKey);
+    if (cachedPage) {
+      return cachedPage;
+    }
+
     const microsite = await this.prisma.microsites.findFirst({
       where: {
         published_version: { gt: 0 },
         // Allow public microsite pages independent of application windows,
         // but hide them once the event is archived (soft deleted).
-        events: { is: { slug: eventSlug, status: { not: 'archived' } } },
+        events: {
+          is: { slug: normalizedEventSlug, status: { not: 'archived' } },
+        },
       },
       select: { id: true, published_version: true },
     });
     if (!microsite) throw new NotFoundException('Microsite not published');
 
-    const normalizedSlug = String(pageSlug || '')
-      .trim()
-      .toLowerCase();
-    const useRootPageAlias = !normalizedSlug || normalizedSlug === 'home';
-
     if (useRootPageAlias) {
-      const rootByEmptySlug = await this.prisma.microsite_page_versions.findFirst({
+      const rootByEmptySlug =
+        await this.prisma.microsite_page_versions.findFirst({
         where: {
           microsite_id: microsite.id,
           version: microsite.published_version,
@@ -563,6 +668,7 @@ export class MicrositesService {
         },
       });
       if (rootByEmptySlug) {
+        this.setCachedEntry(this.publicPageCache, cacheKey, rootByEmptySlug);
         return rootByEmptySlug;
       }
     }
@@ -581,6 +687,7 @@ export class MicrositesService {
 
     if (!page) throw new NotFoundException('Page not found');
 
+    this.setCachedEntry(this.publicPageCache, cacheKey, page);
     return page;
   }
 }

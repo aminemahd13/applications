@@ -18,7 +18,23 @@ import {
 @Injectable()
 export class EventsService {
   private static readonly DEFAULT_SORT_FIELD = 'created_at';
+  private static readonly PUBLIC_CACHE_TTL_MS = Math.max(
+    Number(process.env.EVENTS_PUBLIC_CACHE_TTL_MS ?? 30_000),
+    5_000,
+  );
+  private static readonly PUBLIC_CACHE_MAX_ENTRIES = Math.max(
+    Number(process.env.EVENTS_PUBLIC_CACHE_MAX_ENTRIES ?? 500),
+    100,
+  );
   private readonly logger = new Logger(EventsService.name);
+  private readonly publicEventsListCache = new Map<
+    string,
+    { value: PaginatedResponse<any>; expiresAt: number }
+  >();
+  private readonly publicEventBySlugCache = new Map<
+    string,
+    { value: any; expiresAt: number }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -30,6 +46,117 @@ export class EventsService {
     const parsed = new Date(cursor);
     if (Number.isNaN(parsed.getTime())) return null;
     return parsed;
+  }
+
+  private buildEventQueryContext(
+    filter: EventFilterDto,
+    options?: { forcePublishStatus?: PublishStatus },
+  ) {
+    const {
+      cursor,
+      sort,
+      publishStatus,
+      includeArchived,
+      from,
+      to,
+      q,
+    } = filter;
+
+    const where: any = {};
+    const effectivePublishStatus = options?.forcePublishStatus ?? publishStatus;
+
+    if (effectivePublishStatus) {
+      where.status = effectivePublishStatus.toLowerCase();
+    } else if (!includeArchived) {
+      where.status = { not: 'archived' };
+    }
+    if (from) where.application_open_at = { gte: from };
+    if (to) where.application_close_at = { lte: to };
+    if (q) {
+      where.OR = [
+        { title: { contains: q, mode: 'insensitive' } },
+        { slug: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+
+    const sortField = sort ?? EventsService.DEFAULT_SORT_FIELD;
+    if (cursor) {
+      if (sortField === EventsService.DEFAULT_SORT_FIELD) {
+        const cursorDate = this.parseDateCursor(cursor);
+        if (cursorDate) {
+          where.created_at = { lt: cursorDate };
+        } else {
+          where.id = { lt: cursor };
+        }
+      } else {
+        where.id = { lt: cursor };
+      }
+    }
+
+    return { where, sortField };
+  }
+
+  private normalizePublicFilterForCache(filter: EventFilterDto): string {
+    return JSON.stringify({
+      cursor: filter.cursor ?? null,
+      limit: filter.limit,
+      sort: filter.sort ?? null,
+      order: filter.order,
+      from: filter.from ? filter.from.toISOString() : null,
+      to: filter.to ? filter.to.toISOString() : null,
+      q: filter.q?.trim().toLowerCase() ?? null,
+    });
+  }
+
+  private getCachedEntry<T>(
+    cache: Map<string, { value: T; expiresAt: number }>,
+    key: string,
+  ): T | null {
+    const entry = cache.get(key);
+    if (!entry) return null;
+    if (entry.expiresAt <= Date.now()) {
+      cache.delete(key);
+      return null;
+    }
+    return entry.value;
+  }
+
+  private setCachedEntry<T>(
+    cache: Map<string, { value: T; expiresAt: number }>,
+    key: string,
+    value: T,
+  ) {
+    const now = Date.now();
+    cache.set(key, {
+      value,
+      expiresAt: now + EventsService.PUBLIC_CACHE_TTL_MS,
+    });
+
+    if (cache.size <= EventsService.PUBLIC_CACHE_MAX_ENTRIES) return;
+
+    for (const [cacheKey, entry] of cache) {
+      if (entry.expiresAt <= now) {
+        cache.delete(cacheKey);
+      }
+      if (cache.size <= EventsService.PUBLIC_CACHE_MAX_ENTRIES) {
+        return;
+      }
+    }
+
+    const overflow = cache.size - EventsService.PUBLIC_CACHE_MAX_ENTRIES;
+    if (overflow <= 0) return;
+
+    let removed = 0;
+    for (const cacheKey of cache.keys()) {
+      cache.delete(cacheKey);
+      removed += 1;
+      if (removed >= overflow) break;
+    }
+  }
+
+  private invalidatePublicCaches() {
+    this.publicEventsListCache.clear();
+    this.publicEventBySlugCache.clear();
   }
 
   /**
@@ -80,53 +207,38 @@ export class EventsService {
     };
   }
 
+  private toPublicEventResponse(event: any) {
+    return {
+      id: event.id,
+      title: event.title,
+      slug: event.slug,
+      seriesKey: event.series_key,
+      editionLabel: event.edition_label,
+      status: event.status,
+      lifecycleStatus: this.computeLifecycleStatus(event),
+      applicationOpenAt: event.application_open_at,
+      applicationCloseAt: event.application_close_at,
+      timezone: event.timezone,
+      startAt: event.start_at,
+      endAt: event.end_at,
+      venueName: event.venue_name,
+      venueAddress: event.venue_address,
+      venueMapUrl: event.venue_map_url,
+      description: event.description,
+      capacity: event.capacity,
+      requiresEmailVerification: event.requires_email_verification,
+      format: event.format,
+      createdAt: event.created_at,
+      updatedAt: event.updated_at,
+    };
+  }
+
   /**
    * List events with pagination and filters (admin view)
    */
   async findAll(filter: EventFilterDto): Promise<PaginatedResponse<any>> {
-    const {
-      cursor,
-      limit,
-      sort,
-      order,
-      publishStatus,
-      includeArchived,
-      from,
-      to,
-      q,
-    } = filter;
-
-    const where: any = {};
-
-    if (publishStatus) {
-      where.status = publishStatus.toLowerCase();
-    } else if (!includeArchived) {
-      where.status = { not: 'archived' };
-    }
-    if (from) where.application_open_at = { gte: from };
-    if (to) where.application_close_at = { lte: to };
-    if (q) {
-      where.OR = [
-        { title: { contains: q, mode: 'insensitive' } },
-        { slug: { contains: q, mode: 'insensitive' } },
-      ];
-    }
-
-    const sortField = sort ?? EventsService.DEFAULT_SORT_FIELD;
-
-    // Cursor-based pagination
-    if (cursor) {
-      if (sortField === EventsService.DEFAULT_SORT_FIELD) {
-        const cursorDate = this.parseDateCursor(cursor);
-        if (cursorDate) {
-          where.created_at = { lt: cursorDate };
-        } else {
-          where.id = { lt: cursor };
-        }
-      } else {
-        where.id = { lt: cursor };
-      }
-    }
+    const { limit, order } = filter;
+    const { where, sortField } = this.buildEventQueryContext(filter);
 
     const events = await this.prisma.events.findMany({
       where,
@@ -154,10 +266,64 @@ export class EventsService {
    * List published events only (public view)
    */
   async findPublic(filter: EventFilterDto): Promise<PaginatedResponse<any>> {
-    return this.findAll({
+    const publicFilter: EventFilterDto = {
       ...filter,
       publishStatus: PublishStatus.PUBLISHED,
+    };
+    const cacheKey = this.normalizePublicFilterForCache(publicFilter);
+    const cached = this.getCachedEntry(this.publicEventsListCache, cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const { limit, order } = publicFilter;
+    const { where, sortField } = this.buildEventQueryContext(publicFilter, {
+      forcePublishStatus: PublishStatus.PUBLISHED,
     });
+    const events = await this.prisma.events.findMany({
+      where,
+      orderBy: { [sortField]: order },
+      take: limit + 1,
+      select: {
+        id: true,
+        title: true,
+        slug: true,
+        series_key: true,
+        edition_label: true,
+        status: true,
+        application_open_at: true,
+        application_close_at: true,
+        timezone: true,
+        start_at: true,
+        end_at: true,
+        venue_name: true,
+        venue_address: true,
+        venue_map_url: true,
+        description: true,
+        capacity: true,
+        requires_email_verification: true,
+        format: true,
+        created_at: true,
+        updated_at: true,
+      },
+    });
+
+    const hasMore = events.length > limit;
+    const data = hasMore ? events.slice(0, -1) : events;
+    const response: PaginatedResponse<any> = {
+      data: data.map((event) => this.toPublicEventResponse(event)),
+      meta: {
+        nextCursor: hasMore
+          ? sortField === EventsService.DEFAULT_SORT_FIELD
+            ? data[data.length - 1].created_at.toISOString()
+            : data[data.length - 1].id
+          : null,
+        hasMore,
+      },
+    };
+
+    this.setCachedEntry(this.publicEventsListCache, cacheKey, response);
+    return response;
   }
 
   /**
@@ -175,11 +341,44 @@ export class EventsService {
    * Get single event by slug (public)
    */
   async findBySlug(slug: string) {
+    const normalizedSlug = slug.trim().toLowerCase();
+    const cached = this.getCachedEntry(
+      this.publicEventBySlugCache,
+      normalizedSlug,
+    );
+    if (cached) {
+      return cached;
+    }
+
     const event = await this.prisma.events.findFirst({
-      where: { slug, status: 'published' },
+      where: { slug: normalizedSlug, status: 'published' },
+      select: {
+        id: true,
+        title: true,
+        slug: true,
+        series_key: true,
+        edition_label: true,
+        status: true,
+        application_open_at: true,
+        application_close_at: true,
+        timezone: true,
+        start_at: true,
+        end_at: true,
+        venue_name: true,
+        venue_address: true,
+        venue_map_url: true,
+        description: true,
+        capacity: true,
+        requires_email_verification: true,
+        format: true,
+        created_at: true,
+        updated_at: true,
+      },
     });
     if (!event) throw new NotFoundException('Event not found');
-    return this.toEventResponse(event);
+    const response = this.toPublicEventResponse(event);
+    this.setCachedEntry(this.publicEventBySlugCache, normalizedSlug, response);
+    return response;
   }
 
   /**
@@ -209,6 +408,7 @@ export class EventsService {
       },
     });
 
+    this.invalidatePublicCaches();
     return this.toEventResponse(event);
   }
 
@@ -272,6 +472,7 @@ export class EventsService {
       data,
     });
 
+    this.invalidatePublicCaches();
     return this.toEventResponse(event);
   }
 
@@ -283,6 +484,7 @@ export class EventsService {
       where: { id },
       data: { status: 'published' },
     });
+    this.invalidatePublicCaches();
     return this.toEventResponse(event);
   }
 
@@ -301,6 +503,7 @@ export class EventsService {
       where: { id },
       data: { status: 'archived' },
     });
+    this.invalidatePublicCaches();
     return this.toEventResponse(updated);
   }
 
@@ -437,6 +640,7 @@ export class EventsService {
       }
     }
 
+    this.invalidatePublicCaches();
     return { success: true };
   }
 }

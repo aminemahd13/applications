@@ -26,6 +26,12 @@ import { EventScopeInterceptor } from './common/interceptors/event-scope.interce
 import { TestSecurityController } from './common/controllers/test-security.controller';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 
+const THROTTLE_TTL_MS = Math.max(
+  Number(process.env.THROTTLE_TTL_MS ?? 60_000),
+  1_000,
+);
+const THROTTLE_LIMIT = Math.max(Number(process.env.THROTTLE_LIMIT ?? 300), 60);
+
 @Module({
   imports: [
     ClsModule.forRoot({
@@ -40,8 +46,8 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
     ThrottlerModule.forRoot([
       {
         name: 'default',
-        ttl: 60000, // 1 minute
-        limit: 60, // 60 requests per minute general
+        ttl: THROTTLE_TTL_MS,
+        limit: THROTTLE_LIMIT,
       },
     ]),
     LoggerModule,

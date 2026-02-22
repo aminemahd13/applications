@@ -15,6 +15,7 @@ validation flows.
 - `VUS` virtual users
 - `DURATION` test duration (example: `5m`)
 - `SLEEP_MS` per-iteration pause in milliseconds
+- `AUTH_COOKIE` authenticated session cookie for protected/auth scenarios
 
 ## Scenarios
 
@@ -60,6 +61,24 @@ k6 run infra/load-tests/protected-dashboard.k6.js \
   -e VUS=250 \
   -e DURATION=5m
 ```
+
+5. Mixed 1,000 concurrent visitors (recommended acceptance run)
+
+```bash
+k6 run infra/load-tests/mixed-1000-visitors.k6.js \
+  -e BASE_URL=http://localhost \
+  -e API_BASE_URL=http://localhost/api/v1 \
+  -e EVENT_SLUG=my-event \
+  -e AUTH_COOKIE="sid=..." \
+  -e DURATION=6m \
+  --summary-export infra/load-tests/results/mixed-1000-summary.json
+```
+
+Default mix in `mixed-1000-visitors.k6.js`:
+- `PUBLIC_MICROSITE_VUS=550`
+- `PUBLIC_EVENTS_VUS=250`
+- `AUTH_BOOTSTRAP_VUS=120`
+- `PROTECTED_NAV_VUS=80`
 
 ## Recording Results
 

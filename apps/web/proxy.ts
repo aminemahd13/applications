@@ -178,6 +178,44 @@ async function validateSession(req: NextRequest): Promise<boolean> {
 
   for (const apiUrl of API_URL_CANDIDATES) {
     try {
+      const sessionRes = await fetch(`${apiUrl}/auth/session`, {
+        method: "GET",
+        headers: {
+          cookie,
+          accept: "application/json",
+        },
+        cache: "no-store",
+      });
+
+      if (sessionRes.status !== 404) {
+        if (sessionRes.status >= 500) {
+          continue;
+        }
+
+        if (!sessionRes.ok) {
+          return false;
+        }
+
+        const payload = await sessionRes.json().catch(() => null);
+        if (
+          payload &&
+          typeof payload === "object" &&
+          "authenticated" in payload &&
+          typeof (payload as { authenticated?: unknown }).authenticated ===
+            "boolean"
+        ) {
+          return Boolean(
+            (payload as { authenticated: boolean }).authenticated,
+          );
+        }
+
+        return hasAuthenticatedUser(payload);
+      }
+    } catch {
+      // Fall back to /auth/me compatibility check below.
+    }
+
+    try {
       const res = await fetch(`${apiUrl}/auth/me`, {
         method: "GET",
         headers: {

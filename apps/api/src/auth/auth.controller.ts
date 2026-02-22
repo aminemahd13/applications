@@ -57,6 +57,16 @@ export class AuthController {
     return { csrfToken: session.csrfToken };
   }
 
+  @Get('session')
+  @SkipCsrf()
+  getSession(
+    @Session() session: any,
+    @Res({ passthrough: true }) res: express.Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    return { authenticated: Boolean(session?.user?.id) };
+  }
+
   @Post('signup')
   @Throttle({ default: { limit: 10, ttl: 900000 } }) // 10 per 15 min
   async signup(@Body() body: any) {
