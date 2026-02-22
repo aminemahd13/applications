@@ -88,12 +88,22 @@ const MICROSITE_PATH = PAGE_PATH
   ? `/events/${EVENT_SLUG}/${PAGE_PATH}`
   : `/events/${EVENT_SLUG}`;
 
+let protectedNavJar = null;
+let protectedNavJarInitialized = false;
+
 function getProtectedNavAuthJar() {
-  const jar = http.cookieJar();
-  for (const cookie of AUTH_COOKIE_PAIRS) {
-    jar.set(BASE_URL, cookie.name, cookie.value);
+  if (!protectedNavJar) {
+    protectedNavJar = http.cookieJar();
   }
-  return jar;
+
+  if (!protectedNavJarInitialized) {
+    for (const cookie of AUTH_COOKIE_PAIRS) {
+      protectedNavJar.set(BASE_URL, cookie.name, cookie.value);
+    }
+    protectedNavJarInitialized = true;
+  }
+
+  return protectedNavJar;
 }
 
 const scenarios = {
