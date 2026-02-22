@@ -39,7 +39,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { PageHeader, ConfirmDialog, EmptyState } from "@/components/shared";
-import { apiClient } from "@/lib/api";
+import { ApiError, apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 
@@ -229,6 +229,7 @@ export default function WorkflowBuilderPage() {
   const [formVersionOptions, setFormVersionOptions] = useState<
     FormVersionOption[]
   >([]);
+  const [removedServerStepIds, setRemovedServerStepIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -282,6 +283,7 @@ export default function WorkflowBuilderPage() {
         setFormVersionOptions(
           versionOptionsNested.flat().sort((a, b) => a.label.localeCompare(b.label))
         );
+        setRemovedServerStepIds([]);
       } catch {
         if (!cancelled) {
           toast.error("Failed to load workflow.");
@@ -329,6 +331,11 @@ export default function WorkflowBuilderPage() {
         .filter((s) => s.id !== id)
         .map((s, i) => ({ ...s, stepIndex: i }))
     );
+    if (!id.startsWith("temp_")) {
+      setRemovedServerStepIds((prev) =>
+        prev.includes(id) ? prev : [...prev, id]
+      );
+    }
     setDeleteTarget(null);
   }
 
@@ -337,6 +344,20 @@ export default function WorkflowBuilderPage() {
     try {
       const ordered = [...steps].sort((a, b) => a.stepIndex - b.stepIndex);
       const serverIds: string[] = [];
+
+      for (const stepId of removedServerStepIds) {
+        try {
+          await apiClient(`/events/${eventId}/workflow/steps/${stepId}`, {
+            method: "DELETE",
+            csrfToken: csrfToken ?? undefined,
+          });
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.status !== 404) {
+            throw error;
+          }
+        }
+      }
+      setRemovedServerStepIds([]);
 
       for (const s of ordered) {
         const payload = toApiPayload(s);
@@ -371,6 +392,7 @@ export default function WorkflowBuilderPage() {
       setSteps(
         list.map(normalizeStep).sort((a, b) => a.stepIndex - b.stepIndex)
       );
+      setRemovedServerStepIds([]);
     } catch (error: any) {
       toast.error(
         typeof error?.message === "string"
