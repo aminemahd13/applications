@@ -123,8 +123,7 @@ describe('MicrositesService', () => {
     });
 
     expect(prisma.microsite_pages.findFirst).toHaveBeenCalledWith({
-      where: { microsite_id: 'ms-1' },
-      orderBy: { position: 'asc' },
+      where: { microsite_id: 'ms-1', slug: '' },
       select: { id: true },
     });
     expect(createInput).toBeDefined();
@@ -285,8 +284,7 @@ describe('MicrositesService', () => {
     await service.updatePage('event-1', 'page-1', { slug: '' });
 
     expect(prisma.microsite_pages.findFirst).toHaveBeenNthCalledWith(1, {
-      where: { microsite_id: 'ms-1' },
-      orderBy: { position: 'asc' },
+      where: { microsite_id: 'ms-1', slug: '' },
       select: { id: true },
     });
     expect(prisma.microsite_pages.findFirst).toHaveBeenNthCalledWith(2, {
@@ -348,21 +346,64 @@ describe('MicrositesService', () => {
       microsite_id: 'ms-1',
       version: 4,
       visibility: 'PUBLIC',
+      slug: '',
     });
-    expect(
-      (
-        pageVersionQuery as {
-          where: Record<string, unknown>;
-        }
-      ).where,
-    ).not.toHaveProperty('slug');
     expect(
       (
         pageVersionQuery as {
           orderBy?: Record<string, unknown>;
         }
       ).orderBy,
-    ).toEqual({ position: 'asc' });
+    ).toBeUndefined();
+  });
+
+  it('falls back to first page by position when root alias has no empty-slug page', async () => {
+    prisma.microsites.findFirst.mockResolvedValue({
+      id: 'ms-1',
+      published_version: 4,
+    });
+    let pageVersionQueries: Array<{
+      where: Record<string, unknown>;
+      orderBy?: unknown;
+    }> = [];
+    prisma.microsite_page_versions.findFirst.mockImplementation((query) => {
+      pageVersionQueries.push(
+        query as {
+          where: Record<string, unknown>;
+          orderBy?: unknown;
+        },
+      );
+      if (pageVersionQueries.length === 1) {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve({
+        id: 'pv-1',
+        slug: 'welcome',
+        version: 4,
+      });
+    });
+
+    const result = await service.getPublicPage('demo-event', '');
+
+    expect(result).toEqual({ id: 'pv-1', slug: 'welcome', version: 4 });
+    expect(pageVersionQueries).toHaveLength(2);
+    expect(pageVersionQueries[0]).toMatchObject({
+      where: {
+        microsite_id: 'ms-1',
+        version: 4,
+        visibility: 'PUBLIC',
+        slug: '',
+      },
+    });
+    expect(pageVersionQueries[1]).toMatchObject({
+      where: {
+        microsite_id: 'ms-1',
+        version: 4,
+        visibility: 'PUBLIC',
+      },
+      orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
+    });
+    expect(pageVersionQueries[1].where).not.toHaveProperty('slug');
   });
 
   it('returns computed public navigation links from published pages', async () => {
@@ -386,6 +427,32 @@ describe('MicrositesService', () => {
       nav: [
         { label: 'Home', href: '/events/summer-school' },
         { label: 'FAQ', href: '/events/summer-school/faq' },
+      ],
+      publishedVersion: 7,
+    });
+  });
+
+  it('maps the empty-slug page to the root navigation link', async () => {
+    prisma.microsites.findFirst.mockResolvedValue({
+      id: 'ms-1',
+      published_version: 7,
+      events: { slug: 'summer-school' },
+    });
+    prisma.microsite_versions.findUnique.mockResolvedValue({
+      settings: { theme: 'light' },
+    });
+    prisma.microsite_page_versions.findMany.mockResolvedValue([
+      { title: 'FAQ', slug: 'faq' },
+      { title: 'Home', slug: '' },
+    ]);
+
+    const result = await service.getPublicMicrosite('summer-school');
+
+    expect(result).toEqual({
+      settings: { theme: 'light' },
+      nav: [
+        { label: 'FAQ', href: '/events/summer-school/faq' },
+        { label: 'Home', href: '/events/summer-school' },
       ],
       publishedVersion: 7,
     });
