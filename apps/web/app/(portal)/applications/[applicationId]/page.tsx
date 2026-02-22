@@ -41,6 +41,7 @@ interface ApplicationDetail {
   id: string;
   eventId: string;
   eventTitle: string;
+  eventDescription?: string;
   decisionStatus: string;
   decisionPublishedAt?: string;
   completionCredential?: {
@@ -66,8 +67,10 @@ export default function ApplicationWorkspacePage() {
   const applicationId = params.applicationId as string;
   const [app, setApp] = useState<ApplicationDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
 
   useEffect(() => {
+    setIsDescriptionExpanded(false);
     (async () => {
       try {
         // First get all my applications to resolve the eventId for this application
@@ -86,20 +89,65 @@ export default function ApplicationWorkspacePage() {
         }
 
         const eventId = (match as any).eventId as string;
+        const eventSlug =
+          typeof (match as any).eventSlug === "string"
+            ? ((match as any).eventSlug as string)
+            : "";
 
-        // Now fetch the full application detail from the event-scoped endpoint
-        const appRes = await apiClient<
-          Record<string, unknown> | { data: Record<string, unknown> }
-        >(`/events/${eventId}/applications/me`);
+        // Fetch application details and event metadata in parallel.
+        const [appRes, eventRes] = await Promise.allSettled([
+          apiClient<Record<string, unknown> | { data: Record<string, unknown> }>(
+            `/events/${eventId}/applications/me`
+          ),
+          eventSlug
+            ? apiClient<Record<string, unknown> | { data: Record<string, unknown> }>(
+                `/public/events/${eventSlug}`
+              )
+            : Promise.resolve(null),
+        ]);
+
+        const eventRaw =
+          eventRes.status === "fulfilled" &&
+          eventRes.value &&
+          typeof eventRes.value === "object" &&
+          "data" in eventRes.value &&
+          (eventRes.value as any).data
+            ? (eventRes.value as any).data
+            : eventRes.status === "fulfilled" && eventRes.value
+              ? eventRes.value
+              : null;
+
+        const eventDescriptionFromEvent =
+          eventRaw && typeof (eventRaw as any).description === "string"
+            ? (eventRaw as any).description
+            : undefined;
+
+        if (appRes.status !== "fulfilled") {
+          setIsLoading(false);
+          return;
+        }
+
         const raw: any =
-          appRes && typeof appRes === "object" && "data" in appRes && (appRes as any).data
-            ? (appRes as any).data
-            : appRes;
+          appRes.value &&
+          typeof appRes.value === "object" &&
+          "data" in appRes.value &&
+          (appRes.value as any).data
+            ? (appRes.value as any).data
+            : appRes.value;
 
         if (!raw) {
           setIsLoading(false);
           return;
         }
+
+        const eventDescriptionFromApplication =
+          typeof raw.eventDescription === "string"
+            ? raw.eventDescription
+            : raw.event &&
+                typeof raw.event === "object" &&
+                typeof raw.event.description === "string"
+              ? raw.event.description
+              : undefined;
 
         // Normalize API shape to frontend shape
         const detail: ApplicationDetail = {
@@ -107,6 +155,12 @@ export default function ApplicationWorkspacePage() {
           eventId: raw.eventId ?? eventId,
           eventTitle:
             raw.eventTitle ?? (match as any).eventTitle ?? "Event",
+          eventDescription:
+            eventDescriptionFromApplication ??
+            eventDescriptionFromEvent ??
+            (typeof (match as any).eventDescription === "string"
+              ? (match as any).eventDescription
+              : undefined),
           decisionStatus: raw.decisionStatus ?? "NONE",
           decisionPublishedAt: raw.decisionPublishedAt,
           completionCredential:
@@ -171,6 +225,7 @@ export default function ApplicationWorkspacePage() {
     app.completionCredential?.status === "ISSUED"
       ? app.completionCredential
       : undefined;
+  const hasLongDescription = (app.eventDescription?.trim().length ?? 0) > 280;
 
   const decisionColors: Record<string, string> = {
     ACCEPTED: "border-success bg-success/5",
@@ -181,6 +236,34 @@ export default function ApplicationWorkspacePage() {
   return (
     <div className="space-y-6">
       <PageHeader title={app.eventTitle} description="Application workspace" />
+
+      {app.eventDescription && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">About this event</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p
+              className={`text-sm text-muted-foreground whitespace-pre-line ${
+                isDescriptionExpanded || !hasLongDescription ? "" : "line-clamp-4"
+              }`}
+            >
+              {app.eventDescription}
+            </p>
+            {hasLongDescription && (
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                className="h-auto p-0 text-sm"
+                onClick={() => setIsDescriptionExpanded((prev) => !prev)}
+              >
+                {isDescriptionExpanded ? "See less" : "See more"}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Decision banner */}
       {app.decisionStatus && app.decisionStatus !== "NONE" && (
