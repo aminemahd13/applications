@@ -122,7 +122,7 @@ export class MicrositesService {
 
     const pages = await this.prisma.microsite_pages.findMany({
       where: { microsite_id: microsite.id },
-      orderBy: { position: 'asc' },
+      orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
     });
 
     let publishedPageIds = new Set<string>();
@@ -137,7 +137,9 @@ export class MicrositesService {
       publishedPageIds = new Set(publishedRows.map((row) => row.page_id));
     }
 
-    const rootPageId = pages[0]?.id;
+    // Canonical homepage is the page with an empty slug. Keep positional
+    // fallback for legacy rows that predate empty-slug homepage handling.
+    const rootPageId = pages.find((page) => page.slug.length === 0)?.id ?? pages[0]?.id;
 
     return pages.map((page) => ({
       id: page.id,
@@ -175,11 +177,11 @@ export class MicrositesService {
     if (slug === 'home')
       throw new BadRequestException('Slug "home" is reserved');
 
+    let position = 0;
     if (slug.length === 0) {
       // Empty slug is reserved for the homepage/root page only.
       const existingRoot = await this.prisma.microsite_pages.findFirst({
-        where: { microsite_id: microsite.id },
-        orderBy: { position: 'asc' },
+        where: { microsite_id: microsite.id, slug: '' },
         select: { id: true },
       });
       if (existingRoot) {
@@ -197,6 +199,18 @@ export class MicrositesService {
           `Page with slug '${slug}' already exists`,
         );
       }
+
+      // Most clients do not provide a position; append safely in that case.
+      const lastPage = await this.prisma.microsite_pages.findFirst({
+        where: { microsite_id: microsite.id },
+        orderBy: [{ position: 'desc' }, { created_at: 'desc' }],
+        select: { position: true },
+      });
+      const nextPosition = (lastPage?.position ?? -1) + 1;
+      position =
+        Number.isFinite(data.position) && data.position > 0
+          ? data.position
+          : nextPosition;
     }
 
     const seoBase = toJsonRecord(data.seo as unknown);
@@ -216,7 +230,7 @@ export class MicrositesService {
         microsite_id: microsite.id,
         slug: slug,
         title: data.title,
-        position: data.position,
+        position,
         blocks: (data.blocks ?? []) as unknown as Prisma.InputJsonValue,
         seo: seo as Prisma.InputJsonValue,
         visibility: data.visibility,
@@ -249,11 +263,10 @@ export class MicrositesService {
 
       if (newSlug.length === 0) {
         const rootPage = await this.prisma.microsite_pages.findFirst({
-          where: { microsite_id: page.microsite_id },
-          orderBy: { position: 'asc' },
+          where: { microsite_id: page.microsite_id, slug: '' },
           select: { id: true },
         });
-        if (!rootPage || rootPage.id !== page.id) {
+        if (rootPage && rootPage.id !== page.id) {
           throw new BadRequestException(
             'Only the homepage can use an empty slug',
           );
@@ -500,7 +513,7 @@ export class MicrositesService {
           version: publishedVersion,
           visibility: 'PUBLIC',
         },
-        orderBy: { position: 'asc' },
+        orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
         select: { title: true, slug: true },
       }),
     ]);
@@ -508,12 +521,14 @@ export class MicrositesService {
     if (!versionRecord)
       throw new NotFoundException('Published version data missing');
 
+    const rootPageSlug = pages.find((p) => p.slug.length === 0)?.slug ?? pages[0]?.slug;
+
     return {
       settings: versionRecord.settings,
-      nav: pages.map((p, index) => ({
+      nav: pages.map((p) => ({
         label: p.title,
         href:
-          index === 0
+          p.slug === rootPageSlug
             ? `/events/${microsite.events.slug}`
             : `/events/${microsite.events.slug}/${p.slug}`,
       })),
@@ -538,6 +553,20 @@ export class MicrositesService {
       .toLowerCase();
     const useRootPageAlias = !normalizedSlug || normalizedSlug === 'home';
 
+    if (useRootPageAlias) {
+      const rootByEmptySlug = await this.prisma.microsite_page_versions.findFirst({
+        where: {
+          microsite_id: microsite.id,
+          version: microsite.published_version,
+          visibility: 'PUBLIC',
+          slug: '',
+        },
+      });
+      if (rootByEmptySlug) {
+        return rootByEmptySlug;
+      }
+    }
+
     const page = await this.prisma.microsite_page_versions.findFirst({
       where: {
         microsite_id: microsite.id,
@@ -545,7 +574,9 @@ export class MicrositesService {
         visibility: 'PUBLIC',
         ...(useRootPageAlias ? {} : { slug: normalizedSlug }),
       },
-      ...(useRootPageAlias ? { orderBy: { position: 'asc' } } : {}),
+      ...(useRootPageAlias
+        ? { orderBy: [{ position: 'asc' }, { created_at: 'asc' }] }
+        : {}),
     });
 
     if (!page) throw new NotFoundException('Page not found');

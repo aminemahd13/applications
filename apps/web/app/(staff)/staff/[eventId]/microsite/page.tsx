@@ -100,7 +100,11 @@ export default function MicrositePage_() {
   }
 
   function withHomeFlag(list: MicrositePage[]): MicrositePage[] {
-    return list.map((page, index) => ({ ...page, isHome: index === 0 }));
+    const canonicalHomeId =
+      list.find((page) => page.slug.trim().length === 0)?.id ??
+      list.find((page) => page.isHome)?.id ??
+      list[0]?.id;
+    return list.map((page) => ({ ...page, isHome: page.id === canonicalHomeId }));
   }
 
   function unwrapApiArray(value: unknown): Array<Record<string, unknown>> {
