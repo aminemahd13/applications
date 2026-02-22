@@ -16,6 +16,10 @@ const INTERNAL_API_URL =
     : "http://localhost:3001/api/v1");
 const API_URL =
   typeof window === "undefined" ? INTERNAL_API_URL : PUBLIC_API_URL;
+const PUBLIC_CONTENT_REVALIDATE_SECONDS = Math.max(
+  Number(process.env.PUBLIC_CONTENT_REVALIDATE_SECONDS ?? "60"),
+  1
+);
 let csrfReloadTriggered = false;
 
 function extractErrorMessage(data: unknown): string {
@@ -76,7 +80,7 @@ export async function getMicrosite(
 ): Promise<PublicMicrosite | null> {
   try {
     const res = await fetch(`${API_URL}/microsites/public/${eventSlug}`, {
-      cache: "no-store",
+      next: { revalidate: PUBLIC_CONTENT_REVALIDATE_SECONDS },
     });
     if (!res.ok) return null;
     return res.json();
@@ -92,7 +96,7 @@ export async function getPage(
   try {
     const res = await fetch(
       `${API_URL}/microsites/public/${eventSlug}/pages/${pagePath}`,
-      { cache: "no-store" }
+      { next: { revalidate: PUBLIC_CONTENT_REVALIDATE_SECONDS } }
     );
     if (!res.ok) return null;
     return res.json();
