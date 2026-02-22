@@ -99,7 +99,7 @@ The Docker Compose file creates an `internal` network.
 
 ### Rate Limiting
 - **Nginx**: Configure `limit_req` in `nginx.conf` if needed.
-- **API**: Uses `ThrottlerModule` (default: 60 req/min).
+- **API**: Uses `ThrottlerModule` (default: 300 req/min).
 
 ### Headers
 Nginx should be configured to send security headers (HSTS, X-Frame-Options, etc.).

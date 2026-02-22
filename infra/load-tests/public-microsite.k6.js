@@ -27,11 +27,13 @@ export const options = {
 
 export default function () {
   const res = http.get(`${BASE_URL}${micrositePath}`, {
+    redirects: 0,
     tags: { route: 'public_microsite' },
   });
 
   check(res, {
     'status is 200/304': (r) => r.status === 200 || r.status === 304,
+    'not redirected': (r) => r.status !== 301 && r.status !== 302,
     'response time < 2s': (r) => r.timings.duration < 2000,
   });
 
