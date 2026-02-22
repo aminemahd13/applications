@@ -98,7 +98,13 @@ export function renderAnswerValue(value: unknown, options?: RenderAnswerOptions)
   }
 
   const primitive = renderPrimitive(value);
-  if (primitive) return <span className="whitespace-pre-wrap">{primitive}</span>;
+  if (primitive) {
+    return (
+      <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+        {primitive}
+      </span>
+    );
+  }
 
   if (Array.isArray(value)) {
     if (value.length === 0) return <span className="text-muted-foreground">-</span>;

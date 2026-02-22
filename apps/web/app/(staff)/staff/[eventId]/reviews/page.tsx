@@ -574,8 +574,8 @@ export default function ReviewsPage() {
           description="There are no submissions matching this queue filter."
         />
       ) : current ? (
-        <div className="grid lg:grid-cols-5 gap-6">
-          <div className="lg:col-span-3 space-y-4">
+        <div className="grid gap-6 lg:grid-cols-5">
+          <div className="min-w-0 space-y-4 lg:col-span-3">
             <AnimatePresence mode="wait">
               <motion.div
                 key={current.id}
@@ -584,35 +584,46 @@ export default function ReviewsPage() {
                 exit={{ opacity: 0, x: -20 }}
                 transition={{ duration: 0.2 }}
               >
-                <Card>
+                <Card className="min-w-0">
                   <CardHeader>
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <CardTitle className="text-base">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <CardTitle className="break-words text-base">
                           {current.applicantName}
                         </CardTitle>
-                        <CardDescription>{current.applicantEmail}</CardDescription>
+                        <CardDescription className="break-all">
+                          {current.applicantEmail}
+                        </CardDescription>
                       </div>
-                      <Badge variant="secondary">{current.stepTitle}</Badge>
+                      <Badge
+                        variant="secondary"
+                        className="max-w-[45%] shrink-0 truncate"
+                      >
+                        {current.stepTitle}
+                      </Badge>
                     </div>
-                    <div className="text-xs text-muted-foreground flex items-center gap-2">
+                    <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
                       <span>
                         Submitted {new Date(current.submittedAt).toLocaleDateString()}
                       </span>
                       {(current.tags ?? []).slice(0, 4).map((tag) => (
-                        <Badge key={tag} variant="outline" className="text-[10px]">
+                        <Badge
+                          key={tag}
+                          variant="outline"
+                          className="max-w-full break-all text-[10px]"
+                        >
                           {tag}
                         </Badge>
                       ))}
                     </div>
                   </CardHeader>
-                  <CardContent className="overflow-hidden">
-                    <div className="max-h-[60vh] overflow-y-auto pr-2">
+                  <CardContent className="min-w-0 overflow-hidden">
+                    <div className="max-h-[60vh] overflow-y-auto overflow-x-hidden pr-2">
                       <div className="space-y-4">
                         {Object.entries(current.answers).map(([key, val]) => (
                           <div key={key}>
-                            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-2">
-                              <span>{key}</span>
+                            <p className="text-muted-foreground mb-1 flex flex-wrap items-center gap-2 text-xs font-medium uppercase tracking-wider">
+                              <span className="break-all">{key}</span>
                               {requiredFieldKeys.has(key) && (
                                 <span
                                   className="text-destructive text-sm leading-none"
@@ -623,7 +634,7 @@ export default function ReviewsPage() {
                                 </span>
                               )}
                             </p>
-                            <div className="text-sm whitespace-pre-wrap break-words">
+                            <div className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                               {renderAnswerValue(val, {
                                 eventId,
                                 verification: current.submissionVersionId
@@ -669,7 +680,7 @@ export default function ReviewsPage() {
             </div>
           </div>
 
-          <div className="lg:col-span-2 space-y-4">
+          <div className="space-y-4 lg:col-span-2">
             <Card>
               <CardHeader>
                 <CardTitle className="text-sm">Review actions</CardTitle>
@@ -747,7 +758,7 @@ export default function ReviewsPage() {
       </Dialog>
 
       <Dialog open={showReviewDialog} onOpenChange={setShowReviewDialog}>
-        <DialogContent>
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-lg overflow-x-hidden">
           <DialogHeader>
             <DialogTitle>
               {reviewVerdict === "APPROVE"
@@ -783,10 +794,10 @@ export default function ReviewsPage() {
             {reviewVerdict === "REQUEST_INFO" && (
               <>
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <Label className="text-sm">Fields to revise</Label>
                     {requestFieldOptions.length > 0 && (
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap justify-end gap-2">
                         <Button
                           variant="ghost"
                           size="sm"
@@ -808,7 +819,7 @@ export default function ReviewsPage() {
                       </div>
                     )}
                   </div>
-                  <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-muted/40 p-3">
+                  <div className="max-h-48 space-y-2 overflow-y-auto overflow-x-hidden rounded-lg border border-muted/40 p-3">
                     {requestFieldOptions.length === 0 ? (
                       <p className="text-xs text-muted-foreground">
                         No fields available for this step. Leave this empty to
@@ -818,9 +829,10 @@ export default function ReviewsPage() {
                       requestFieldOptions.map((field) => (
                         <label
                           key={field.id}
-                          className="flex items-start gap-2 text-sm"
+                          className="flex min-w-0 items-start gap-2 text-sm"
                         >
                           <Checkbox
+                            className="shrink-0"
                             checked={requestInfoFieldIds.includes(field.id)}
                             onCheckedChange={(checked) => {
                               const isChecked = checked === true;
@@ -831,10 +843,10 @@ export default function ReviewsPage() {
                               );
                             }}
                           />
-                          <span>
+                          <span className="min-w-0 break-words">
                             {field.label}
                             {field.section && (
-                              <span className="block text-xs text-muted-foreground">
+                              <span className="block break-words text-xs text-muted-foreground">
                                 {field.section}
                               </span>
                             )}
@@ -855,14 +867,15 @@ export default function ReviewsPage() {
                     onChange={(e) => setRequestInfoDeadline(e.target.value)}
                   />
                 </div>
-                <div className="flex items-center justify-between">
-                  <div>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
                     <Label className="text-sm">Notify applicant</Label>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs text-muted-foreground break-words">
                       Send an inbox message with a direct link to the step.
                     </p>
                   </div>
                   <Switch
+                    className="shrink-0"
                     checked={requestInfoNotifyApplicant}
                     onCheckedChange={(checked) => {
                       const enabled = Boolean(checked);
@@ -875,14 +888,15 @@ export default function ReviewsPage() {
                   />
                 </div>
                 {requestInfoNotifyApplicant && (
-                  <div className="flex items-center justify-between">
-                    <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
                       <Label className="text-sm">Also send email</Label>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-muted-foreground break-words">
                         Deliver the revision request via email.
                       </p>
                     </div>
                     <Switch
+                      className="shrink-0"
                       checked={requestInfoSendEmail}
                       onCheckedChange={(checked) =>
                         setRequestInfoSendEmail(Boolean(checked))
