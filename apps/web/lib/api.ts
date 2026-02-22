@@ -16,6 +16,29 @@ const INTERNAL_API_URL =
     : "http://localhost:3001/api/v1");
 const API_URL =
   typeof window === "undefined" ? INTERNAL_API_URL : PUBLIC_API_URL;
+let csrfReloadTriggered = false;
+
+function extractErrorMessage(data: unknown): string {
+  if (!data || typeof data !== "object") return "";
+  const candidate = (data as { message?: unknown }).message;
+  if (typeof candidate === "string") return candidate;
+  if (Array.isArray(candidate)) {
+    return candidate.filter((item): item is string => typeof item === "string").join(" ");
+  }
+  return "";
+}
+
+function isInvalidCsrfError(status: number, data: unknown): boolean {
+  if (status !== 403) return false;
+  return extractErrorMessage(data).toLowerCase().includes("invalid csrf token");
+}
+
+function triggerCsrfRecoveryReload() {
+  if (typeof window === "undefined") return;
+  if (csrfReloadTriggered) return;
+  csrfReloadTriggered = true;
+  window.location.reload();
+}
 
 /* ---------- Server-side types ---------- */
 
@@ -130,8 +153,11 @@ export async function apiClient<T = unknown>(
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: "Request failed" }));
     const message = err.message ?? `Error ${res.status}`;
+    const invalidCsrf = isInvalidCsrfError(res.status, err);
 
-    if (typeof window !== "undefined") {
+    if (invalidCsrf) {
+      triggerCsrfRecoveryReload();
+    } else if (typeof window !== "undefined") {
       toast.error(message);
     }
 
