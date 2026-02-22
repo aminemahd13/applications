@@ -385,16 +385,27 @@ export default function DashboardPage() {
                       )}
                     </div>
 
-                    <Button
-                      variant="ghost"
-                      className="w-full group-hover:bg-primary/5"
-                      asChild
-                    >
-                      <Link href={`/applications/event/${app.eventSlug}`}>
-                        {app.nextAction ? "Continue" : "View"}
-                        <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-                      </Link>
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        className="flex-1"
+                        asChild
+                      >
+                        <Link href={`/events/${app.eventSlug}`}>
+                          View website
+                        </Link>
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="flex-1 group-hover:bg-primary/5"
+                        asChild
+                      >
+                        <Link href={`/applications/event/${app.eventSlug}`}>
+                          {app.nextAction ? "Continue" : "View"}
+                          <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                        </Link>
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
               </motion.div>
