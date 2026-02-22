@@ -62,8 +62,21 @@ export class SubmissionsService {
     // Get current form version for this step
     const step = await this.prisma.workflow_steps.findUnique({
       where: { id: stepId },
+      select: { category: true, form_version_id: true },
     });
-    if (!step?.form_version_id) {
+    if (!step) {
+      throw new NotFoundException('Step not found');
+    }
+    if (!step.form_version_id) {
+      if (step.category === 'INFO_ONLY') {
+        // Info-only steps intentionally do not persist answer drafts.
+        await this.prisma.application_step_states.updateMany({
+          where: { application_id: applicationId, step_id: stepId },
+          data: { last_activity_at: new Date() },
+        });
+        return { draftId: state.currentDraftId ?? '' };
+      }
+
       throw new BadRequestException('Step has no form attached');
     }
 
@@ -164,9 +177,15 @@ export class SubmissionsService {
     // Get form version and step details
     const step = await this.prisma.workflow_steps.findFirst({
       where: { id: stepId, event_id: eventId },
+      select: {
+        category: true,
+        deadline_at: true,
+        form_version_id: true,
+        review_required: true,
+      },
     });
-    if (!step?.form_version_id) {
-      throw new BadRequestException('Step has no form attached');
+    if (!step) {
+      throw new NotFoundException('Step not found');
     }
 
     // Enforce step deadline (if set)
@@ -174,9 +193,54 @@ export class SubmissionsService {
       throw new ForbiddenException('Step deadline has passed');
     }
 
+    if (!step.form_version_id) {
+      if (step.category === 'INFO_ONLY') {
+        const submittedAt = new Date();
+
+        await this.prisma.application_step_states.updateMany({
+          where: { application_id: applicationId, step_id: stepId },
+          data: {
+            // Info-only steps have no submission version; consider them complete immediately.
+            status: StepStatus.APPROVED,
+            latest_submission_version_id: null,
+            current_draft_id: null,
+            last_activity_at: submittedAt,
+          },
+        });
+
+        await this.stepStateService.recomputeAllStepStates(applicationId);
+
+        await this.prisma.needs_info_requests.updateMany({
+          where: {
+            application_id: applicationId,
+            step_id: stepId,
+            status: 'OPEN',
+          },
+          data: {
+            status: 'RESOLVED',
+            resolved_at: submittedAt,
+          },
+        });
+
+        return {
+          id: crypto.randomUUID(),
+          applicationId,
+          stepId,
+          formVersionId: '',
+          versionNumber: 0,
+          answersSnapshot: {},
+          submittedAt,
+          submittedBy: userId,
+        };
+      }
+
+      throw new BadRequestException('Step has no form attached');
+    }
+    const formVersionId = step.form_version_id;
+
     // Fetch form version to validate answers
     const formVersion = await this.prisma.form_versions.findUnique({
-      where: { id: step.form_version_id },
+      where: { id: formVersionId },
     });
     if (!formVersion) {
       throw new BadRequestException('Form version not found');
@@ -216,7 +280,7 @@ export class SubmissionsService {
     // Validate and commit files (User requirement: staging -> committed)
     // Also verifies ownership within event
     await this.validateFiles(
-      step.form_version_id,
+      formVersionId,
       normalizedAnswers,
       applicationId,
       stepId,
@@ -239,7 +303,7 @@ export class SubmissionsService {
           id: crypto.randomUUID(),
           application_id: applicationId,
           step_id: stepId,
-          form_version_id: step.form_version_id!,
+          form_version_id: formVersionId,
           version_number: nextVersion,
           answers_snapshot: normalizedAnswers,
           submitted_by: userId,
