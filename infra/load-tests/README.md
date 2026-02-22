@@ -17,6 +17,15 @@ validation flows.
 - `SLEEP_MS` per-iteration pause in milliseconds
 - `AUTH_COOKIE` authenticated session cookie for protected/auth scenarios
 
+## High-Concurrency Notes
+
+- The API has global IP throttling enabled (`THROTTLE_LIMIT` / `THROTTLE_TTL_MS`).
+  At 1,000 VUs from a single load generator, default limits will trigger a high
+  volume of `429` responses and fail thresholds before app capacity is measured.
+- For capacity tests, point `API_BASE_URL` to the API service origin when
+  possible (for example: `http://localhost:3001/api/v1`) to avoid adding Next.js
+  API proxy overhead.
+
 ## Scenarios
 
 1. Public microsite page view (`/events/:slug[/path]`)

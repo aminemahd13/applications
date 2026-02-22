@@ -34,11 +34,39 @@ const AUTH_BOOTSTRAP_SLEEP_SECONDS =
   Number(__ENV.AUTH_BOOTSTRAP_SLEEP_MS || 150) / 1000;
 const PROTECTED_NAV_SLEEP_SECONDS =
   Number(__ENV.PROTECTED_NAV_SLEEP_MS || 200) / 1000;
+const COOKIE_ATTRIBUTE_NAMES = new Set([
+  'path',
+  'domain',
+  'expires',
+  'max-age',
+  'secure',
+  'httponly',
+  'samesite',
+]);
 
 const PROTECTED_ROUTES = (__ENV.PROTECTED_ROUTES || '/dashboard,/events,/inbox')
   .split(',')
   .map((value) => value.trim())
   .filter((value) => value.length > 0);
+
+function parseCookieHeader(value) {
+  return value
+    .split(';')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0 && part.includes('='))
+    .map((part) => {
+      const index = part.indexOf('=');
+      return {
+        name: part.slice(0, index).trim(),
+        value: part.slice(index + 1).trim(),
+      };
+    })
+    .filter((cookie) => cookie.name.length > 0 && cookie.value.length > 0);
+}
+
+const AUTH_COOKIE_PAIRS = parseCookieHeader(AUTH_COOKIE).filter(
+  (cookie) => !COOKIE_ATTRIBUTE_NAMES.has(cookie.name.toLowerCase()),
+);
 
 if (!EVENT_SLUG) {
   throw new Error('EVENT_SLUG is required (example: -e EVENT_SLUG=my-event)');
@@ -53,9 +81,29 @@ if (
   );
 }
 
+if (
+  (AUTH_BOOTSTRAP_VUS > 0 || PROTECTED_NAV_VUS > 0) &&
+  AUTH_COOKIE_PAIRS.length === 0
+) {
+  throw new Error('AUTH_COOKIE must contain at least one cookie pair');
+}
+
 const MICROSITE_PATH = PAGE_PATH
   ? `/events/${EVENT_SLUG}/${PAGE_PATH}`
   : `/events/${EVENT_SLUG}`;
+
+let protectedNavJarInitialized = false;
+
+function getProtectedNavAuthJar() {
+  const jar = http.cookieJar();
+  if (!protectedNavJarInitialized) {
+    for (const cookie of AUTH_COOKIE_PAIRS) {
+      jar.set(BASE_URL, cookie.name, cookie.value);
+    }
+    protectedNavJarInitialized = true;
+  }
+  return jar;
+}
 
 const scenarios = {
   public_microsite: {
@@ -114,11 +162,13 @@ function parseJson(body) {
 
 export function publicMicrositeScenario() {
   const res = http.get(`${BASE_URL}${MICROSITE_PATH}`, {
+    redirects: 0,
     tags: { route: 'public_microsite' },
   });
 
   check(res, {
     'microsite status is 200/304': (r) => r.status === 200 || r.status === 304,
+    'microsite not redirected': (r) => r.status !== 301 && r.status !== 302,
     'microsite latency < 2s': (r) => r.timings.duration < 2000,
   });
 
@@ -182,7 +232,7 @@ export function protectedNavigationScenario() {
   const route =
     PROTECTED_ROUTES[Math.floor(Math.random() * PROTECTED_ROUTES.length)];
   const res = http.get(`${BASE_URL}${route}`, {
-    headers: { Cookie: AUTH_COOKIE },
+    jar: getProtectedNavAuthJar(),
     redirects: 0,
     tags: { route: 'protected_navigation' },
   });
