@@ -19,6 +19,8 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { useAuth } from "@/lib/auth-context";
+import { ApiError, apiClient } from "@/lib/api";
+import { getProfileCompletionStatus } from "@/lib/profile-completion";
 
 const loginSchema = z.object({
   email: z.string().email("Enter a valid email"),
@@ -36,6 +38,15 @@ function isSafeReturnUrl(returnUrl: string | null): returnUrl is string {
 interface LoginUser {
   isGlobalAdmin: boolean;
   eventRoles?: Array<{ eventId: string }>;
+}
+
+interface ApplicantProfileCompletionPayload {
+  fullName?: string;
+  phone?: string;
+  education?: string;
+  institution?: string;
+  city?: string;
+  country?: string;
 }
 
 function getDefaultPostLoginPath(user: LoginUser): string {
@@ -68,6 +79,14 @@ function shouldUseReturnUrl(returnUrl: string, user: LoginUser): boolean {
   return true;
 }
 
+function buildProfilePromptUrl(returnUrl: string): string {
+  const params = new URLSearchParams({
+    required: "1",
+    returnUrl,
+  });
+  return `/profile?${params.toString()}`;
+}
+
 function LoginForm() {
   const searchParams = useSearchParams();
   const { login } = useAuth();
@@ -81,16 +100,39 @@ function LoginForm() {
   async function onSubmit(values: LoginValues) {
     setIsLoading(true);
     const user = await login(values.email, values.password);
-    setIsLoading(false);
-    if (user) {
-      const returnUrl = searchParams.get("returnUrl");
-      const defaultPath = getDefaultPostLoginPath(user);
-      if (isSafeReturnUrl(returnUrl) && shouldUseReturnUrl(returnUrl, user)) {
-        window.location.assign(returnUrl);
-      } else {
-        window.location.assign(defaultPath);
+    if (!user) {
+      setIsLoading(false);
+      return;
+    }
+
+    const returnUrl = searchParams.get("returnUrl");
+    const defaultPath = getDefaultPostLoginPath(user);
+    const targetPath =
+      isSafeReturnUrl(returnUrl) && shouldUseReturnUrl(returnUrl, user)
+        ? returnUrl
+        : defaultPath;
+
+    const isApplicantUser =
+      !user.isGlobalAdmin && (user.eventRoles?.length ?? 0) === 0;
+    if (isApplicantUser && !targetPath.startsWith("/profile")) {
+      try {
+        const profile = await apiClient<ApplicantProfileCompletionPayload>(
+          "/auth/me/profile",
+        );
+        const completion = getProfileCompletionStatus(profile);
+        if (!completion.isComplete) {
+          window.location.assign(buildProfilePromptUrl(targetPath));
+          return;
+        }
+      } catch (error: unknown) {
+        if (error instanceof ApiError && error.status === 401) {
+          window.location.assign("/login");
+          return;
+        }
       }
     }
+
+    window.location.assign(targetPath);
   }
 
   return (

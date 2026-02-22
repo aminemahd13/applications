@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, apiClient } from "@/lib/api";
+import { getProfileCompletionStatus } from "@/lib/profile-completion";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
@@ -16,6 +17,15 @@ interface EventSummary {
 
 interface ApplicationDetail {
   id: string;
+}
+
+interface ApplicantProfileCompletionPayload {
+  fullName?: string;
+  phone?: string;
+  education?: string;
+  institution?: string;
+  city?: string;
+  country?: string;
 }
 
 function getApplicationDestination(application: ApplicationDetail): string {
@@ -40,14 +50,36 @@ function redirectToLogin() {
   window.location.assign(`/login?returnUrl=${returnUrl}`);
 }
 
+function getProfileIncompleteErrorPayload(error: ApiError): {
+  missingFields: string[];
+} | null {
+  if (error.status !== 403) return null;
+  if (!error.data || typeof error.data !== "object") return null;
+
+  const root = error.data as Record<string, unknown>;
+  if (root.code !== "PROFILE_INCOMPLETE") return null;
+  const missingFields = Array.isArray(root.missingFields)
+    ? root.missingFields.filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      )
+    : [];
+
+  return { missingFields };
+}
+
 export default function EventApplicationIntentPage() {
   const params = useParams();
   const router = useRouter();
   const { csrfToken, isLoading: authLoading, isAuthenticated } = useAuth();
   const slug = params.slug as string;
   const [error, setError] = useState<string | null>(null);
+  const [missingProfileFields, setMissingProfileFields] = useState<string[] | null>(null);
 
   const fallbackEventUrl = useMemo(() => `/events/${slug}`, [slug]);
+  const profilePromptUrl = useMemo(() => {
+    const returnUrl = encodeURIComponent(`/applications/event/${slug}`);
+    return `/profile?required=1&returnUrl=${returnUrl}`;
+  }, [slug]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -57,9 +89,22 @@ export default function EventApplicationIntentPage() {
     }
 
     let cancelled = false;
+    setError(null);
+    setMissingProfileFields(null);
 
     (async () => {
       try {
+        const profile = await apiClient<ApplicantProfileCompletionPayload>(
+          "/auth/me/profile",
+        );
+        const completion = getProfileCompletionStatus(profile);
+        if (!completion.isComplete) {
+          if (!cancelled) {
+            setMissingProfileFields(completion.missingFields);
+          }
+          return;
+        }
+
         const eventPayload = await apiClient<unknown>(`/public/events/${slug}`);
         const event = unwrapResponseData<EventSummary>(eventPayload);
 
@@ -90,6 +135,15 @@ export default function EventApplicationIntentPage() {
           redirectToLogin();
           return;
         }
+        if (err instanceof ApiError) {
+          const profileIncomplete = getProfileIncompleteErrorPayload(err);
+          if (profileIncomplete) {
+            if (!cancelled) {
+              setMissingProfileFields(profileIncomplete.missingFields);
+            }
+            return;
+          }
+        }
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Could not open application");
         }
@@ -100,6 +154,29 @@ export default function EventApplicationIntentPage() {
       cancelled = true;
     };
   }, [slug, router, csrfToken, authLoading, isAuthenticated]);
+
+  if (missingProfileFields !== null) {
+    return (
+      <div className="mx-auto max-w-xl py-10">
+        <Alert>
+          <AlertTitle>Complete your profile before applying</AlertTitle>
+          <AlertDescription>
+            {missingProfileFields.length > 0
+              ? `Missing fields: ${missingProfileFields.join(", ")}.`
+              : "Please complete your required profile fields before applying."}
+          </AlertDescription>
+        </Alert>
+        <div className="mt-4 flex gap-2">
+          <Button asChild>
+            <Link href={profilePromptUrl}>Complete profile</Link>
+          </Button>
+          <Button variant="outline" asChild>
+            <Link href={fallbackEventUrl}>Back to event</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (!error) {
     return (

@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { useForm } from "react-hook-form";
 import {
+  ArrowRight,
+  AlertCircle,
   User,
   GraduationCap,
   MapPin,
@@ -19,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Progress } from "@/components/ui/progress";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Select,
   SelectContent,
@@ -29,6 +34,7 @@ import {
 import { PageHeader, FormSkeleton } from "@/components/shared";
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { getProfileCompletionStatus } from "@/lib/profile-completion";
 import { toast } from "sonner";
 
 interface Profile {
@@ -64,8 +70,15 @@ const COUNTRY_OPTIONS = [
   "Other",
 ];
 
+function isSafeReturnUrl(returnUrl: string | null): returnUrl is string {
+  return (
+    !!returnUrl && returnUrl.startsWith("/") && !returnUrl.startsWith("//")
+  );
+}
+
 export default function ProfilePage() {
   const { user, csrfToken } = useAuth();
+  const searchParams = useSearchParams();
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isChangingPw, setIsChangingPw] = useState(false);
@@ -97,13 +110,11 @@ export default function ProfilePage() {
 
   // Completeness
   const profileValues = profileForm.watch();
-  const fieldKeys: (keyof Omit<Profile, "email" | "links">)[] = [
-    "fullName", "phone", "education", "institution", "city", "country",
-  ];
-  const filledCount = fieldKeys.filter(
-    (k) => profileValues[k] && String(profileValues[k]).trim()
-  ).length;
-  const completeness = Math.round((filledCount / fieldKeys.length) * 100);
+  const profileCompletion = getProfileCompletionStatus(profileValues);
+  const completeness = profileCompletion.completeness;
+  const isApplyPrompt = searchParams.get("required") === "1";
+  const continueReturnUrl = searchParams.get("returnUrl");
+  const continueUrl = isSafeReturnUrl(continueReturnUrl) ? continueReturnUrl : null;
 
   // Get initials for avatar
   const fullName = profileValues.fullName ?? "";
@@ -125,7 +136,18 @@ export default function ProfilePage() {
         body: { ...values, links: cleanLinks },
         csrfToken: csrfToken ?? undefined,
       });
-      toast.success("Profile updated!");
+      const completionAfterSave = getProfileCompletionStatus(values);
+      const shouldContinueToReturnUrl =
+        isApplyPrompt && !!continueUrl && completionAfterSave.isComplete;
+      toast.success(
+        shouldContinueToReturnUrl
+          ? "Profile updated! Redirecting..."
+          : "Profile updated!",
+      );
+      if (shouldContinueToReturnUrl) {
+        window.location.assign(continueUrl);
+        return;
+      }
     } catch {
       /* handled */
     } finally {
@@ -170,6 +192,42 @@ export default function ProfilePage() {
     >
       <PageHeader title="Profile" description="Manage your personal information and account settings" />
 
+      {isApplyPrompt && (
+        <Alert
+          className={
+            profileCompletion.isComplete
+              ? "border-success bg-success/5"
+              : "border-warning bg-warning/5"
+          }
+        >
+          <AlertCircle
+            className={
+              profileCompletion.isComplete
+                ? "h-4 w-4 text-success"
+                : "h-4 w-4 text-warning"
+            }
+          />
+          <AlertTitle>
+            {profileCompletion.isComplete
+              ? "Profile complete"
+              : "Complete your profile to apply"}
+          </AlertTitle>
+          <AlertDescription className="text-sm">
+            {profileCompletion.isComplete
+              ? "Your required profile fields are complete."
+              : `Missing fields: ${profileCompletion.missingFields.join(", ")}.`}
+            {continueUrl && profileCompletion.isComplete && (
+              <Button size="sm" className="mt-3 w-fit" asChild>
+                <Link href={continueUrl}>
+                  Continue
+                  <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+                </Link>
+              </Button>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Avatar + completeness */}
       <Card>
         <CardContent className="p-6">
@@ -184,7 +242,7 @@ export default function ProfilePage() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">Profile completeness</span>
                   <span className="font-medium">
-                    {completeness === 100 ? (
+                    {profileCompletion.isComplete ? (
                       <span className="flex items-center gap-1 text-success">
                         <CheckCircle2 className="h-3 w-3" />
                         Complete
@@ -314,9 +372,12 @@ export default function ProfilePage() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <LinkIcon className="h-4 w-4" />
-            Links
+            Links (Optional)
           </CardTitle>
-          <CardDescription>Portfolio, LinkedIn, GitHub, etc.</CardDescription>
+          <CardDescription>
+            Optional. Add portfolio or social links if relevant. This section is
+            not required to apply to events.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {links.map((link, i) => (
