@@ -591,12 +591,19 @@ function validateFieldValue(
 function collectValidationIssues(
   formDefinition: StepDetail["formDefinition"] | undefined,
   values: Record<string, unknown>,
+  options?: {
+    limitToFieldIds?: Set<string>;
+  },
 ): Record<string, string> {
   if (!formDefinition) return {};
   const issues: Record<string, string> = {};
+  const limitToFieldIds = options?.limitToFieldIds;
 
   for (const section of formDefinition.sections) {
     for (const field of section.fields) {
+      if (limitToFieldIds && !limitToFieldIds.has(field.fieldId)) {
+        continue;
+      }
       const issue = validateFieldValue(field, values[field.fieldId], values);
       if (issue) {
         issues[field.fieldId] = issue;
@@ -673,16 +680,20 @@ export default function StepFormPage() {
     step?.status === "REJECTED_FINAL";
   const isLocked = step?.status === "LOCKED";
 
-  const needsInfoFieldIds = new Set(
-    step?.needsInfo?.flatMap((ni) => ni.targetFieldIds) ?? []
+  const needsInfoFieldIds = useMemo(
+    () => new Set(step?.needsInfo?.flatMap((ni) => ni.targetFieldIds) ?? []),
+    [step?.needsInfo]
   );
   const hasTargetedNeedsInfo = needsInfoFieldIds.size > 0;
   const isRevisionTargetedMode =
     step?.status === "NEEDS_REVISION" && hasTargetedNeedsInfo;
 
   const validationIssues = useMemo(
-    () => collectValidationIssues(step?.formDefinition, watchedValues ?? {}),
-    [step?.formDefinition, watchedValues]
+    () =>
+      collectValidationIssues(step?.formDefinition, watchedValues ?? {}, {
+        limitToFieldIds: isRevisionTargetedMode ? needsInfoFieldIds : undefined,
+      }),
+    [step?.formDefinition, watchedValues, isRevisionTargetedMode, needsInfoFieldIds]
   );
 
   const fieldLabelById = useMemo(() => {
@@ -794,6 +805,8 @@ export default function StepFormPage() {
         );
         const draftAnswers =
           draft && isRecord(draft.answers) ? draft.answers : draft ?? undefined;
+        const submissionAnswers =
+          stepState && isRecord(stepState.answers) ? stepState.answers : undefined;
 
         const stepDetail: StepDetail = {
           stepId,
@@ -815,13 +828,17 @@ export default function StepFormPage() {
               : undefined,
           formDefinition: normalizeFormDefinition(stepState?.formDefinition),
           draft: draftAnswers,
-          submission: undefined,
+          submission: submissionAnswers,
           needsInfo,
         };
         setStep(stepDetail);
         setSubmitError(null);
         setHasTriedSubmit(false);
-        const initialValues = stepDetail.draft ?? stepDetail.submission ?? {};
+        const submissionValues = isRecord(stepDetail.submission)
+          ? stepDetail.submission
+          : {};
+        const draftValues = isRecord(stepDetail.draft) ? stepDetail.draft : {};
+        const initialValues = { ...submissionValues, ...draftValues };
         form.reset(initialValues as Record<string, unknown>);
       } catch {
         /* handled */
@@ -878,7 +895,9 @@ export default function StepFormPage() {
     if (isReadOnly || isLocked || !resolvedEventId) return;
 
     const values = form.getValues() as Record<string, unknown>;
-    const issues = collectValidationIssues(step?.formDefinition, values);
+    const issues = collectValidationIssues(step?.formDefinition, values, {
+      limitToFieldIds: isRevisionTargetedMode ? needsInfoFieldIds : undefined,
+    });
     setHasTriedSubmit(true);
     if (Object.keys(issues).length > 0 || isDeadlinePassed) {
       setShowConfirm(false);

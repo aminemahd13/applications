@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -47,11 +48,12 @@ import {
   CardSkeleton,
 } from "@/components/shared";
 import { apiClient } from "@/lib/api";
-import { useAuth } from "@/lib/auth-context";
+import { useAuth, usePermissions } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { renderAnswerValue } from "@/lib/render-answer-value";
 import { getRequiredFieldKeySet } from "@/lib/file-answer-utils";
 import { Badge } from "@/components/ui/badge";
+import { Permission } from "@event-platform/shared";
 
 interface ReviewItem {
   id: string;
@@ -190,6 +192,7 @@ export default function ReviewsPage() {
   const params = useParams();
   const eventId = params.eventId as string;
   const { csrfToken } = useAuth();
+  const { hasPermission } = usePermissions(eventId);
 
   const [queue, setQueue] = useState<ReviewItem[]>([]);
   const [stepOptions, setStepOptions] = useState<StepOption[]>([]);
@@ -211,7 +214,12 @@ export default function ReviewsPage() {
   const [reviewComment, setReviewComment] = useState("");
   const [requestInfoFieldIds, setRequestInfoFieldIds] = useState<string[]>([]);
   const [requestInfoDeadline, setRequestInfoDeadline] = useState("");
+  const [requestInfoNotifyApplicant, setRequestInfoNotifyApplicant] =
+    useState(true);
+  const [requestInfoSendEmail, setRequestInfoSendEmail] = useState(false);
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+
+  const canSendMessages = hasPermission(Permission.EVENT_MESSAGES_SEND);
 
   const activeTags = useMemo(
     () =>
@@ -370,6 +378,8 @@ export default function ReviewsPage() {
     setReviewComment("");
     setRequestInfoFieldIds([]);
     setRequestInfoDeadline("");
+    setRequestInfoNotifyApplicant(canSendMessages);
+    setRequestInfoSendEmail(false);
     setShowReviewDialog(true);
   }
 
@@ -409,6 +419,42 @@ export default function ReviewsPage() {
           csrfToken: csrfToken ?? undefined,
         },
       );
+
+      if (
+        reviewVerdict === "REQUEST_INFO" &&
+        requestInfoNotifyApplicant &&
+        canSendMessages
+      ) {
+        const fallbackMessage =
+          reviewComment.trim() ||
+          `Please review and update the requested fields for ${current.stepTitle}.`;
+        try {
+          await apiClient(`/events/${eventId}/messages`, {
+            method: "POST",
+            body: {
+              title: `Revision requested: ${current.stepTitle}`,
+              bodyRich: fallbackMessage,
+              bodyText: fallbackMessage,
+              actionButtons: [
+                {
+                  kind: "OPEN_STEP",
+                  eventId,
+                  stepId: current.stepId,
+                  label: "Update step",
+                },
+              ],
+              recipientFilter: {
+                applicationIds: [current.applicationId],
+              },
+              sendEmail: requestInfoSendEmail,
+            },
+            csrfToken: csrfToken ?? undefined,
+          });
+        } catch {
+          toast.error("Revision requested, but message failed to send.");
+        }
+      }
+
       toast.success(
         reviewVerdict === "APPROVE"
           ? "Step approved"
@@ -718,11 +764,19 @@ export default function ReviewsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label className="text-sm">Comment (optional)</Label>
+              <Label className="text-sm">
+                {reviewVerdict === "REQUEST_INFO"
+                  ? "Message to applicant"
+                  : "Comment (optional)"}
+              </Label>
               <Textarea
                 value={reviewComment}
                 onChange={(e) => setReviewComment(e.target.value)}
-                placeholder="Add a review comment..."
+                placeholder={
+                  reviewVerdict === "REQUEST_INFO"
+                    ? "Explain what needs to be updated..."
+                    : "Add a review comment..."
+                }
                 rows={3}
               />
             </div>
@@ -801,6 +855,47 @@ export default function ReviewsPage() {
                     onChange={(e) => setRequestInfoDeadline(e.target.value)}
                   />
                 </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-sm">Notify applicant</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Send an inbox message with a direct link to the step.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={requestInfoNotifyApplicant}
+                    onCheckedChange={(checked) => {
+                      const enabled = Boolean(checked);
+                      setRequestInfoNotifyApplicant(enabled);
+                      if (!enabled) {
+                        setRequestInfoSendEmail(false);
+                      }
+                    }}
+                    disabled={!canSendMessages}
+                  />
+                </div>
+                {requestInfoNotifyApplicant && (
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label className="text-sm">Also send email</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Deliver the revision request via email.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={requestInfoSendEmail}
+                      onCheckedChange={(checked) =>
+                        setRequestInfoSendEmail(Boolean(checked))
+                      }
+                      disabled={!canSendMessages}
+                    />
+                  </div>
+                )}
+                {!canSendMessages && (
+                  <p className="text-xs text-muted-foreground">
+                    You do not have permission to send applicant messages.
+                  </p>
+                )}
               </>
             )}
           </div>
