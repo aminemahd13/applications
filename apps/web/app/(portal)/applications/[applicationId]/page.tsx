@@ -308,19 +308,21 @@ export default function ApplicationWorkspacePage() {
           transition={{ duration: 0.4, delay: 0.15 }}
         >
           <Card className="border-success bg-success/5">
-            <CardContent className="flex items-center justify-between p-4">
-              <div className="flex items-center gap-3">
+            <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
                 <div className="rounded-full bg-success/10 p-2">
                   <QrCode className="h-5 w-5 text-success" />
                 </div>
-                <div>
-                  <p className="font-semibold text-sm">Your ticket is ready!</p>
-                  <p className="text-xs text-muted-foreground">
+                <div className="min-w-0">
+                  <p className="font-semibold text-sm leading-snug break-words [overflow-wrap:anywhere]">
+                    Your ticket is ready!
+                  </p>
+                  <p className="text-xs text-muted-foreground leading-snug break-words [overflow-wrap:anywhere]">
                     View your QR code for event check-in
                   </p>
                 </div>
               </div>
-              <Button size="sm" asChild>
+              <Button size="sm" className="w-full sm:w-auto" asChild>
                 <Link href={`/applications/${applicationId}/ticket`}>
                   <Ticket className="mr-1.5 h-3.5 w-3.5" />
                   View Ticket
@@ -380,13 +382,13 @@ export default function ApplicationWorkspacePage() {
       {/* Next action banner */}
       {nextStep && (
         <Card className="border-primary/20 bg-primary/5">
-          <CardContent className="flex items-center justify-between p-4">
-            <div className="flex items-center gap-3">
+          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-start gap-3">
               <div className="rounded-full bg-primary/10 p-2">
                 <ArrowRight className="h-4 w-4 text-primary" />
               </div>
-              <div>
-                <p className="font-medium text-sm">
+              <div className="min-w-0">
+                <p className="font-medium text-sm leading-snug break-words [overflow-wrap:anywhere]">
                   {nextStep.status === "NEEDS_REVISION"
                     ? "Revision requested"
                     : "Next step"}
@@ -400,7 +402,7 @@ export default function ApplicationWorkspacePage() {
                 )}
               </div>
             </div>
-            <Button size="sm" asChild>
+            <Button size="sm" className="w-full sm:w-auto" asChild>
               <Link
                 href={`/applications/${applicationId}/steps/${nextStep.stepId}`}
               >
