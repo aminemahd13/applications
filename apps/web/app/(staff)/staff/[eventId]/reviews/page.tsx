@@ -25,7 +25,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
@@ -561,8 +560,8 @@ export default function ReviewsPage() {
                       ))}
                     </div>
                   </CardHeader>
-                  <CardContent>
-                    <ScrollArea className="max-h-[60vh]">
+                  <CardContent className="overflow-hidden">
+                    <div className="max-h-[60vh] overflow-y-auto pr-2">
                       <div className="space-y-4">
                         {Object.entries(current.answers).map(([key, val]) => (
                           <div key={key}>
@@ -578,7 +577,7 @@ export default function ReviewsPage() {
                                 </span>
                               )}
                             </p>
-                            <div className="text-sm whitespace-pre-wrap">
+                            <div className="text-sm whitespace-pre-wrap break-words">
                               {renderAnswerValue(val, {
                                 eventId,
                                 verification: current.submissionVersionId
@@ -594,7 +593,7 @@ export default function ReviewsPage() {
                           </div>
                         ))}
                       </div>
-                    </ScrollArea>
+                    </div>
                   </CardContent>
                 </Card>
               </motion.div>
