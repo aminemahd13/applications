@@ -246,15 +246,16 @@ export class SubmissionsService {
       throw new BadRequestException('Form version not found');
     }
 
+    const definition = formVersion.schema as unknown as FormDefinition;
     await this.ensureNeedsInfoTargetFieldEditsAllowed(
       applicationId,
       stepId,
       state.status,
       normalizedAnswers,
+      definition,
     );
 
     // Strict Validation
-    const definition = formVersion.schema as unknown as FormDefinition;
     if (definition) {
       const inputFieldCount = getFormFields(definition).filter(
         (field) => field.type !== FieldType.INFO_TEXT,
@@ -513,6 +514,7 @@ export class SubmissionsService {
     stepId: string,
     currentStepStatus: StepStatus,
     submittedAnswers: Record<string, any>,
+    formDefinition?: FormDefinition,
   ): Promise<void> {
     if (currentStepStatus !== StepStatus.NEEDS_REVISION) return;
 
@@ -536,6 +538,13 @@ export class SubmissionsService {
     );
     if (targetedFieldIds.size === 0) return;
 
+    const fieldAliases = this.buildFormFieldAliasMap(formDefinition);
+    const allowedFieldIds = this.expandAllowedNeedsInfoFieldIds(
+      targetedFieldIds,
+      formDefinition,
+      fieldAliases,
+    );
+
     const latestSubmission = await this.prisma.step_submission_versions.findFirst({
       where: { application_id: applicationId, step_id: stepId },
       orderBy: { version_number: 'desc' },
@@ -555,13 +564,132 @@ export class SubmissionsService {
       );
 
     const disallowedChanges = changedFieldIds.filter(
-      (fieldId) => !targetedFieldIds.has(fieldId),
+      (fieldId) =>
+        !allowedFieldIds.has(
+          this.resolveCanonicalFieldId(fieldId, fieldAliases),
+        ),
     );
     if (disallowedChanges.length === 0) return;
 
+    const allowedFieldList = Array.from(allowedFieldIds).sort();
     throw new BadRequestException(
-      `Only requested fields can be changed for this revision. Allowed fields: ${Array.from(targetedFieldIds).join(', ')}.`,
+      `Only requested fields can be changed for this revision. Allowed fields: ${allowedFieldList.join(', ')}.`,
     );
+  }
+
+  private buildFormFieldAliasMap(
+    formDefinition?: FormDefinition,
+  ): Map<string, string> {
+    const aliases = new Map<string, string>();
+    if (!formDefinition) return aliases;
+
+    for (const field of getFormFields(formDefinition)) {
+      const canonicalFieldId = this.normalizeFieldId(field.key ?? field.id);
+      if (!canonicalFieldId) continue;
+
+      aliases.set(canonicalFieldId, canonicalFieldId);
+      const rawFieldId = this.normalizeFieldId(field.id);
+      if (rawFieldId) {
+        aliases.set(rawFieldId, canonicalFieldId);
+      }
+    }
+
+    return aliases;
+  }
+
+  private expandAllowedNeedsInfoFieldIds(
+    targetedFieldIds: Set<string>,
+    formDefinition: FormDefinition | undefined,
+    fieldAliases: Map<string, string>,
+  ): Set<string> {
+    const allowedFieldIds = new Set<string>();
+    const dependencyGraph = this.buildConditionalDependencyGraph(
+      formDefinition,
+      fieldAliases,
+    );
+    const queue: string[] = [];
+
+    for (const targetFieldId of targetedFieldIds) {
+      const canonicalFieldId = this.resolveCanonicalFieldId(
+        targetFieldId,
+        fieldAliases,
+      );
+      if (allowedFieldIds.has(canonicalFieldId)) continue;
+      allowedFieldIds.add(canonicalFieldId);
+      queue.push(canonicalFieldId);
+    }
+
+    while (queue.length > 0) {
+      const currentFieldId = queue.shift();
+      if (!currentFieldId) continue;
+
+      const dependentFields = dependencyGraph.get(currentFieldId);
+      if (!dependentFields) continue;
+
+      for (const dependentFieldId of dependentFields) {
+        if (allowedFieldIds.has(dependentFieldId)) continue;
+        allowedFieldIds.add(dependentFieldId);
+        queue.push(dependentFieldId);
+      }
+    }
+
+    return allowedFieldIds;
+  }
+
+  private buildConditionalDependencyGraph(
+    formDefinition: FormDefinition | undefined,
+    fieldAliases: Map<string, string>,
+  ): Map<string, Set<string>> {
+    const graph = new Map<string, Set<string>>();
+    if (!formDefinition) return graph;
+
+    const fields = getFormFields(formDefinition);
+    for (const field of fields) {
+      const canonicalFieldId = this.normalizeFieldId(field.key ?? field.id);
+      if (!canonicalFieldId) continue;
+
+      const canonicalTargetFieldId = this.resolveCanonicalFieldId(
+        canonicalFieldId,
+        fieldAliases,
+      );
+      if (!graph.has(canonicalTargetFieldId)) {
+        graph.set(canonicalTargetFieldId, new Set<string>());
+      }
+
+      const conditionGroups = [field.logic?.showWhen, field.logic?.requireWhen];
+      for (const group of conditionGroups) {
+        for (const rule of group?.rules ?? []) {
+          const normalizedSourceFieldId = this.normalizeFieldId(rule.fieldKey);
+          if (!normalizedSourceFieldId) continue;
+
+          const canonicalSourceFieldId = this.resolveCanonicalFieldId(
+            normalizedSourceFieldId,
+            fieldAliases,
+          );
+          if (!graph.has(canonicalSourceFieldId)) {
+            graph.set(canonicalSourceFieldId, new Set<string>());
+          }
+          graph
+            .get(canonicalSourceFieldId)
+            ?.add(canonicalTargetFieldId);
+        }
+      }
+    }
+
+    return graph;
+  }
+
+  private resolveCanonicalFieldId(
+    fieldId: string,
+    fieldAliases: Map<string, string>,
+  ): string {
+    return fieldAliases.get(fieldId) ?? fieldId;
+  }
+
+  private normalizeFieldId(fieldId: string | null | undefined): string | null {
+    if (typeof fieldId !== 'string') return null;
+    const normalized = fieldId.trim();
+    return normalized.length > 0 ? normalized : null;
   }
 
   /**
