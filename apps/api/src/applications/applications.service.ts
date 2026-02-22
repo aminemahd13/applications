@@ -47,6 +47,14 @@ export class ApplicationsService {
       borderColor: '#cbd5e1',
     },
   } as const;
+  private static readonly REQUIRED_PROFILE_FIELDS = [
+    { key: 'full_name', label: 'Full name' },
+    { key: 'phone', label: 'Phone' },
+    { key: 'education_level', label: 'Education level' },
+    { key: 'institution', label: 'Institution' },
+    { key: 'city', label: 'City' },
+    { key: 'country', label: 'Country' },
+  ] as const;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -682,6 +690,8 @@ export class ApplicationsService {
       return detail;
     }
 
+    await this.ensureApplicantProfileComplete(userId);
+
     // Create application
     let applicationId: string;
     try {
@@ -721,6 +731,50 @@ export class ApplicationsService {
     const detail = await this.findMyApplication(eventId);
     if (!detail) throw new NotFoundException('Application not found');
     return detail;
+  }
+
+  private hasTextValue(value: unknown): boolean {
+    return typeof value === 'string' && value.trim().length > 0;
+  }
+
+  private getMissingRequiredProfileFields(
+    profile:
+      | {
+          full_name: string | null;
+          phone: string | null;
+          education_level: string | null;
+          institution: string | null;
+          city: string | null;
+          country: string | null;
+        }
+      | null,
+  ): string[] {
+    const source = (profile ?? {}) as Record<string, unknown>;
+    return ApplicationsService.REQUIRED_PROFILE_FIELDS.filter(
+      ({ key }) => !this.hasTextValue(source[key]),
+    ).map(({ label }) => label);
+  }
+
+  private async ensureApplicantProfileComplete(userId: string): Promise<void> {
+    const profile = await this.prisma.applicant_profiles.findUnique({
+      where: { user_id: userId },
+      select: {
+        full_name: true,
+        phone: true,
+        education_level: true,
+        institution: true,
+        city: true,
+        country: true,
+      },
+    });
+    const missingFields = this.getMissingRequiredProfileFields(profile);
+    if (missingFields.length === 0) return;
+
+    throw new ForbiddenException({
+      message: 'Complete your profile before applying to events.',
+      code: 'PROFILE_INCOMPLETE',
+      missingFields,
+    });
   }
 
   /**

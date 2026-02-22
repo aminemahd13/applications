@@ -1,4 +1,5 @@
 import { ApplicationsService } from './applications.service';
+import { ForbiddenException } from '@nestjs/common';
 
 describe('ApplicationsService completion credentials', () => {
   let service: ApplicationsService;
@@ -175,5 +176,68 @@ describe('ApplicationsService applicant visibility', () => {
         }),
       }),
     );
+  });
+});
+
+describe('ApplicationsService create profile requirements', () => {
+  it('rejects creating an application when required profile fields are missing', async () => {
+    const mockPrisma = {
+      events: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'event-1',
+          status: 'published',
+          application_open_at: null,
+          application_close_at: null,
+          capacity: null,
+        }),
+      },
+      applications: {
+        count: jest.fn().mockResolvedValue(0),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+      applicant_profiles: {
+        findUnique: jest.fn().mockResolvedValue({
+          full_name: ' ',
+          phone: null,
+          education_level: 'Undergraduate',
+          institution: 'Example University',
+          city: 'Rabat',
+          country: 'Morocco',
+        }),
+      },
+    };
+    const mockCls = {
+      get: jest.fn((key: string) => (key === 'actorId' ? 'user-1' : undefined)),
+    };
+    const stepStateService = {
+      initializeStepStates: jest.fn(),
+    };
+
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      mockCls as any,
+      stepStateService as any,
+    );
+
+    let thrown: unknown;
+    try {
+      await service.create('event-1');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ForbiddenException);
+    if (!(thrown instanceof ForbiddenException)) {
+      return;
+    }
+
+    const response = thrown.getResponse() as Record<string, unknown>;
+    expect(response.code).toBe('PROFILE_INCOMPLETE');
+    expect(response.missingFields).toEqual(
+      expect.arrayContaining(['Full name', 'Phone']),
+    );
+    expect(mockPrisma.applications.create).not.toHaveBeenCalled();
+    expect(stepStateService.initializeStepStates).not.toHaveBeenCalled();
   });
 });
