@@ -38,10 +38,23 @@ function resolveInternalApiBaseUrls(): string[] {
         normalizeAbsoluteApiUrl(process.env.NEXT_PUBLIC_API_URL),
         "http://localhost:3001/api/v1",
         "http://api:3001/api/v1",
+        "http://localhost:3000/api/v1",
+        "http://api:3000/api/v1",
       ].filter((value): value is string => Boolean(value)),
     ),
   );
 }
+
+const API_BASE_URL_CANDIDATES = resolveInternalApiBaseUrls();
+const PROXY_UPSTREAM_TIMEOUT_MS = Math.max(
+  Number(process.env.PROXY_UPSTREAM_TIMEOUT_MS || "2000"),
+  250,
+);
+const PROXY_UPSTREAM_FAILURE_BACKOFF_MS = Math.max(
+  Number(process.env.PROXY_UPSTREAM_FAILURE_BACKOFF_MS || "30000"),
+  1_000,
+);
+const upstreamCooldownUntil = new Map<string, number>();
 
 function buildTargetUrl(baseUrl: string, path: string[], search: string): string {
   const encodedPath = path.map((segment) => encodeURIComponent(segment)).join("/");
@@ -85,6 +98,51 @@ function copyResponseHeaders(source: Headers, target: Headers): void {
   }
 }
 
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function orderedUpstreamCandidates(): string[] {
+  const now = Date.now();
+  const preferred: string[] = [];
+  const coolingDown: string[] = [];
+
+  for (const candidate of API_BASE_URL_CANDIDATES) {
+    const cooldownUntil = upstreamCooldownUntil.get(candidate) ?? 0;
+    if (cooldownUntil > now) {
+      coolingDown.push(candidate);
+    } else {
+      preferred.push(candidate);
+    }
+  }
+
+  return [...preferred, ...coolingDown];
+}
+
+function markUpstreamFailure(candidate: string) {
+  upstreamCooldownUntil.set(
+    candidate,
+    Date.now() + PROXY_UPSTREAM_FAILURE_BACKOFF_MS,
+  );
+}
+
+function markUpstreamHealthy(candidate: string) {
+  upstreamCooldownUntil.delete(candidate);
+}
+
 async function proxy(req: NextRequest, context: RouteContext): Promise<Response> {
   const { path = [] } = await context.params;
   const method = req.method.toUpperCase();
@@ -92,7 +150,7 @@ async function proxy(req: NextRequest, context: RouteContext): Promise<Response>
   const body =
     method !== "GET" && method !== "HEAD" ? await req.arrayBuffer() : undefined;
 
-  for (const baseUrl of resolveInternalApiBaseUrls()) {
+  for (const baseUrl of orderedUpstreamCandidates()) {
     const targetUrl = buildTargetUrl(baseUrl, path, req.nextUrl.search);
     const init: RequestInit = {
       method,
@@ -103,7 +161,12 @@ async function proxy(req: NextRequest, context: RouteContext): Promise<Response>
     };
 
     try {
-      const upstream = await fetch(targetUrl, init);
+      const upstream = await fetchWithTimeout(
+        targetUrl,
+        init,
+        PROXY_UPSTREAM_TIMEOUT_MS,
+      );
+      markUpstreamHealthy(baseUrl);
       const responseHeaders = new Headers();
       copyResponseHeaders(upstream.headers, responseHeaders);
 
@@ -113,6 +176,7 @@ async function proxy(req: NextRequest, context: RouteContext): Promise<Response>
         headers: responseHeaders,
       });
     } catch {
+      markUpstreamFailure(baseUrl);
       continue;
     }
   }

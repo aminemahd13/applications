@@ -27,9 +27,20 @@ const API_URL_CANDIDATES = Array.from(
       normalizeAbsoluteApiUrl(process.env.NEXT_PUBLIC_API_URL),
       "http://localhost:3001/api/v1",
       "http://api:3001/api/v1",
+      "http://localhost:3000/api/v1",
+      "http://api:3000/api/v1",
     ].filter((value): value is string => Boolean(value)),
   ),
 );
+const SESSION_VALIDATION_TIMEOUT_MS = Math.max(
+  Number(process.env.SESSION_VALIDATION_TIMEOUT_MS || "2000"),
+  250,
+);
+const API_CANDIDATE_FAILURE_BACKOFF_MS = Math.max(
+  Number(process.env.API_CANDIDATE_FAILURE_BACKOFF_MS || "30000"),
+  1_000,
+);
+const apiCandidateCooldownUntil = new Map<string, number>();
 
 const SESSION_VALIDATION_COOKIE = "session_validated";
 const SESSION_VALIDATION_MAX_AGE_SECONDS = Number(
@@ -173,30 +184,82 @@ function hasAuthenticatedUser(payload: unknown): boolean {
   return typeof user.id === "string" && user.id.length > 0;
 }
 
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function getOrderedApiCandidates(): string[] {
+  const now = Date.now();
+  const preferred: string[] = [];
+  const coolingDown: string[] = [];
+
+  for (const candidate of API_URL_CANDIDATES) {
+    const cooldownUntil = apiCandidateCooldownUntil.get(candidate) ?? 0;
+    if (cooldownUntil > now) {
+      coolingDown.push(candidate);
+    } else {
+      preferred.push(candidate);
+    }
+  }
+
+  return [...preferred, ...coolingDown];
+}
+
+function markApiCandidateFailure(candidate: string) {
+  apiCandidateCooldownUntil.set(
+    candidate,
+    Date.now() + API_CANDIDATE_FAILURE_BACKOFF_MS,
+  );
+}
+
+function markApiCandidateHealthy(candidate: string) {
+  apiCandidateCooldownUntil.delete(candidate);
+}
+
 async function validateSession(req: NextRequest): Promise<boolean> {
   const cookie = req.headers.get("cookie") ?? "";
 
-  for (const apiUrl of API_URL_CANDIDATES) {
+  for (const apiUrl of getOrderedApiCandidates()) {
     try {
-      const sessionRes = await fetch(`${apiUrl}/auth/session`, {
-        method: "GET",
-        headers: {
-          cookie,
-          accept: "application/json",
+      const sessionRes = await fetchWithTimeout(
+        `${apiUrl}/auth/session`,
+        {
+          method: "GET",
+          headers: {
+            cookie,
+            accept: "application/json",
+          },
+          cache: "no-store",
         },
-        cache: "no-store",
-      });
+        SESSION_VALIDATION_TIMEOUT_MS,
+      );
 
       if (sessionRes.status !== 404) {
         if (sessionRes.status >= 500) {
+          markApiCandidateFailure(apiUrl);
           continue;
         }
 
         if (!sessionRes.ok) {
+          markApiCandidateHealthy(apiUrl);
           return false;
         }
 
         const payload = await sessionRes.json().catch(() => null);
+        markApiCandidateHealthy(apiUrl);
         if (
           payload &&
           typeof payload === "object" &&
@@ -211,31 +274,43 @@ async function validateSession(req: NextRequest): Promise<boolean> {
 
         return hasAuthenticatedUser(payload);
       }
+      markApiCandidateHealthy(apiUrl);
     } catch {
+      markApiCandidateFailure(apiUrl);
       // Fall back to /auth/me compatibility check below.
     }
 
     try {
-      const res = await fetch(`${apiUrl}/auth/me`, {
-        method: "GET",
-        headers: {
-          cookie,
-          accept: "application/json",
+      const res = await fetchWithTimeout(
+        `${apiUrl}/auth/me`,
+        {
+          method: "GET",
+          headers: {
+            cookie,
+            accept: "application/json",
+          },
+          cache: "no-store",
         },
-        cache: "no-store",
-      });
+        SESSION_VALIDATION_TIMEOUT_MS,
+      );
 
       if (res.status === 404 || res.status >= 500) {
+        if (res.status >= 500) {
+          markApiCandidateFailure(apiUrl);
+        }
         continue;
       }
 
       if (!res.ok) {
+        markApiCandidateHealthy(apiUrl);
         return false;
       }
 
       const payload = await res.json().catch(() => null);
+      markApiCandidateHealthy(apiUrl);
       return hasAuthenticatedUser(payload);
     } catch {
+      markApiCandidateFailure(apiUrl);
       continue;
     }
   }

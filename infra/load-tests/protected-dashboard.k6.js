@@ -49,12 +49,20 @@ if (AUTH_COOKIE_PAIRS.length === 0) {
   throw new Error('AUTH_COOKIE must contain at least one cookie pair');
 }
 
+let authJar = null;
+let authJarInitialized = false;
+
 function getAuthJar() {
-  const jar = http.cookieJar();
-  for (const cookie of AUTH_COOKIE_PAIRS) {
-    jar.set(BASE_URL, cookie.name, cookie.value);
+  if (!authJar) {
+    authJar = http.cookieJar();
   }
-  return jar;
+  if (!authJarInitialized) {
+    for (const cookie of AUTH_COOKIE_PAIRS) {
+      authJar.set(BASE_URL, cookie.name, cookie.value);
+    }
+    authJarInitialized = true;
+  }
+  return authJar;
 }
 
 export const options = {
