@@ -2683,14 +2683,14 @@ export default function ApplicationDetailPage() {
       </Dialog>
 
       <Dialog open={showRequestInfo} onOpenChange={setShowRequestInfo}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-lg overflow-x-hidden">
           <DialogHeader>
             <DialogTitle>Request more information</DialogTitle>
             <DialogDescription>
               Select the fields that need revision and add a message for the applicant.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <div className="space-y-2">
               <Label className="text-sm">Step</Label>
               <Select value={requestStepId} onValueChange={setRequestStepId}>
@@ -2708,10 +2708,10 @@ export default function ApplicationDetailPage() {
             </div>
 
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <Label className="text-sm">Fields to update</Label>
                 {requestFieldOptions.length > 0 && (
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap justify-end gap-2">
                     <Button
                       variant="ghost"
                       size="sm"
@@ -2731,7 +2731,7 @@ export default function ApplicationDetailPage() {
                   </div>
                 )}
               </div>
-              <div className="rounded-lg border border-muted/40 p-3 max-h-48 overflow-y-auto space-y-2">
+              <div className="max-h-48 space-y-2 overflow-y-auto overflow-x-hidden rounded-lg border border-muted/40 p-3">
                 {requestFieldOptions.length === 0 ? (
                   <p className="text-xs text-muted-foreground">
                     No field metadata available. You can still request a general revision.
@@ -2740,9 +2740,10 @@ export default function ApplicationDetailPage() {
                   requestFieldOptions.map((field) => (
                     <label
                       key={field.id}
-                      className="flex items-start gap-2 text-sm"
+                      className="flex min-w-0 items-start gap-2 text-sm"
                     >
                       <Checkbox
+                        className="shrink-0"
                         checked={requestFieldIds.includes(field.id)}
                         onCheckedChange={(checked) => {
                           const isChecked = Boolean(checked);
@@ -2753,10 +2754,10 @@ export default function ApplicationDetailPage() {
                           );
                         }}
                       />
-                      <span>
+                      <span className="min-w-0 break-words">
                         {field.label}
                         {field.section && (
-                          <span className="text-xs text-muted-foreground block">
+                          <span className="block break-words text-xs text-muted-foreground">
                             {field.section}
                           </span>
                         )}
@@ -2789,14 +2790,15 @@ export default function ApplicationDetailPage() {
               />
             </div>
 
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
                 <Label className="text-sm">Notify applicant</Label>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground break-words">
                   Send an inbox message with a direct link to the step.
                 </p>
               </div>
               <Switch
+                className="shrink-0"
                 checked={requestNotifyApplicant}
                 onCheckedChange={(checked) => setRequestNotifyApplicant(Boolean(checked))}
                 disabled={!canSendMessages}
@@ -2804,14 +2806,15 @@ export default function ApplicationDetailPage() {
             </div>
 
             {requestNotifyApplicant && (
-              <div className="flex items-center justify-between">
-                <div>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
                   <Label className="text-sm">Also send email</Label>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs text-muted-foreground break-words">
                     Deliver the revision request via email.
                   </p>
                 </div>
                 <Switch
+                  className="shrink-0"
                   checked={requestSendEmail}
                   onCheckedChange={(checked) => setRequestSendEmail(Boolean(checked))}
                   disabled={!canSendMessages}
