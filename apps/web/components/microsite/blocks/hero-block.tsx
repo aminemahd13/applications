@@ -141,11 +141,13 @@ export function HeroBlock({
                 )}
                 style={{ animationDelay: "0.2s", animationFillMode: "forwards" }}
               >
-                <img
-                  src={hasCustomLogo ? customLogo : "/microsite/presets/mm-light.png"}
-                  alt={computedLogoAlt}
-                  className={hasCustomLogo ? "h-14 w-auto md:h-[4.5rem]" : "h-[4.5rem] w-auto md:h-20"}
-                />
+                <span className="mm-logo-shell min-h-16 max-w-[16rem] px-4 py-2 md:min-h-[4.75rem]">
+                  <img
+                    src={hasCustomLogo ? customLogo : "/microsite/presets/mm-light.png"}
+                    alt={computedLogoAlt}
+                    className={hasCustomLogo ? "h-12 w-auto max-w-full md:h-14" : "h-14 w-auto max-w-full md:h-16"}
+                  />
+                </span>
               </div>
 
               {heading && (

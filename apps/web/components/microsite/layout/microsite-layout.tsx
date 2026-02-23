@@ -154,7 +154,7 @@ function MicrositeBackground({
           className="pointer-events-none fixed inset-0 -z-10"
           style={{
             background:
-              "radial-gradient(40rem 20rem at 10% -10%, color-mix(in oklab, var(--mm-accent) 18%, transparent), transparent 70%), radial-gradient(32rem 16rem at 100% 0%, color-mix(in oklab, var(--mm-accent-2) 18%, transparent), transparent 72%)",
+              "radial-gradient(44rem 22rem at 10% -10%, color-mix(in oklab, var(--mm-accent) 30%, transparent), transparent 68%), radial-gradient(34rem 18rem at 100% 0%, color-mix(in oklab, var(--mm-accent-2) 26%, transparent), transparent 70%), linear-gradient(180deg, color-mix(in oklab, var(--mm-bg) 80%, var(--mm-surface) 20%) 0%, color-mix(in oklab, var(--mm-bg) 74%, var(--mm-dark) 26%) 100%)",
           }}
         />
       )}
