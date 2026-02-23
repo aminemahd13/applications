@@ -525,6 +525,31 @@ export const TextImageRightBlockSchema = z.object({
     }),
 });
 
+export const TextImageLeftBlockSchema = z.object({
+    id: z.string(),
+    type: z.literal('TEXT_IMAGE_LEFT'),
+    data: withSection({
+        heading: z.string().optional(),
+        text: z.string().optional(),
+        imageUrl: z.string().optional(),
+        assetKey: z.string().optional(),
+        alt: z.string().optional(),
+        caption: z.string().optional(),
+        cta: CtaLinkSchema.optional(),
+    }),
+});
+
+export const SeparatorBlockSchema = z.object({
+    id: z.string(),
+    type: z.literal('SEPARATOR'),
+    data: withSection({
+        label: z.string().optional(),
+        variant: z.enum(['line', 'dashed', 'dots', 'gradient']).default('line'),
+        thickness: z.number().int().min(1).max(8).default(1),
+        width: z.enum(['sm', 'md', 'lg', 'full']).default('full'),
+    }),
+});
+
 export const TestimonialsBlockSchema = z.object({
     id: z.string(),
     type: z.literal('TESTIMONIALS'),
@@ -594,6 +619,8 @@ export const BlockSchema = z.discriminatedUnion('type', [
     TabsBlockSchema,
     VideoEmbedBlockSchema,
     EmbedDocBlockSchema,
+    SeparatorBlockSchema,
+    TextImageLeftBlockSchema,
     TextImageRightBlockSchema,
     TestimonialsBlockSchema,
     CustomCodeBlockSchema,

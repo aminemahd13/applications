@@ -79,15 +79,18 @@ export function Footer({
             <div>
               {showLogo && (
                 <div className="mb-3 flex items-center space-x-4">
-                  <Link className="flex h-11 items-center" href={resolveMicrositeHref("/", basePath)}>
+                  <Link className="flex h-9 items-center" href={resolveMicrositeHref("/", basePath)}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <span className={cn("mm-logo-shell h-11 max-w-[11.5rem] px-2.5", isMinimal ? "" : "border-white/30")}>
-                      <img
-                        src={resolvedLogo}
-                        alt={`${branding?.siteName || "Microsite"} logo`}
-                        className="h-8 w-auto max-w-full"
-                      />
-                    </span>
+                    <img
+                      src={resolvedLogo}
+                      alt={`${branding?.siteName || "Microsite"} logo`}
+                      className={cn(
+                        "h-full w-auto transition-all",
+                        isMinimal
+                          ? "rounded-sm"
+                          : "filter brightness-100 contrast-125 hover:brightness-110 hover:contrast-110",
+                      )}
+                    />
                   </Link>
                 </div>
               )}

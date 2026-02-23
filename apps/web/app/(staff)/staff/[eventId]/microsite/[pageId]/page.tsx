@@ -40,6 +40,7 @@ import {
   Video,
   FileText,
   MessageSquareQuote,
+  Minus,
   Search,
   Settings2,
   CheckCircle2,
@@ -137,6 +138,8 @@ type BlockType =
   | "TABS"
   | "VIDEO_EMBED"
   | "EMBED_DOC"
+  | "SEPARATOR"
+  | "TEXT_IMAGE_LEFT"
   | "TEXT_IMAGE_RIGHT"
   | "TESTIMONIALS"
   | "CUSTOM_CODE"
@@ -201,6 +204,8 @@ const BLOCK_CATALOG: {
   { type: "TABS", label: "Tabs", description: "Tabbed content", icon: Columns, category: "Content" },
   { type: "VIDEO_EMBED", label: "Video", description: "Embed YouTube or Vimeo", icon: Video, category: "Media" },
   { type: "EMBED_DOC", label: "Embed Doc", description: "Inline PDF/DOC viewer for brochures and handbooks", icon: FileText, category: "Content" },
+  { type: "SEPARATOR", label: "Separator", description: "Visual divider with line, dash, dots, or gradient", icon: Minus, category: "Layout" },
+  { type: "TEXT_IMAGE_LEFT", label: "Image Left + Text", description: "Two-column section with image on the left", icon: PanelLeft, category: "Layout" },
   { type: "TEXT_IMAGE_RIGHT", label: "Text + Image Right", description: "Two-column text section with image on the right", icon: PanelRight, category: "Layout" },
   { type: "TESTIMONIALS", label: "Testimonials", description: "Applicant or partner quotes", icon: MessageSquareQuote, category: "Social Proof" },
   { type: "CUSTOM_CODE", label: "Custom Code", description: "Custom HTML and CSS", icon: Code2, category: "Advanced" },
@@ -532,6 +537,22 @@ function getDefaultData(type: BlockType): BlockData {
         caption: "Upload a brochure, rulebook, or handbook to preview it inline.",
         height: 720,
       };
+    case "SEPARATOR":
+      return {
+        label: "",
+        variant: "line",
+        thickness: 1,
+        width: "full",
+      };
+    case "TEXT_IMAGE_LEFT":
+      return {
+        heading: "Build Trust With Visual Context",
+        text: "Place a supporting image first, then explain the key message.\nThis layout works well for mentorship, outcomes, or location highlights.",
+        imageUrl: "",
+        alt: "",
+        caption: "",
+        cta: { label: "Explore details", href: "#" },
+      };
     case "TEXT_IMAGE_RIGHT":
       return {
         heading: "About This Program",
@@ -634,6 +655,7 @@ function getBlockSearchText(block: Block): string {
   const candidates = [
     data.title,
     data.heading,
+    data.label,
     data.subtitle,
     data.message,
     data.description,
@@ -3313,7 +3335,68 @@ function BlockInspector({
       );
       break;
 
-    case "TEXT_IMAGE_RIGHT":
+    case "SEPARATOR":
+      content = (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Label (optional)</Label>
+            <Input
+              value={(data.label as string) ?? ""}
+              onChange={(e) => updateField("label", e.target.value)}
+              placeholder="Section break"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Line Style</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {(["line", "dashed", "dots", "gradient"] as const).map((variant) => (
+                <Button
+                  key={variant}
+                  size="sm"
+                  variant={(data.variant as string) === variant || ((data.variant as string) === undefined && variant === "line") ? "default" : "outline"}
+                  onClick={() => updateField("variant", variant)}
+                  className="capitalize"
+                >
+                  {variant}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-2">
+              <Label>Thickness (1-8 px)</Label>
+              <Input
+                type="number"
+                min={1}
+                max={8}
+                value={String(data.thickness ?? 1)}
+                onChange={(e) => updateField("thickness", Number(e.target.value || 1))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Line Width</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {(["sm", "md", "lg", "full"] as const).map((width) => (
+                  <Button
+                    key={width}
+                    size="sm"
+                    variant={(data.width as string) === width || ((data.width as string) === undefined && width === "full") ? "default" : "outline"}
+                    onClick={() => updateField("width", width)}
+                    className="uppercase"
+                  >
+                    {width}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+      break;
+
+    case "TEXT_IMAGE_LEFT":
+    case "TEXT_IMAGE_RIGHT": {
+      const imageSideLabel = block.type === "TEXT_IMAGE_LEFT" ? "Image (left column)" : "Image (right column)";
       content = (
         <div className="space-y-4">
           <div className="space-y-2">
@@ -3332,7 +3415,7 @@ function BlockInspector({
             />
           </div>
           <div className="space-y-2">
-            <Label>Image</Label>
+            <Label>{imageSideLabel}</Label>
             <div className="flex items-center gap-2">
               <Input
                 type="file"
@@ -3403,6 +3486,7 @@ function BlockInspector({
         </div>
       );
       break;
+    }
 
     case "TESTIMONIALS":
       content = (
