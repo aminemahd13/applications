@@ -55,6 +55,7 @@ interface StepFieldValidation {
 
 interface StepField {
   fieldId: string;
+  schemaFieldId?: string;
   type: string;
   label: string;
   required?: boolean;
@@ -280,7 +281,7 @@ function toSchemaFieldDefinition(field: StepField): FieldDefinition {
   };
 
   return {
-    id: field.fieldId,
+    id: field.schemaFieldId ?? field.fieldId,
     key: field.fieldId,
     type: toSchemaFieldType(field.type),
     label: field.label,
@@ -301,6 +302,124 @@ function isFieldRequiredByLogic(
   values: Record<string, unknown>,
 ): boolean {
   return evaluateFieldRequired(toSchemaFieldDefinition(field), values);
+}
+
+function normalizeFieldId(fieldId: string | null | undefined): string | null {
+  if (typeof fieldId !== "string") return null;
+  const normalized = fieldId.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function resolveCanonicalFieldId(
+  fieldId: string,
+  fieldAliases: Map<string, string>,
+): string {
+  return fieldAliases.get(fieldId) ?? fieldId;
+}
+
+function buildFormFieldAliasMap(
+  formDefinition: StepDetail["formDefinition"] | undefined,
+): Map<string, string> {
+  const aliases = new Map<string, string>();
+  if (!formDefinition) return aliases;
+
+  for (const section of formDefinition.sections) {
+    for (const field of section.fields) {
+      const canonicalFieldId = normalizeFieldId(field.fieldId);
+      if (!canonicalFieldId) continue;
+      aliases.set(canonicalFieldId, canonicalFieldId);
+
+      const schemaFieldId = normalizeFieldId(field.schemaFieldId);
+      if (schemaFieldId) {
+        aliases.set(schemaFieldId, canonicalFieldId);
+      }
+    }
+  }
+
+  return aliases;
+}
+
+function buildConditionalDependencyGraph(
+  formDefinition: StepDetail["formDefinition"] | undefined,
+  fieldAliases: Map<string, string>,
+): Map<string, Set<string>> {
+  const graph = new Map<string, Set<string>>();
+  if (!formDefinition) return graph;
+
+  for (const section of formDefinition.sections) {
+    for (const field of section.fields) {
+      const normalizedFieldId = normalizeFieldId(field.fieldId);
+      if (!normalizedFieldId) continue;
+
+      const canonicalTargetFieldId = resolveCanonicalFieldId(
+        normalizedFieldId,
+        fieldAliases,
+      );
+      if (!graph.has(canonicalTargetFieldId)) {
+        graph.set(canonicalTargetFieldId, new Set<string>());
+      }
+
+      const conditionGroups = [field.logic?.showWhen, field.logic?.requireWhen];
+      for (const group of conditionGroups) {
+        for (const rule of group?.rules ?? []) {
+          const normalizedSourceFieldId = normalizeFieldId(rule.fieldKey);
+          if (!normalizedSourceFieldId) continue;
+
+          const canonicalSourceFieldId = resolveCanonicalFieldId(
+            normalizedSourceFieldId,
+            fieldAliases,
+          );
+          if (!graph.has(canonicalSourceFieldId)) {
+            graph.set(canonicalSourceFieldId, new Set<string>());
+          }
+          graph.get(canonicalSourceFieldId)?.add(canonicalTargetFieldId);
+        }
+      }
+    }
+  }
+
+  return graph;
+}
+
+function expandRevisionFieldIds(
+  formDefinition: StepDetail["formDefinition"] | undefined,
+  targetedFieldIds: Set<string>,
+): Set<string> {
+  if (targetedFieldIds.size === 0) return new Set<string>();
+
+  const fieldAliases = buildFormFieldAliasMap(formDefinition);
+  const dependencyGraph = buildConditionalDependencyGraph(
+    formDefinition,
+    fieldAliases,
+  );
+  const expandedFieldIds = new Set<string>();
+  const queue: string[] = [];
+
+  for (const targetedFieldId of targetedFieldIds) {
+    const canonicalFieldId = resolveCanonicalFieldId(
+      targetedFieldId,
+      fieldAliases,
+    );
+    if (expandedFieldIds.has(canonicalFieldId)) continue;
+    expandedFieldIds.add(canonicalFieldId);
+    queue.push(canonicalFieldId);
+  }
+
+  while (queue.length > 0) {
+    const currentFieldId = queue.shift();
+    if (!currentFieldId) continue;
+
+    const dependentFieldIds = dependencyGraph.get(currentFieldId);
+    if (!dependentFieldIds) continue;
+
+    for (const dependentFieldId of dependentFieldIds) {
+      if (expandedFieldIds.has(dependentFieldId)) continue;
+      expandedFieldIds.add(dependentFieldId);
+      queue.push(dependentFieldId);
+    }
+  }
+
+  return expandedFieldIds;
 }
 
 function normalizeFormDefinition(raw: unknown): StepDetail["formDefinition"] {
@@ -342,7 +461,12 @@ function normalizeFormDefinition(raw: unknown): StepDetail["formDefinition"] {
           );
 
           return {
-            fieldId: String(fieldRecord.key ?? fieldRecord.id ?? ""),
+            fieldId: String(fieldRecord.key ?? fieldRecord.id ?? "").trim(),
+            schemaFieldId:
+              typeof fieldRecord.id === "string" &&
+              fieldRecord.id.trim().length > 0
+                ? fieldRecord.id.trim()
+                : undefined,
             type:
               schemaTypeToUiType[
                 String(fieldRecord.type ?? "").toLowerCase()
@@ -680,20 +804,36 @@ export default function StepFormPage() {
     step?.status === "REJECTED_FINAL";
   const isLocked = step?.status === "LOCKED";
 
-  const needsInfoFieldIds = useMemo(
-    () => new Set(step?.needsInfo?.flatMap((ni) => ni.targetFieldIds) ?? []),
+  const requestedNeedsInfoFieldIds = useMemo(
+    () =>
+      new Set(
+        (step?.needsInfo?.flatMap((ni) => ni.targetFieldIds) ?? [])
+          .map((fieldId) => fieldId.trim())
+          .filter((fieldId) => fieldId.length > 0)
+      ),
     [step?.needsInfo]
   );
-  const hasTargetedNeedsInfo = needsInfoFieldIds.size > 0;
+  const editableNeedsInfoFieldIds = useMemo(
+    () => expandRevisionFieldIds(step?.formDefinition, requestedNeedsInfoFieldIds),
+    [step?.formDefinition, requestedNeedsInfoFieldIds]
+  );
+  const hasTargetedNeedsInfo = requestedNeedsInfoFieldIds.size > 0;
   const isRevisionTargetedMode =
     step?.status === "NEEDS_REVISION" && hasTargetedNeedsInfo;
 
   const validationIssues = useMemo(
     () =>
       collectValidationIssues(step?.formDefinition, watchedValues ?? {}, {
-        limitToFieldIds: isRevisionTargetedMode ? needsInfoFieldIds : undefined,
+        limitToFieldIds: isRevisionTargetedMode
+          ? editableNeedsInfoFieldIds
+          : undefined,
       }),
-    [step?.formDefinition, watchedValues, isRevisionTargetedMode, needsInfoFieldIds]
+    [
+      step?.formDefinition,
+      watchedValues,
+      isRevisionTargetedMode,
+      editableNeedsInfoFieldIds,
+    ]
   );
 
   const fieldLabelById = useMemo(() => {
@@ -896,7 +1036,9 @@ export default function StepFormPage() {
 
     const values = form.getValues() as Record<string, unknown>;
     const issues = collectValidationIssues(step?.formDefinition, values, {
-      limitToFieldIds: isRevisionTargetedMode ? needsInfoFieldIds : undefined,
+      limitToFieldIds: isRevisionTargetedMode
+        ? editableNeedsInfoFieldIds
+        : undefined,
     });
     setHasTriedSubmit(true);
     if (Object.keys(issues).length > 0 || isDeadlinePassed) {
@@ -1100,8 +1242,10 @@ export default function StepFormPage() {
                 return null;
               }
               const isFieldRequired = isFieldRequiredByLogic(field, currentValues);
-              const hasNeedsInfo = needsInfoFieldIds.has(field.fieldId);
-              const isLockedForRevision = isRevisionTargetedMode && !hasNeedsInfo;
+              const hasNeedsInfo = requestedNeedsInfoFieldIds.has(field.fieldId);
+              const hasRevisionAccess = editableNeedsInfoFieldIds.has(field.fieldId);
+              const isLockedForRevision =
+                isRevisionTargetedMode && !hasRevisionAccess;
               const fieldReadOnly = isReadOnly || isLockedForRevision;
               const fieldIssue = validationIssues[field.fieldId];
               const fieldState = form.getFieldState(field.fieldId);
@@ -1115,9 +1259,11 @@ export default function StepFormPage() {
                   className={
                     hasNeedsInfo
                       ? "rounded-lg border-2 border-warning/50 bg-warning/5 p-3 -m-3"
+                      : isRevisionTargetedMode && hasRevisionAccess
+                        ? "rounded-lg border border-primary/30 bg-primary/5 p-3 -m-3"
                       : isLockedForRevision
                         ? "rounded-lg border border-muted/50 bg-muted/20 p-3 -m-3"
-                      : ""
+                        : ""
                   }
                 >
                   <div className="space-y-2">

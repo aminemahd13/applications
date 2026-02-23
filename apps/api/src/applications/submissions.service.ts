@@ -142,6 +142,7 @@ export class SubmissionsService {
   ): Promise<SubmissionVersionResponse> {
     const userId = this.cls.get('actorId');
     const normalizedAnswers = this.normalizeAnswersShape(dto.answers);
+    let answersForSubmission = normalizedAnswers;
 
     // Verify application belongs to event
     const application = await this.prisma.applications.findUnique({
@@ -254,6 +255,13 @@ export class SubmissionsService {
       normalizedAnswers,
       definition,
     );
+    answersForSubmission =
+      await this.mergeAnswersWithPreviousWhenTargetedNeedsInfo(
+        applicationId,
+        stepId,
+        state.status,
+        normalizedAnswers,
+      );
 
     // Strict Validation
     if (definition) {
@@ -268,7 +276,7 @@ export class SubmissionsService {
       }
 
       const answerSchema = generateFormSchema(definition);
-      const result = answerSchema.safeParse(normalizedAnswers);
+      const result = answerSchema.safeParse(answersForSubmission);
       if (!result.success) {
         throw new BadRequestException(
           `Validation failed: ${result.error.issues.map((e) => e.message).join(', ')}`,
@@ -282,7 +290,7 @@ export class SubmissionsService {
     // Also verifies ownership within event
     await this.validateFiles(
       formVersionId,
-      normalizedAnswers,
+      answersForSubmission,
       applicationId,
       stepId,
       userId,
@@ -306,7 +314,7 @@ export class SubmissionsService {
           step_id: stepId,
           form_version_id: formVersionId,
           version_number: nextVersion,
-          answers_snapshot: normalizedAnswers,
+          answers_snapshot: answersForSubmission,
           submitted_by: userId,
         },
       });
@@ -504,6 +512,53 @@ export class SubmissionsService {
       ),
       effectiveAnswers,
     };
+  }
+
+  private async mergeAnswersWithPreviousWhenTargetedNeedsInfo(
+    applicationId: string,
+    stepId: string,
+    currentStepStatus: StepStatus,
+    submittedAnswers: Record<string, any>,
+  ): Promise<Record<string, any>> {
+    if (currentStepStatus !== StepStatus.NEEDS_REVISION) {
+      return submittedAnswers;
+    }
+
+    const openRequests = await this.prisma.needs_info_requests.findMany({
+      where: {
+        application_id: applicationId,
+        step_id: stepId,
+        status: 'OPEN',
+      },
+      select: { target_field_ids: true },
+    });
+    const hasTargetedFields = openRequests.some((request) =>
+      (request.target_field_ids ?? []).some(
+        (fieldId) => typeof fieldId === 'string' && fieldId.trim().length > 0,
+      ),
+    );
+    if (!hasTargetedFields) {
+      return submittedAnswers;
+    }
+
+    const latestSubmission = await this.prisma.step_submission_versions.findFirst({
+      where: { application_id: applicationId, step_id: stepId },
+      orderBy: { version_number: 'desc' },
+      select: { answers_snapshot: true },
+    });
+    if (!latestSubmission) {
+      return submittedAnswers;
+    }
+
+    const previousAnswers = this.normalizeAnswersShape(
+      latestSubmission.answers_snapshot as Record<string, any>,
+    );
+    const mergedAnswers: Record<string, any> = { ...previousAnswers };
+    for (const [fieldId, value] of Object.entries(submittedAnswers)) {
+      if (value === undefined) continue;
+      mergedAnswers[fieldId] = value;
+    }
+    return mergedAnswers;
   }
 
   /**

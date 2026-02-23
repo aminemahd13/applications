@@ -174,4 +174,56 @@ describe('SubmissionsService targeted needs-info gating', () => {
       ),
     ).resolves.toBeUndefined();
   });
+
+  it('merges with previous answers for targeted needs-info revisions', async () => {
+    const { service, prisma } = createService();
+
+    prisma.needs_info_requests.findMany.mockResolvedValue([
+      { target_field_ids: ['previously_participated_to_MM'] },
+    ]);
+    prisma.step_submission_versions.findFirst.mockResolvedValue({
+      answers_snapshot: {
+        previously_participated_to_MM: 'no',
+        previous_participation_year: '2022',
+        favorite_color: 'red',
+      },
+    });
+
+    await expect(
+      (service as any).mergeAnswersWithPreviousWhenTargetedNeedsInfo(
+        'app-1',
+        'step-1',
+        StepStatus.NEEDS_REVISION,
+        {
+          previously_participated_to_MM: 'yes',
+          previous_participation_year: undefined,
+        },
+      ),
+    ).resolves.toEqual({
+      previously_participated_to_MM: 'yes',
+      previous_participation_year: '2022',
+      favorite_color: 'red',
+    });
+  });
+
+  it('does not merge with previous answers when requests are not targeted', async () => {
+    const { service, prisma } = createService();
+    const submittedAnswers = {
+      previously_participated_to_MM: 'yes',
+    };
+
+    prisma.needs_info_requests.findMany.mockResolvedValue([
+      { target_field_ids: [] },
+    ]);
+
+    await expect(
+      (service as any).mergeAnswersWithPreviousWhenTargetedNeedsInfo(
+        'app-1',
+        'step-1',
+        StepStatus.NEEDS_REVISION,
+        submittedAnswers,
+      ),
+    ).resolves.toEqual(submittedAnswers);
+    expect(prisma.step_submission_versions.findFirst).not.toHaveBeenCalled();
+  });
 });
