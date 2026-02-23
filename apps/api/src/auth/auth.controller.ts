@@ -24,6 +24,45 @@ import * as crypto from 'crypto';
 import { SkipCsrf } from '../common/decorators/skip-csrf.decorator';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 
+const AUTH_ME_CACHE_TTL_MS = Math.max(
+  Number(process.env.AUTH_ME_CACHE_TTL_MS || '60000'),
+  1_000,
+);
+
+type AuthMeVerificationState = {
+  emailVerified: boolean;
+  emailVerificationRequired: boolean;
+  mustVerifyEmail: boolean;
+};
+
+type AuthMeCachePayload = {
+  eventRoles: Array<{ eventId: string; role: string }>;
+  verificationState: AuthMeVerificationState;
+  fetchedAt: number;
+};
+
+function isAuthMeVerificationState(
+  value: unknown,
+): value is AuthMeVerificationState {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.emailVerified === 'boolean' &&
+    typeof candidate.emailVerificationRequired === 'boolean' &&
+    typeof candidate.mustVerifyEmail === 'boolean'
+  );
+}
+
+function isAuthMeCachePayload(value: unknown): value is AuthMeCachePayload {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    Array.isArray(candidate.eventRoles) &&
+    isAuthMeVerificationState(candidate.verificationState) &&
+    typeof candidate.fetchedAt === 'number'
+  );
+}
+
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -145,10 +184,31 @@ export class AuthController {
       return { user: null };
     }
     const userId = session.user.id;
-    const [eventRoles, verificationState] = await Promise.all([
-      this.authService.getUserEventRoles(userId),
-      this.authService.getUserEmailVerificationState(userId),
-    ]);
+    const now = Date.now();
+
+    let eventRoles: Array<{ eventId: string; role: string }> = [];
+    let verificationState: AuthMeVerificationState;
+
+    const cachedAuthMe = isAuthMeCachePayload(session.authMeCache)
+      ? session.authMeCache
+      : null;
+    if (
+      cachedAuthMe &&
+      now - cachedAuthMe.fetchedAt <= AUTH_ME_CACHE_TTL_MS
+    ) {
+      eventRoles = cachedAuthMe.eventRoles;
+      verificationState = cachedAuthMe.verificationState;
+    } else {
+      [eventRoles, verificationState] = await Promise.all([
+        this.authService.getUserEventRoles(userId),
+        this.authService.getUserEmailVerificationState(userId),
+      ]);
+      session.authMeCache = {
+        eventRoles,
+        verificationState,
+        fetchedAt: now,
+      } satisfies AuthMeCachePayload;
+    }
     const sessionCreatedAt =
       typeof session.createdAt === 'number' ? session.createdAt : null;
 
