@@ -40,11 +40,11 @@ import {
   readMicrositeAutoPublishPreference,
   writeMicrositeAutoPublishPreference,
 } from "@/lib/microsite-auto-publish";
+import { cn } from "@/lib/utils";
 import { MediaLibraryDialog } from "@/components/microsite/media-library-dialog";
 import {
   MICROSITE_DESIGN_PRESETS,
   MICROSITE_THEME,
-  type MicrositeDesignPresetMode,
   type MicrositeDesignSettings,
 } from "@/components/microsite/theme/preset";
 import { normalizeMicrositeSettings } from "@/components/microsite/theme/runtime";
@@ -322,16 +322,47 @@ export default function MicrositePage_() {
     [design.accentSecondary, settings.primaryColor],
   );
 
-  const applyDesignPreset = (presetId: string, mode: MicrositeDesignPresetMode) => {
+  const applyDesignPreset = (presetId: string) => {
     const preset = MICROSITE_DESIGN_PRESETS.find((item) => item.id === presetId);
     if (!preset) return;
-    const variant = preset.variants[mode];
     setSettings((prev) => ({
       ...prev,
-      theme: mode,
-      primaryColor: variant.primaryColor,
-      design: { ...MICROSITE_THEME.designDefaults, ...variant.design },
+      primaryColor: preset.primaryColor,
+      design: { ...MICROSITE_THEME.designDefaults, ...preset.design },
     }));
+  };
+
+  const isPresetModeActive = (presetId: string) => {
+    const preset = MICROSITE_DESIGN_PRESETS.find((item) => item.id === presetId);
+    if (!preset) return false;
+    const designToCheck = settings.design ?? MICROSITE_THEME.designDefaults;
+
+    const comparableFields: Array<keyof MicrositeDesignSettings> = [
+      "accentSecondary",
+      "ringStart",
+      "ringMiddle",
+      "darkSurface",
+      "pageBackground",
+      "surfaceBackground",
+      "surfaceMuted",
+      "textColor",
+      "mutedTextColor",
+      "borderColor",
+      "patternStyle",
+      "patternOpacity",
+      "radiusScale",
+      "shadowStrength",
+      "cardStyle",
+      "animation",
+    ];
+
+    const designMatches = comparableFields.every((field) => {
+      const presetValue = preset.design[field];
+      if (presetValue === undefined) return true;
+      return designToCheck[field] === presetValue;
+    });
+
+    return (settings.primaryColor ?? "") === preset.primaryColor && designMatches;
   };
 
   const resetDesignToDefault = () => {
@@ -541,43 +572,56 @@ export default function MicrositePage_() {
 
           <div className="rounded-lg border bg-background p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold">Design Presets</p>
+              <div>
+                <p className="text-sm font-semibold">Color Themes</p>
+                <p className="text-xs text-muted-foreground">Each theme is a full style pack. Users can still toggle light/dark on the live microsite.</p>
+              </div>
               <Button type="button" size="sm" variant="ghost" onClick={resetDesignToDefault}>
                 Reset
               </Button>
             </div>
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {MICROSITE_DESIGN_PRESETS.map((preset) => (
                 <div key={preset.id} className="rounded-lg border p-3">
                   <p className="text-sm font-semibold">{preset.label}</p>
                   <p className="mt-1 text-xs text-muted-foreground">{preset.description}</p>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {(["light", "dark"] as const).map((mode) => {
-                      const variant = preset.variants[mode];
-                      return (
-                        <div key={`${preset.id}-${mode}`} className="rounded-md border bg-muted/20 p-2.5">
-                          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                            {mode}
-                          </p>
+                  {(() => {
+                    const isActive = isPresetModeActive(preset.id);
+                    const pageBg = preset.design.pageBackground ?? MICROSITE_THEME.designDefaults.pageBackground;
+                    const surfaceBg = preset.design.surfaceBackground ?? MICROSITE_THEME.designDefaults.surfaceBackground;
+                    const mutedBg = preset.design.surfaceMuted ?? MICROSITE_THEME.designDefaults.surfaceMuted;
+                    const accentSecondary = preset.design.accentSecondary ?? preset.primaryColor;
+
+                    return (
+                      <div
+                        className={cn(
+                          "mt-3 rounded-md border bg-muted/20 p-2.5",
+                          isActive ? "border-primary/60 bg-primary/5" : "border-border",
+                        )}
+                      >
+                        <div className="rounded-md border p-2" style={{ background: pageBg, borderColor: "rgba(255,255,255,0.18)" }}>
                           <div
-                            className="mt-1.5 h-2 w-full rounded-full"
-                            style={{
-                              background: `linear-gradient(90deg, ${variant.primaryColor}, ${variant.design.accentSecondary ?? variant.primaryColor})`,
-                            }}
+                            className="h-2 w-full rounded-full"
+                            style={{ background: `linear-gradient(90deg, ${preset.primaryColor}, ${accentSecondary})` }}
                           />
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="mt-2 h-7 w-full text-xs"
-                            onClick={() => applyDesignPreset(preset.id, mode)}
-                          >
-                            Apply {mode}
-                          </Button>
+                          <div className="mt-2 grid grid-cols-3 gap-1">
+                            <div className="h-4 rounded-sm border" style={{ background: surfaceBg, borderColor: "rgba(255,255,255,0.16)" }} />
+                            <div className="h-4 rounded-sm border" style={{ background: mutedBg, borderColor: "rgba(255,255,255,0.16)" }} />
+                            <div className="h-4 rounded-sm border" style={{ background: preset.primaryColor, borderColor: "rgba(255,255,255,0.16)" }} />
+                          </div>
                         </div>
-                      );
-                    })}
-                  </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={isActive ? "default" : "outline"}
+                          className="mt-2 h-8 w-full text-xs"
+                          onClick={() => applyDesignPreset(preset.id)}
+                        >
+                          {isActive ? "Applied" : "Apply theme"}
+                        </Button>
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
             </div>
