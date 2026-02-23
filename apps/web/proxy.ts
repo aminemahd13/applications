@@ -21,15 +21,18 @@ function normalizeAbsoluteApiUrl(value: string | undefined): string | null {
 }
 
 const API_URL_CANDIDATES = Array.from(
-  new Set(
-    [
-      normalizeAbsoluteApiUrl(process.env.INTERNAL_API_URL),
-      normalizeAbsoluteApiUrl(process.env.NEXT_PUBLIC_API_URL),
-      "http://localhost:3001/api/v1",
-      "http://api:3001/api/v1",
-      "http://localhost:3000/api/v1",
-      "http://api:3000/api/v1",
-    ].filter((value): value is string => Boolean(value)),
+  new Set([
+    normalizeAbsoluteApiUrl(process.env.INTERNAL_API_URL),
+    normalizeAbsoluteApiUrl(process.env.NEXT_PUBLIC_API_URL),
+    ...(process.env.NODE_ENV === "production"
+      ? ["http://api:3001/api/v1", "http://localhost:3001/api/v1"]
+      : [
+          "http://localhost:3001/api/v1",
+          "http://api:3001/api/v1",
+          "http://localhost:3000/api/v1",
+          "http://api:3000/api/v1",
+        ]),
+  ].filter((value): value is string => Boolean(value)),
   ),
 );
 const SESSION_VALIDATION_TIMEOUT_MS = Math.max(
@@ -46,6 +49,15 @@ const SESSION_VALIDATION_COOKIE = "session_validated";
 const SESSION_VALIDATION_MAX_AGE_SECONDS = Number(
   process.env.SESSION_VALIDATION_MAX_AGE_SECONDS || "900",
 );
+const SESSION_VALIDATION_SERVER_CACHE_TTL_MS = Math.max(
+  Number(process.env.SESSION_VALIDATION_SERVER_CACHE_TTL_MS || "60000"),
+  1_000,
+);
+const SESSION_VALIDATION_SERVER_CACHE_MAX_ENTRIES = Math.max(
+  Number(process.env.SESSION_VALIDATION_SERVER_CACHE_MAX_ENTRIES || "10000"),
+  100,
+);
+const validatedSessionCache = new Map<string, number>();
 
 const APP_ROUTE_SEGMENTS = new Set([
   "login",
@@ -169,6 +181,8 @@ const PROTECTED_SEGMENTS = new Set([
 ]);
 
 function isProtectedRoute(pathname: string): boolean {
+  // `/events/:slug` and descendants are public microsite pages.
+  if (EVENT_PATH_RE.test(pathname)) return false;
   const first = pathname.split("/")[1] || "";
   return PROTECTED_SEGMENTS.has(first);
 }
@@ -233,6 +247,8 @@ async function validateSession(req: NextRequest): Promise<boolean> {
   const cookie = req.headers.get("cookie") ?? "";
 
   for (const apiUrl of getOrderedApiCandidates()) {
+    let shouldFallbackToAuthMe = false;
+
     try {
       const sessionRes = await fetchWithTimeout(
         `${apiUrl}/auth/session`,
@@ -275,10 +291,13 @@ async function validateSession(req: NextRequest): Promise<boolean> {
         return hasAuthenticatedUser(payload);
       }
       markApiCandidateHealthy(apiUrl);
+      shouldFallbackToAuthMe = true;
     } catch {
       markApiCandidateFailure(apiUrl);
-      // Fall back to /auth/me compatibility check below.
+      continue;
     }
+
+    if (!shouldFallbackToAuthMe) continue;
 
     try {
       const res = await fetchWithTimeout(
@@ -323,6 +342,34 @@ function sidMarker(sidValue: string): string {
   return encodeURIComponent(sidValue).slice(0, 32);
 }
 
+function hasRecentSessionValidation(marker: string, now: number): boolean {
+  const expiresAt = validatedSessionCache.get(marker);
+  if (!expiresAt) return false;
+  if (expiresAt <= now) {
+    validatedSessionCache.delete(marker);
+    return false;
+  }
+  return true;
+}
+
+function rememberSessionValidation(marker: string, now: number) {
+  validatedSessionCache.set(marker, now + SESSION_VALIDATION_SERVER_CACHE_TTL_MS);
+  if (validatedSessionCache.size <= SESSION_VALIDATION_SERVER_CACHE_MAX_ENTRIES) {
+    return;
+  }
+  for (const [cacheMarker, expiresAt] of validatedSessionCache) {
+    if (
+      expiresAt <= now ||
+      validatedSessionCache.size > SESSION_VALIDATION_SERVER_CACHE_MAX_ENTRIES
+    ) {
+      validatedSessionCache.delete(cacheMarker);
+    }
+    if (validatedSessionCache.size <= SESSION_VALIDATION_SERVER_CACHE_MAX_ENTRIES) {
+      return;
+    }
+  }
+}
+
 export default async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -348,8 +395,12 @@ export default async function proxy(req: NextRequest) {
     }
 
     const expectedMarker = sidMarker(sid.value);
+    const now = Date.now();
     const existingMarker = req.cookies.get(SESSION_VALIDATION_COOKIE)?.value;
-    if (existingMarker !== expectedMarker) {
+    if (
+      existingMarker !== expectedMarker &&
+      !hasRecentSessionValidation(expectedMarker, now)
+    ) {
       const isValid = await validateSession(req);
       if (!isValid) {
         const loginUrl = new URL("/login", req.url);
@@ -358,11 +409,15 @@ export default async function proxy(req: NextRequest) {
           `${pathname}${req.nextUrl.search}`,
         );
         const response = NextResponse.redirect(loginUrl);
+        validatedSessionCache.delete(expectedMarker);
         response.cookies.delete("connect.sid");
         response.cookies.delete("sid");
         response.cookies.delete(SESSION_VALIDATION_COOKIE);
         return response;
       }
+      refreshSessionValidationMarker = expectedMarker;
+      rememberSessionValidation(expectedMarker, now);
+    } else if (existingMarker !== expectedMarker) {
       refreshSessionValidationMarker = expectedMarker;
     }
   }
