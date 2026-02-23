@@ -5,7 +5,7 @@ import { MicrositeSettings } from "@event-platform/shared";
 import { Menu, X, ChevronDown, Moon, Sun } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
-import { resolveMicrositeHref } from "./link-utils";
+import { normalizeMicrositeBasePath, resolveMicrositeHref } from "./link-utils";
 import { resolveAssetUrl } from "../asset-url";
 import { usePathname } from "next/navigation";
 
@@ -48,11 +48,11 @@ export function Navbar({
   tagline?: string;
   themePreference?: MicrositeSettings["theme"];
 }) {
-  const themeStorageKey = `mm-theme-override:${basePath ?? "global"}`;
+  const normalizedBasePath = normalizeMicrositeBasePath(basePath);
+  const themeStorageKey = `mm-theme-override:${normalizedBasePath || "__global__"}`;
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [openDropdown, setOpenDropdown] = useState<number | null>(null);
-  const [manualThemeMode, setManualThemeMode] = useState<"light" | "dark" | null>(null);
   const closeDropdownTimerRef = useRef<number | null>(null);
   const pathname = usePathname();
   const {
@@ -108,11 +108,11 @@ export function Navbar({
     () => null,
   );
   const activeThemeMode = useMemo<"light" | "dark">(() => {
-    if (manualThemeMode) return manualThemeMode;
+    if (storedThemeOverride) return storedThemeOverride;
     if (themePreference === "dark") return "dark";
     if (themePreference === "light") return "light";
-    return storedThemeOverride ?? systemThemeMode;
-  }, [manualThemeMode, themePreference, storedThemeOverride, systemThemeMode]);
+    return systemThemeMode;
+  }, [storedThemeOverride, themePreference, systemThemeMode]);
 
   const resolvedLoginHref = (() => {
     const raw = (loginHref ?? "/login").trim();
@@ -185,8 +185,7 @@ export function Navbar({
   useEffect(() => {
     if (
       themePreference === "system" &&
-      !storedThemeOverride &&
-      !manualThemeMode
+      !storedThemeOverride
     ) {
       applySystemTheme(systemThemeMode);
       return;
@@ -194,7 +193,6 @@ export function Navbar({
     applyThemeMode(activeThemeMode);
   }, [
     activeThemeMode,
-    manualThemeMode,
     storedThemeOverride,
     systemThemeMode,
     themePreference,
@@ -202,18 +200,13 @@ export function Navbar({
 
   const toggleThemeMode = () => {
     const next = activeThemeMode === "dark" ? "light" : "dark";
-    setManualThemeMode(next);
     if (typeof window !== "undefined") {
-      if (themePreference === "system") {
-        window.localStorage.setItem(themeStorageKey, next);
-        window.dispatchEvent(
-          new CustomEvent<string>(THEME_STORAGE_EVENT, {
-            detail: themeStorageKey,
-          }),
-        );
-      } else {
-        window.localStorage.removeItem(themeStorageKey);
-      }
+      window.localStorage.setItem(themeStorageKey, next);
+      window.dispatchEvent(
+        new CustomEvent<string>(THEME_STORAGE_EVENT, {
+          detail: themeStorageKey,
+        }),
+      );
     }
     applyThemeMode(next);
   };
@@ -352,7 +345,7 @@ export function Navbar({
         </div>
 
         <button
-          className="ml-auto rounded-md p-2 text-[var(--mm-text-muted)] transition-colors hover:bg-[var(--mm-soft)] hover:text-[var(--mm-text)] lg:hidden"
+          className="ml-auto inline-flex h-10 w-10 items-center justify-center rounded-md text-[var(--mm-text-muted)] transition-colors hover:bg-[var(--mm-soft)] hover:text-[var(--mm-text)] lg:hidden"
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
         >
@@ -371,10 +364,10 @@ export function Navbar({
             const hasChildren = !!link.children?.length;
             return (
               <div key={idx} className="rounded-xl border border-[var(--mm-border)] bg-[var(--mm-soft)]/70">
-                <div className="flex items-center justify-between px-4 py-3">
+                <div className="flex items-center gap-2 px-2 py-2">
                   <Link
                     href={resolveMicrositeHref(link.href, basePath)}
-                    className="text-sm font-semibold text-[var(--mm-text)]"
+                    className="flex min-h-11 flex-1 items-center rounded-md px-3 py-2 text-sm font-semibold text-[var(--mm-text)] transition-colors hover:bg-[var(--mm-surface)]"
                     onClick={() => setMobileMenuOpen(false)}
                   >
                     {link.label}
@@ -382,7 +375,7 @@ export function Navbar({
                   {hasChildren && (
                     <button
                       type="button"
-                      className="rounded-md p-1.5 text-[var(--mm-text-muted)] hover:bg-[var(--mm-surface)]"
+                      className="inline-flex h-11 w-11 items-center justify-center rounded-md text-[var(--mm-text-muted)] transition-colors hover:bg-[var(--mm-surface)]"
                       onClick={() => setOpenDropdown((current) => (current === idx ? null : idx))}
                       aria-label={openDropdown === idx ? "Collapse menu section" : "Expand menu section"}
                     >
@@ -391,12 +384,12 @@ export function Navbar({
                   )}
                 </div>
                 {hasChildren && openDropdown === idx && (
-                  <div className="space-y-1 px-4 pb-4">
+                  <div className="space-y-1 px-3 pb-3">
                     {link.children?.map((child, childIdx) => (
                       <Link
                         key={childIdx}
                         href={resolveMicrositeHref(child.href, basePath)}
-                        className="block rounded-lg px-2 py-1.5 text-sm text-[var(--mm-text-muted)] hover:bg-[var(--mm-surface)] hover:text-[var(--mm-text)]"
+                        className="block min-h-10 rounded-lg px-3 py-2 text-sm text-[var(--mm-text-muted)] transition-colors hover:bg-[var(--mm-surface)] hover:text-[var(--mm-text)]"
                         onClick={() => setMobileMenuOpen(false)}
                       >
                         {child.label}
