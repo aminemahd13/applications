@@ -84,7 +84,7 @@ export function HeroBlock({
   const hasHeroImage = heroImageUrl !== "";
   const hasCustomLogo = customLogo !== "";
   const computedLogoAlt = logoAlt || "Microsite logo";
-  const heading = title || "Welcome";
+  const heading = typeof title === "string" ? title.trim() : "Welcome";
   const heroLayout = layout === "split" ? "split" : "centered";
   const shouldShowFaq = showFaqButton ?? true;
 
@@ -148,17 +148,19 @@ export function HeroBlock({
                 />
               </div>
 
-              <h1
-                className={cn(
-                  "microsite-display mm-fade-up text-4xl font-bold tracking-[0.03em] opacity-0 md:text-5xl",
-                  heroLayout === "split" ? "max-w-[18ch] md:leading-[1.05]" : "text-center md:leading-[3rem]",
-                )}
-                style={{ animationDelay: "0.25s", animationFillMode: "forwards" }}
-              >
-                <span className="inline-block bg-gradient-to-br from-[var(--mm-accent)] via-[var(--mm-ring-middle)] to-[var(--mm-text)] bg-clip-text text-transparent">
-                  {heading}
-                </span>
-              </h1>
+              {heading && (
+                <h1
+                  className={cn(
+                    "microsite-display mm-fade-up text-4xl font-bold tracking-[0.03em] opacity-0 md:text-5xl",
+                    heroLayout === "split" ? "max-w-[18ch] md:leading-[1.05]" : "text-center md:leading-[3rem]",
+                  )}
+                  style={{ animationDelay: "0.25s", animationFillMode: "forwards" }}
+                >
+                  <span className="inline-block bg-gradient-to-br from-[var(--mm-accent)] via-[var(--mm-ring-middle)] to-[var(--mm-text)] bg-clip-text text-transparent">
+                    {heading}
+                  </span>
+                </h1>
+              )}
 
               {subtitle && (
                 <p
@@ -238,7 +240,7 @@ export function HeroBlock({
                 <div className="microsite-card overflow-hidden">
                   <img
                     src={heroImageUrl}
-                    alt={heading}
+                    alt={heading || "Hero image"}
                     className="h-[22rem] w-full object-cover"
                   />
                 </div>

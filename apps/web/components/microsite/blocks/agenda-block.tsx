@@ -43,7 +43,7 @@ export function AgendaBlock({
   block: Extract<Block, { type: "AGENDA" }>;
 }) {
   const data = (block.data || {}) as AgendaData;
-  const heading = data.heading?.trim() || "Event Agenda";
+  const heading = typeof data.heading === "string" ? data.heading.trim() : "Event Agenda";
   const description = data.description?.trim();
   const days = data.days ?? [];
   const layout = data.layout ?? "stacked";
@@ -61,10 +61,14 @@ export function AgendaBlock({
         backgroundClass: "bg-transparent",
       }}
     >
-      <div className="mb-10 space-y-3 text-center">
-        <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{heading}</h2>
-        {description && <p className="mx-auto max-w-3xl text-base text-[var(--mm-text-muted)] md:text-lg">{description}</p>}
-      </div>
+      {(heading || description) && (
+        <div className="mb-10 space-y-3 text-center">
+          {heading && (
+            <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{heading}</h2>
+          )}
+          {description && <p className="mx-auto max-w-3xl text-base text-[var(--mm-text-muted)] md:text-lg">{description}</p>}
+        </div>
+      )}
 
       <div className={layout === "split" ? "grid gap-6 xl:grid-cols-2" : "space-y-6"}>
         {days.map((day, dayIdx) => {

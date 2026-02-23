@@ -14,7 +14,7 @@ export function FaqBlock({ block }: { block: Extract<Block, { type: 'FAQ' }> }) 
     heading?: string;
   };
   const items = data.items ?? [];
-  const heading = data.heading;
+  const heading = typeof data.heading === "string" ? data.heading.trim() : "Frequently Asked Questions";
   const [openIndex, setOpenIndex] = useState<number | null>(null);
 
   if (items.length === 0) return null;
@@ -30,9 +30,11 @@ export function FaqBlock({ block }: { block: Extract<Block, { type: 'FAQ' }> }) 
         backgroundClass: "bg-transparent",
       }}
     >
-      <h2 className="microsite-display mb-12 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-        {(heading as string) || "Frequently Asked Questions"}
-      </h2>
+      {heading && (
+        <h2 className="microsite-display mb-12 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
+          {heading}
+        </h2>
+      )}
       <div className="space-y-4">
         {items.map((item: FaqRenderItem, idx: number) => {
           const isOpen = openIndex === idx;

@@ -27,7 +27,7 @@ export function TeamTooltipBlock({
   block: Extract<Block, { type: "TEAM_TOOLTIP" }>;
 }) {
   const data = (block.data || {}) as TeamTooltipData;
-  const heading = data.heading || "Who are we?";
+  const heading = typeof data.heading === "string" ? data.heading.trim() : "Who are we?";
   const description = data.description || "";
   const ctaLabel = data.ctaLabel || "";
   const ctaHref = data.ctaHref || "";
@@ -54,9 +54,11 @@ export function TeamTooltipBlock({
       }}
       containerClassName="space-y-6 text-center"
     >
-      <h2 className="microsite-display text-3xl font-bold text-[var(--mm-text)] md:text-5xl">
-        {heading}
-      </h2>
+      {heading && (
+        <h2 className="microsite-display text-3xl font-bold text-[var(--mm-text)] md:text-5xl">
+          {heading}
+        </h2>
+      )}
       {description && (
         <p className="mx-auto max-w-screen-md text-center text-[var(--mm-text-muted)]">{description}</p>
       )}

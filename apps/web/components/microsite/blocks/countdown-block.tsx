@@ -85,7 +85,7 @@ export function CountdownBlock({
   const millisecondsLeft = Math.max(0, targetTs - (now ?? targetTs));
   const isEnded = now !== null && now >= targetTs;
   const parts = toParts(millisecondsLeft);
-  const title = data.title?.trim() || "Event starts in";
+  const title = typeof data.title === "string" ? data.title.trim() : "Event starts in";
   const endedLabel = data.endedLabel?.trim() || "The event is live.";
   const subtitle = data.subtitle?.trim();
   const milestones = data.milestones ?? [];
@@ -112,10 +112,12 @@ export function CountdownBlock({
         <div className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-full bg-[var(--mm-soft)] text-[var(--mm-accent)]">
           <Timer className="h-6 w-6" />
         </div>
-        <div className="space-y-2">
-          <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{title}</h2>
-          {subtitle && <p className="text-base text-[var(--mm-text-muted)] md:text-lg">{subtitle}</p>}
-        </div>
+        {(title || subtitle) && (
+          <div className="space-y-2">
+            {title && <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{title}</h2>}
+            {subtitle && <p className="text-base text-[var(--mm-text-muted)] md:text-lg">{subtitle}</p>}
+          </div>
+        )}
 
         {!isEnded ? (
           <div className={`grid gap-3 ${showSeconds ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-3"}`}>

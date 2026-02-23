@@ -44,7 +44,7 @@ export function VenueBlock({
   block: Extract<Block, { type: "VENUE" }>;
 }) {
   const data = (block.data || {}) as VenueData;
-  const heading = data.heading?.trim() || "Venue & Logistics";
+  const heading = typeof data.heading === "string" ? data.heading.trim() : "Venue & Logistics";
   const venueName = data.venueName?.trim();
   const address = data.address?.trim();
   const details = data.details ?? [];
@@ -66,9 +66,11 @@ export function VenueBlock({
         backgroundClass: "bg-transparent",
       }}
     >
-      <div className="mb-10 text-center">
-        <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{heading}</h2>
-      </div>
+      {heading && (
+        <div className="mb-10 text-center">
+          <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{heading}</h2>
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <article className="microsite-card overflow-hidden">

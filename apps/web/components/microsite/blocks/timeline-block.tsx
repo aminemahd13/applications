@@ -12,7 +12,7 @@ export function TimelineBlock({ block }: { block: Extract<Block, { type: 'TIMELI
     heading?: string;
   };
   const items = data.items ?? [];
-  const heading = data.heading;
+  const heading = typeof data.heading === "string" ? data.heading.trim() : "Schedule";
 
   if (items.length === 0) return null;
 
@@ -27,9 +27,11 @@ export function TimelineBlock({ block }: { block: Extract<Block, { type: 'TIMELI
         backgroundClass: "bg-transparent",
       }}
     >
-      <h2 className="microsite-display mb-14 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-        {(heading as string) || "Schedule"}
-      </h2>
+      {heading && (
+        <h2 className="microsite-display mb-14 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
+          {heading}
+        </h2>
+      )}
       <div className="relative ml-4 space-y-10 border-l-2 border-[var(--mm-border)] md:ml-6">
         {items.map((item: TimelineRenderItem, idx: number) => (
           <div key={idx} className="relative pl-7 md:pl-10">

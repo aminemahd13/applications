@@ -132,7 +132,7 @@ export function CalendarBlock({
   block: Extract<Block, { type: "CALENDAR" }>;
 }) {
   const data = (block.data || {}) as CalendarData;
-  const heading = data.heading?.trim() || "Event Calendar";
+  const heading = typeof data.heading === "string" ? data.heading.trim() : "Event Calendar";
   const description = data.description?.trim();
   const timezoneLabel = data.timezoneLabel?.trim();
   const items = sortByDate((data.items ?? []) as CalendarItem[]);
@@ -211,13 +211,17 @@ export function CalendarBlock({
         backgroundClass: "bg-transparent",
       }}
     >
-      <div className="mb-9 space-y-3 text-center">
-        <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{heading}</h2>
-        {description && <p className="mx-auto max-w-3xl text-base text-[var(--mm-text-muted)] md:text-lg">{description}</p>}
-        {timezoneLabel && (
-          <p className="text-xs uppercase tracking-[0.12em] text-[var(--mm-text-muted)]">Timezone: {timezoneLabel}</p>
-        )}
-      </div>
+      {(heading || description || timezoneLabel) && (
+        <div className="mb-9 space-y-3 text-center">
+          {heading && (
+            <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{heading}</h2>
+          )}
+          {description && <p className="mx-auto max-w-3xl text-base text-[var(--mm-text-muted)] md:text-lg">{description}</p>}
+          {timezoneLabel && (
+            <p className="text-xs uppercase tracking-[0.12em] text-[var(--mm-text-muted)]">Timezone: {timezoneLabel}</p>
+          )}
+        </div>
+      )}
 
       <div className="microsite-card overflow-hidden">
         <div className="overflow-x-auto overflow-y-hidden">
