@@ -158,25 +158,31 @@ export function getMicrositeStyleVariables(settingsInput?: MicrositeSettings): C
   const shadows = SHADOW_MAP[design.shadowStrength];
   const cardVisuals = resolveCardVisuals(design.cardStyle, design.shadowStrength);
   const darkBase = design.darkSurface || "#020617";
+  const lightBase = "#f8fafc";
+  const lightSurface = "#ffffff";
+  const lightSoft = "#eef2ff";
+  const lightText = "#0f172a";
+  const lightMuted = "#475569";
+  const lightBorder = "rgba(15, 23, 42, 0.16)";
 
   const paletteLight = {
-    dark: design.darkSurface,
-    bg: design.pageBackground,
-    surface: design.surfaceBackground,
-    soft: design.surfaceMuted,
-    text: design.textColor,
-    muted: design.mutedTextColor,
-    border: design.borderColor,
+    dark: `color-mix(in oklab, ${darkBase} 40%, #1e293b 60%)`,
+    bg: `color-mix(in oklab, ${design.pageBackground} 42%, ${lightBase} 58%)`,
+    surface: `color-mix(in oklab, ${design.surfaceBackground} 44%, ${lightSurface} 56%)`,
+    soft: `color-mix(in oklab, ${design.surfaceMuted} 52%, ${lightSoft} 48%)`,
+    text: `color-mix(in oklab, ${design.textColor} 16%, ${lightText} 84%)`,
+    muted: `color-mix(in oklab, ${design.mutedTextColor} 22%, ${lightMuted} 78%)`,
+    border: `color-mix(in oklab, ${design.borderColor} 38%, ${lightBorder} 62%)`,
   };
 
   const paletteDark = {
     dark: darkBase,
-    bg: `color-mix(in oklab, ${design.pageBackground} 12%, ${darkBase} 88%)`,
-    surface: `color-mix(in oklab, ${design.surfaceBackground} 24%, ${darkBase} 76%)`,
-    soft: `color-mix(in oklab, ${design.surfaceMuted} 20%, ${darkBase} 80%)`,
-    text: `color-mix(in oklab, ${design.textColor} 24%, #f8fafc 76%)`,
-    muted: `color-mix(in oklab, ${design.mutedTextColor} 30%, #cbd5e1 70%)`,
-    border: `color-mix(in oklab, ${design.borderColor} 35%, #94a3b8 65%)`,
+    bg: `color-mix(in oklab, ${design.pageBackground} 8%, ${darkBase} 92%)`,
+    surface: `color-mix(in oklab, ${design.surfaceBackground} 12%, ${darkBase} 88%)`,
+    soft: `color-mix(in oklab, ${design.surfaceMuted} 16%, ${darkBase} 84%)`,
+    text: `color-mix(in oklab, ${design.textColor} 12%, #f8fafc 88%)`,
+    muted: `color-mix(in oklab, ${design.mutedTextColor} 18%, #cbd5e1 82%)`,
+    border: `color-mix(in oklab, ${design.borderColor} 20%, #94a3b8 80%)`,
   };
 
   return {
@@ -213,6 +219,7 @@ export function getMicrositeStyleVariables(settingsInput?: MicrositeSettings): C
 
 export const MICROSITE_RUNTIME_CSS = `
   [data-microsite-root="true"] {
+    color-scheme: light;
     --mm-dark: var(--mm-dark-light);
     --mm-bg: var(--mm-bg-light);
     --mm-surface: var(--mm-surface-light);
@@ -223,6 +230,7 @@ export const MICROSITE_RUNTIME_CSS = `
   }
 
   [data-microsite-root="true"].mm-theme-light {
+    color-scheme: light;
     --mm-dark: var(--mm-dark-light);
     --mm-bg: var(--mm-bg-light);
     --mm-surface: var(--mm-surface-light);
@@ -233,6 +241,7 @@ export const MICROSITE_RUNTIME_CSS = `
   }
 
   [data-microsite-root="true"].mm-theme-dark {
+    color-scheme: dark;
     --mm-dark: var(--mm-dark-dark);
     --mm-bg: var(--mm-bg-dark);
     --mm-surface: var(--mm-surface-dark);
@@ -244,6 +253,7 @@ export const MICROSITE_RUNTIME_CSS = `
 
   @media (prefers-color-scheme: dark) {
     [data-microsite-root="true"].mm-theme-system {
+      color-scheme: dark;
       --mm-dark: var(--mm-dark-dark);
       --mm-bg: var(--mm-bg-dark);
       --mm-surface: var(--mm-surface-dark);

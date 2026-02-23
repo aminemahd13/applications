@@ -13,8 +13,8 @@ type NavigationSettings = MicrositeSettings["navigation"];
 
 const NAV_STYLE_CLASSES = {
   glass: {
-    top: "border-b border-transparent bg-transparent",
-    scrolled: "border-b border-white/30 bg-white/65 shadow-[0_10px_30px_rgba(15,23,42,0.12)] backdrop-blur-xl",
+    top: "border-b border-transparent bg-[color-mix(in_oklab,var(--mm-bg)_38%,transparent)]",
+    scrolled: "border-b border-[var(--mm-border)] bg-[color-mix(in_oklab,var(--mm-surface)_84%,transparent)] shadow-[0_10px_30px_rgba(15,23,42,0.2)] backdrop-blur-xl",
   },
   solid: {
     top: "border-b border-[var(--mm-border)] bg-[var(--mm-surface)] shadow-[0_8px_28px_rgba(15,23,42,0.1)]",
