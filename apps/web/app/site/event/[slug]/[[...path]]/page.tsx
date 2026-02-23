@@ -1,23 +1,36 @@
-import { getMicrosite, getPage } from "@/lib/api";
+import { Metadata } from "next";
+import { unstable_cache } from "next/cache";
+import { notFound } from "next/navigation";
 import { BlockRenderer } from "@/components/microsite/block-renderer";
-import { MicrositeLayout } from "@/components/microsite/layout/microsite-layout";
 import { MicrositeCustomCode } from "@/components/microsite/custom-code";
 import { DevNotFoundFallback } from "@/components/microsite/dev-not-found-fallback";
-import { notFound } from "next/navigation";
-import { Metadata } from "next";
-import { cache } from "react";
+import { MicrositeLayout } from "@/components/microsite/layout/microsite-layout";
+import { getMicrosite, getPage } from "@/lib/api";
 
 interface Props {
   params: Promise<{ slug: string; path?: string[] }>;
 }
 
-const getCachedEventPage = cache(
-  async (slug: string, pagePath: string) => getPage(slug, pagePath)
+const PUBLIC_MICROSITE_REVALIDATE_SECONDS = Math.max(
+  Number(process.env.PUBLIC_CONTENT_REVALIDATE_SECONDS ?? "60"),
+  1,
+);
+
+const getCachedMicrosite = unstable_cache(
+  async (slug: string) => getMicrosite(slug),
+  ["public-microsite-by-slug"],
+  { revalidate: PUBLIC_MICROSITE_REVALIDATE_SECONDS },
+);
+
+const getCachedEventPage = unstable_cache(
+  async (slug: string, pagePath: string) => getPage(slug, pagePath),
+  ["public-microsite-page-by-path"],
+  { revalidate: PUBLIC_MICROSITE_REVALIDATE_SECONDS },
 );
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug, path = [] } = await params;
-  const pagePath = path.join('/') || 'home';
+  const pagePath = path.join("/") || "home";
   const page = await getCachedEventPage(slug, pagePath);
   if (!page) return {};
 
@@ -29,11 +42,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function EventPage({ params }: Props) {
   const { slug, path = [] } = await params;
-  const pagePath = path.join('/') || 'home';
-  
+  const pagePath = path.join("/") || "home";
+
   const [microsite, page] = await Promise.all([
-    getMicrosite(slug),
-    getCachedEventPage(slug, pagePath)
+    getCachedMicrosite(slug),
+    getCachedEventPage(slug, pagePath),
   ]);
 
   if (!microsite || !page) {

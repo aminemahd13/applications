@@ -36,22 +36,22 @@ function resolveInternalApiBaseUrls(): string[] {
     normalizeAbsoluteApiUrl(process.env.NEXT_PUBLIC_API_URL),
   ].filter((value): value is string => Boolean(value));
 
-  if (process.env.NODE_ENV === "production") {
-    if (explicitCandidates.length > 0) {
-      return Array.from(new Set(explicitCandidates));
-    }
-    return ["http://api:3001/api/v1", "http://localhost:3001/api/v1"];
-  }
+  const fallbackCandidates =
+    process.env.NODE_ENV === "production"
+      ? [
+          "http://api:3000/api/v1",
+          "http://localhost:3000/api/v1",
+          "http://api:3001/api/v1",
+          "http://localhost:3001/api/v1",
+        ]
+      : [
+          "http://localhost:3001/api/v1",
+          "http://api:3001/api/v1",
+          "http://localhost:3000/api/v1",
+          "http://api:3000/api/v1",
+        ];
 
-  return Array.from(
-    new Set([
-      ...explicitCandidates,
-      "http://localhost:3001/api/v1",
-      "http://api:3001/api/v1",
-      "http://localhost:3000/api/v1",
-      "http://api:3000/api/v1",
-    ]),
-  );
+  return Array.from(new Set([...explicitCandidates, ...fallbackCandidates]));
 }
 
 const API_BASE_URL_CANDIDATES = resolveInternalApiBaseUrls();

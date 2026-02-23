@@ -25,7 +25,12 @@ const API_URL_CANDIDATES = Array.from(
     normalizeAbsoluteApiUrl(process.env.INTERNAL_API_URL),
     normalizeAbsoluteApiUrl(process.env.NEXT_PUBLIC_API_URL),
     ...(process.env.NODE_ENV === "production"
-      ? ["http://api:3001/api/v1", "http://localhost:3001/api/v1"]
+      ? [
+          "http://api:3000/api/v1",
+          "http://localhost:3000/api/v1",
+          "http://api:3001/api/v1",
+          "http://localhost:3001/api/v1",
+        ]
       : [
           "http://localhost:3001/api/v1",
           "http://api:3001/api/v1",
@@ -339,7 +344,16 @@ async function validateSession(req: NextRequest): Promise<boolean> {
 }
 
 function sidMarker(sidValue: string): string {
-  return encodeURIComponent(sidValue).slice(0, 32);
+  const normalizedSid = normalizeSessionCookieValue(sidValue);
+  return normalizedSid.replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
+}
+
+function normalizeSessionCookieValue(cookieValue: string): string {
+  try {
+    return decodeURIComponent(cookieValue);
+  } catch {
+    return cookieValue;
+  }
 }
 
 function hasRecentSessionValidation(marker: string, now: number): boolean {
@@ -386,8 +400,10 @@ export default async function proxy(req: NextRequest) {
 
   /* Server-side auth gate */
   if (isProtectedRoute(pathname)) {
+    // `sid` is the canonical cookie name used by the API session middleware.
+    // Keep `connect.sid` as a legacy fallback.
     const sid =
-      req.cookies.get("connect.sid") ?? req.cookies.get("sid");
+      req.cookies.get("sid") ?? req.cookies.get("connect.sid");
     if (!sid?.value) {
       const loginUrl = new URL("/login", req.url);
       loginUrl.searchParams.set("returnUrl", `${pathname}${req.nextUrl.search}`);
