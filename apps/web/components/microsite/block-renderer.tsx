@@ -22,6 +22,8 @@ import { ImageBlock } from "./blocks/image-block";
 import { GridBlock } from "./blocks/grid-block";
 import { VideoEmbedBlock } from "./blocks/video-embed-block";
 import { EmbedDocBlock } from "./blocks/embed-doc-block";
+import { SeparatorBlock } from "./blocks/separator-block";
+import { TextImageLeftBlock } from "./blocks/text-image-left-block";
 import { TextImageRightBlock } from "./blocks/text-image-right-block";
 import { TestimonialsBlock } from "./blocks/testimonials-block";
 import { CustomCodeBlock } from "./blocks/custom-code-block";
@@ -125,6 +127,10 @@ function SingleBlock({
       return <VideoEmbedBlock block={block} />;
     case "EMBED_DOC":
       return <EmbedDocBlock block={block} />;
+    case "SEPARATOR":
+      return <SeparatorBlock block={block as Extract<Block, { type: "SEPARATOR" }>} />;
+    case "TEXT_IMAGE_LEFT":
+      return <TextImageLeftBlock block={block as Extract<Block, { type: "TEXT_IMAGE_LEFT" }>} />;
     case "TEXT_IMAGE_RIGHT":
       return <TextImageRightBlock block={block} />;
     case "TESTIMONIALS":

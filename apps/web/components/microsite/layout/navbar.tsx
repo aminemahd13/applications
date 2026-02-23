@@ -225,23 +225,21 @@ export function Navbar({
           className="flex min-w-0 items-center gap-2.5 lg:justify-self-start"
           onClick={() => setMobileMenuOpen(false)}
         >
-          <div className="mm-logo-shell h-11 max-w-[11.5rem] px-2.5">
-            {logoAssetKey ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={resolveAssetUrl(logoAssetKey)}
-                alt="Logo"
-                className="h-8 w-auto max-w-full"
-              />
-            ) : (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src="/microsite/presets/mm-light.png"
-                alt="Math&Maroc Logo"
-                className="h-8 w-auto max-w-full"
-              />
-            )}
-          </div>
+          {logoAssetKey ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={resolveAssetUrl(logoAssetKey)}
+              alt="Logo"
+              className="h-11 w-auto rounded-sm"
+            />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src="/microsite/presets/mm-light.png"
+              alt="Math&Maroc Logo"
+              className="h-10 w-auto rounded-sm"
+            />
+          )}
           <div className="min-w-0">
             <span className="block truncate text-base font-semibold tracking-tight text-[var(--mm-text)] sm:text-lg">
               {siteName || "Math&Maroc"}
