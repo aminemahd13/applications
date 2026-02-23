@@ -445,7 +445,7 @@ function getDefaultData(type: BlockType): BlockData {
           { label: "Nearest transit", value: "Downtown Station (7 min walk)", icon: "train" },
           { label: "Parking", value: "Garage C (discount code: EVENT25)", icon: "car" },
         ],
-        highlights: ["Wheelchair accessible", "Prayer room available", "Lactation room available"],
+        highlights: ["Wheelchair accessible", "Prayer room available"],
         cta: { label: "View travel guide", href: "#" },
       };
     case "TEAM_TOOLTIP":
