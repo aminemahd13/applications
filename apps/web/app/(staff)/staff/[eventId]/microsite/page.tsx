@@ -9,6 +9,7 @@ import {
   Plus,
   Eye,
   Trash2,
+  GripVertical,
   Loader2,
   CheckCircle2,
   AlertCircle,
@@ -82,6 +83,10 @@ export default function MicrositePage_() {
   const [newPageTitle, setNewPageTitle] = useState("");
   const [newPageSlug, setNewPageSlug] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [draggingNavLinkIndex, setDraggingNavLinkIndex] = useState<number | null>(null);
+  const [navLinkDropIndex, setNavLinkDropIndex] = useState<number | null>(null);
+  const [draggingNavChild, setDraggingNavChild] = useState<{ linkIndex: number; childIndex: number } | null>(null);
+  const [navChildDropTarget, setNavChildDropTarget] = useState<{ linkIndex: number; childIndex: number } | null>(null);
   const [mediaPicker, setMediaPicker] = useState<{
     kind: "image" | "video" | "all";
     onSelect: (assetKey: string) => void;
@@ -409,6 +414,55 @@ export default function MicrositePage_() {
     const next = [...navLinks];
     const children = (next[index]?.children ?? []).filter((_, i) => i !== childIndex);
     next[index] = { ...(next[index] ?? { label: "", href: "#" }), children };
+    updateNavigation({ links: next });
+  };
+
+  const reorderNavLinks = (fromIndex: number, toIndex: number) => {
+    if (
+      fromIndex === toIndex ||
+      fromIndex < 0 ||
+      toIndex < 0 ||
+      fromIndex >= navLinks.length ||
+      toIndex >= navLinks.length
+    ) {
+      return;
+    }
+    const next = [...navLinks];
+    const [moved] = next.splice(fromIndex, 1);
+    if (!moved) {
+      return;
+    }
+    next.splice(toIndex, 0, moved);
+    updateNavigation({ links: next });
+  };
+
+  const reorderNavChildren = (linkIndex: number, fromChildIndex: number, toChildIndex: number) => {
+    if (fromChildIndex === toChildIndex) {
+      return;
+    }
+
+    const next = [...navLinks];
+    const targetLink = next[linkIndex];
+    if (!targetLink) {
+      return;
+    }
+
+    const children = [...(targetLink.children ?? [])];
+    if (
+      fromChildIndex < 0 ||
+      toChildIndex < 0 ||
+      fromChildIndex >= children.length ||
+      toChildIndex >= children.length
+    ) {
+      return;
+    }
+
+    const [moved] = children.splice(fromChildIndex, 1);
+    if (!moved) {
+      return;
+    }
+    children.splice(toChildIndex, 0, moved);
+    next[linkIndex] = { ...targetLink, children };
     updateNavigation({ links: next });
   };
 
@@ -1000,6 +1054,11 @@ export default function MicrositePage_() {
                   Add link
                 </Button>
               </div>
+              {navLinks.length > 0 ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Drag the grip icon to reorder links and dropdown items.
+                </p>
+              ) : null}
               {navLinks.length === 0 ? (
                 <div className="rounded-md border border-dashed p-4 text-xs text-muted-foreground">
                   No navigation links yet.
@@ -1007,7 +1066,65 @@ export default function MicrositePage_() {
               ) : (
                 <div className="space-y-3">
                   {navLinks.map((link, index) => (
-                    <div key={`${link.label}-${index}`} className="rounded-lg border p-3 space-y-3">
+                    <div
+                      key={`nav-link-${index}`}
+                      className={cn(
+                        "space-y-3 rounded-lg border p-3",
+                        navLinkDropIndex === index && draggingNavLinkIndex !== null && "border-primary/60 bg-primary/5",
+                      )}
+                      onDragOver={(event) => {
+                        if (draggingNavLinkIndex === null) {
+                          return;
+                        }
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                        setNavLinkDropIndex(index);
+                      }}
+                      onDrop={(event) => {
+                        if (draggingNavLinkIndex === null) {
+                          return;
+                        }
+                        event.preventDefault();
+                        reorderNavLinks(draggingNavLinkIndex, index);
+                        setDraggingNavLinkIndex(null);
+                        setNavLinkDropIndex(null);
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <button
+                            type="button"
+                            draggable
+                            aria-label={`Reorder link ${index + 1}`}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border bg-muted/30 text-muted-foreground transition-colors hover:bg-muted cursor-grab active:cursor-grabbing"
+                            onDragStart={(event) => {
+                              event.dataTransfer.effectAllowed = "move";
+                              event.dataTransfer.setData("text/plain", String(index));
+                              setDraggingNavChild(null);
+                              setNavChildDropTarget(null);
+                              setDraggingNavLinkIndex(index);
+                              setNavLinkDropIndex(index);
+                            }}
+                            onDragEnd={() => {
+                              setDraggingNavLinkIndex(null);
+                              setNavLinkDropIndex(null);
+                            }}
+                          >
+                            <GripVertical className="h-4 w-4" />
+                          </button>
+                          <span>Link {index + 1}</span>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive"
+                          onClick={() => removeNavLink(index)}
+                        >
+                          Remove link
+                        </Button>
+                      </div>
+
                       <div className="grid gap-2 md:grid-cols-2">
                         <Input
                           value={link.label ?? ""}
@@ -1034,44 +1151,76 @@ export default function MicrositePage_() {
                         ) : (
                           <div className="space-y-2">
                             {(link.children ?? []).map((child, childIndex) => (
-                              <div key={`${child.label}-${childIndex}`} className="grid gap-2 md:grid-cols-2">
+                              <div
+                                key={`nav-link-${index}-child-${childIndex}`}
+                                className={cn(
+                                  "grid gap-2 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-center",
+                                  navChildDropTarget?.linkIndex === index &&
+                                    navChildDropTarget.childIndex === childIndex &&
+                                    draggingNavChild?.linkIndex === index &&
+                                    "rounded-md border border-primary/60 bg-primary/5 p-2",
+                                )}
+                                onDragOver={(event) => {
+                                  if (!draggingNavChild || draggingNavChild.linkIndex !== index) {
+                                    return;
+                                  }
+                                  event.preventDefault();
+                                  event.dataTransfer.dropEffect = "move";
+                                  setNavChildDropTarget({ linkIndex: index, childIndex });
+                                }}
+                                onDrop={(event) => {
+                                  if (!draggingNavChild || draggingNavChild.linkIndex !== index) {
+                                    return;
+                                  }
+                                  event.preventDefault();
+                                  reorderNavChildren(index, draggingNavChild.childIndex, childIndex);
+                                  setDraggingNavChild(null);
+                                  setNavChildDropTarget(null);
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  draggable
+                                  aria-label={`Reorder dropdown item ${childIndex + 1}`}
+                                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border bg-muted/30 text-muted-foreground transition-colors hover:bg-muted cursor-grab active:cursor-grabbing"
+                                  onDragStart={(event) => {
+                                    event.dataTransfer.effectAllowed = "move";
+                                    event.dataTransfer.setData("text/plain", `${index}:${childIndex}`);
+                                    setDraggingNavLinkIndex(null);
+                                    setNavLinkDropIndex(null);
+                                    setDraggingNavChild({ linkIndex: index, childIndex });
+                                    setNavChildDropTarget({ linkIndex: index, childIndex });
+                                  }}
+                                  onDragEnd={() => {
+                                    setDraggingNavChild(null);
+                                    setNavChildDropTarget(null);
+                                  }}
+                                >
+                                  <GripVertical className="h-4 w-4" />
+                                </button>
                                 <Input
                                   value={child.label ?? ""}
                                   onChange={(e) => updateNavChild(index, childIndex, { label: e.target.value })}
                                   placeholder="Dropdown label"
                                 />
-                                <div className="flex items-center gap-2">
-                                  <Input
-                                    value={child.href ?? ""}
-                                    onChange={(e) => updateNavChild(index, childIndex, { href: e.target.value })}
-                                    placeholder="/path"
-                                  />
-                                  <Button
-                                    type="button"
-                                    size="icon"
-                                    variant="ghost"
-                                    className="text-destructive"
-                                    onClick={() => removeNavChild(index, childIndex)}
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
-                                </div>
+                                <Input
+                                  value={child.href ?? ""}
+                                  onChange={(e) => updateNavChild(index, childIndex, { href: e.target.value })}
+                                  placeholder="/path"
+                                />
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="ghost"
+                                  className="text-destructive"
+                                  onClick={() => removeNavChild(index, childIndex)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
                               </div>
                             ))}
                           </div>
                         )}
-                      </div>
-
-                      <div className="flex justify-end">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="text-destructive"
-                          onClick={() => removeNavLink(index)}
-                        >
-                          Remove link
-                        </Button>
                       </div>
                     </div>
                   ))}
