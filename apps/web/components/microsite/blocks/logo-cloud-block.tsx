@@ -37,13 +37,13 @@ export function LogoCloudBlock({ block }: { block: Extract<Block, { type: 'LOGO_
         {logos.map((logo: LogoRenderItem, idx: number) => (
           <div
             key={idx}
-            className="flex items-center justify-center rounded-xl border border-[var(--mm-border)] bg-[var(--mm-surface)] p-4 grayscale transition-all hover:grayscale-0"
+            className="mm-logo-shell group flex h-20 min-w-[9rem] items-center justify-center px-5 py-3"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={resolveAssetUrl(logo.imageUrl || logo.url || logo.assetKey)}
               alt={logo.name || "Partner logo"}
-              className="h-8 md:h-12 w-auto object-contain"
+              className="h-8 w-auto max-w-[10rem] object-contain opacity-85 saturate-[0.75] contrast-110 transition-all duration-200 group-hover:opacity-100 group-hover:saturate-125 md:h-11"
             />
           </div>
         ))}

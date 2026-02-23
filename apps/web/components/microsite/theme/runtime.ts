@@ -44,16 +44,22 @@ const RADIUS_MAP: Record<MicrositeRadiusScale, { surface: string; card: string; 
 
 const SHADOW_MAP: Record<MicrositeShadowStrength, { card: string; surface: string }> = {
   soft: {
-    card: "0 10px 25px rgba(15, 23, 42, 0.07)",
-    surface: "0 16px 38px rgba(15, 23, 42, 0.1)",
+    card:
+      "0 12px 28px color-mix(in oklab, var(--mm-dark) 18%, transparent), inset 0 1px 0 color-mix(in oklab, #ffffff 50%, transparent)",
+    surface:
+      "0 16px 38px color-mix(in oklab, var(--mm-dark) 20%, transparent), inset 0 1px 0 color-mix(in oklab, #ffffff 55%, transparent)",
   },
   medium: {
-    card: "0 18px 45px rgba(15, 23, 42, 0.09)",
-    surface: "0 24px 56px rgba(15, 23, 42, 0.13)",
+    card:
+      "0 20px 46px color-mix(in oklab, var(--mm-dark) 23%, transparent), inset 0 1px 0 color-mix(in oklab, #ffffff 58%, transparent)",
+    surface:
+      "0 26px 58px color-mix(in oklab, var(--mm-dark) 25%, transparent), inset 0 1px 0 color-mix(in oklab, #ffffff 62%, transparent)",
   },
   bold: {
-    card: "0 24px 60px rgba(15, 23, 42, 0.14)",
-    surface: "0 30px 72px rgba(15, 23, 42, 0.18)",
+    card:
+      "0 28px 66px color-mix(in oklab, var(--mm-dark) 30%, transparent), 0 0 0 1px color-mix(in oklab, var(--mm-accent) 14%, transparent) inset",
+    surface:
+      "0 34px 80px color-mix(in oklab, var(--mm-dark) 32%, transparent), 0 0 0 1px color-mix(in oklab, var(--mm-accent) 16%, transparent) inset",
   },
 };
 
@@ -62,23 +68,25 @@ function resolveCardVisuals(cardStyle: MicrositeCardStyle, shadowStrength: Micro
 
   if (cardStyle === "flat") {
     return {
-      cardBackground: "var(--mm-soft)",
-      cardBorder: "color-mix(in oklab, var(--mm-border) 75%, transparent)",
+      cardBackground: "color-mix(in oklab, var(--mm-soft) 84%, var(--mm-accent) 16%)",
+      cardBorder: "color-mix(in oklab, var(--mm-border) 66%, var(--mm-accent) 34%)",
       cardShadow: "none",
     };
   }
 
   if (cardStyle === "outlined") {
     return {
-      cardBackground: "color-mix(in oklab, var(--mm-surface) 92%, var(--mm-accent) 8%)",
-      cardBorder: "color-mix(in oklab, var(--mm-accent) 30%, var(--mm-border) 70%)",
+      cardBackground:
+        "linear-gradient(160deg, color-mix(in oklab, var(--mm-surface) 86%, var(--mm-accent) 14%) 0%, color-mix(in oklab, var(--mm-surface) 82%, var(--mm-accent-2) 18%) 100%)",
+      cardBorder: "color-mix(in oklab, var(--mm-accent) 44%, var(--mm-border) 56%)",
       cardShadow: "none",
     };
   }
 
   return {
-    cardBackground: "var(--mm-surface)",
-    cardBorder: "var(--mm-border)",
+    cardBackground:
+      "linear-gradient(165deg, color-mix(in oklab, var(--mm-surface) 88%, var(--mm-accent) 12%) 0%, var(--mm-surface) 52%, color-mix(in oklab, var(--mm-surface) 86%, var(--mm-accent-2) 14%) 100%)",
+    cardBorder: "color-mix(in oklab, var(--mm-border) 76%, var(--mm-accent) 24%)",
     cardShadow: shadows.card,
   };
 }
@@ -158,31 +166,35 @@ export function getMicrositeStyleVariables(settingsInput?: MicrositeSettings): C
   const shadows = SHADOW_MAP[design.shadowStrength];
   const cardVisuals = resolveCardVisuals(design.cardStyle, design.shadowStrength);
   const darkBase = design.darkSurface || "#020617";
-  const lightBase = "#f8fafc";
+  const accentBlend = `color-mix(in oklab, ${accent} 56%, ${design.accentSecondary} 44%)`;
+  const lightBase = "#f4f8ff";
   const lightSurface = "#ffffff";
-  const lightSoft = "#eef2ff";
-  const lightText = "#0f172a";
-  const lightMuted = "#475569";
-  const lightBorder = "rgba(15, 23, 42, 0.16)";
+  const lightSoft = "#e8eeff";
+  const lightText = "#0b1328";
+  const lightMuted = "#3f4f69";
+  const lightBorder = "rgba(37, 99, 235, 0.2)";
+  const darkTextFallback = "#f8fbff";
+  const darkMutedFallback = "#c7d2fe";
+  const darkBorderFallback = "#a5b4fc";
 
   const paletteLight = {
-    dark: `color-mix(in oklab, ${darkBase} 40%, #1e293b 60%)`,
-    bg: `color-mix(in oklab, ${design.pageBackground} 42%, ${lightBase} 58%)`,
-    surface: `color-mix(in oklab, ${design.surfaceBackground} 44%, ${lightSurface} 56%)`,
-    soft: `color-mix(in oklab, ${design.surfaceMuted} 52%, ${lightSoft} 48%)`,
-    text: `color-mix(in oklab, ${design.textColor} 16%, ${lightText} 84%)`,
-    muted: `color-mix(in oklab, ${design.mutedTextColor} 22%, ${lightMuted} 78%)`,
-    border: `color-mix(in oklab, ${design.borderColor} 38%, ${lightBorder} 62%)`,
+    dark: `color-mix(in oklab, ${darkBase} 56%, ${design.ringMiddle} 44%)`,
+    bg: `color-mix(in oklab, ${design.pageBackground} 66%, color-mix(in oklab, ${lightBase} 78%, ${accentBlend} 22%) 34%)`,
+    surface: `color-mix(in oklab, ${design.surfaceBackground} 74%, color-mix(in oklab, ${lightSurface} 88%, ${accentBlend} 12%) 26%)`,
+    soft: `color-mix(in oklab, ${design.surfaceMuted} 63%, color-mix(in oklab, ${lightSoft} 52%, ${accentBlend} 48%) 37%)`,
+    text: `color-mix(in oklab, ${design.textColor} 56%, ${lightText} 44%)`,
+    muted: `color-mix(in oklab, ${design.mutedTextColor} 56%, ${lightMuted} 44%)`,
+    border: `color-mix(in oklab, ${design.borderColor} 60%, ${lightBorder} 40%)`,
   };
 
   const paletteDark = {
-    dark: darkBase,
-    bg: `color-mix(in oklab, ${design.pageBackground} 8%, ${darkBase} 92%)`,
-    surface: `color-mix(in oklab, ${design.surfaceBackground} 12%, ${darkBase} 88%)`,
-    soft: `color-mix(in oklab, ${design.surfaceMuted} 16%, ${darkBase} 84%)`,
-    text: `color-mix(in oklab, ${design.textColor} 12%, #f8fafc 88%)`,
-    muted: `color-mix(in oklab, ${design.mutedTextColor} 18%, #cbd5e1 82%)`,
-    border: `color-mix(in oklab, ${design.borderColor} 20%, #94a3b8 80%)`,
+    dark: `color-mix(in oklab, ${darkBase} 82%, ${design.ringMiddle} 18%)`,
+    bg: `color-mix(in oklab, ${darkBase} 76%, color-mix(in oklab, ${design.pageBackground} 28%, ${accentBlend} 72%) 24%)`,
+    surface: `color-mix(in oklab, ${darkBase} 66%, color-mix(in oklab, ${design.surfaceBackground} 32%, ${accentBlend} 68%) 34%)`,
+    soft: `color-mix(in oklab, ${darkBase} 58%, color-mix(in oklab, ${design.surfaceMuted} 36%, ${accentBlend} 64%) 42%)`,
+    text: `color-mix(in oklab, ${design.textColor} 18%, ${darkTextFallback} 82%)`,
+    muted: `color-mix(in oklab, ${design.mutedTextColor} 30%, ${darkMutedFallback} 70%)`,
+    border: `color-mix(in oklab, ${design.borderColor} 44%, ${darkBorderFallback} 56%)`,
   };
 
   return {
@@ -329,7 +341,7 @@ export const MICROSITE_RUNTIME_CSS = `
   }
 
   [data-microsite-root="true"] .microsite-soft-bg-strong {
-    background: color-mix(in oklab, var(--mm-soft) 65%, var(--mm-accent) 35%);
+    background: color-mix(in oklab, var(--mm-soft) 54%, var(--mm-accent) 46%);
   }
 
   [data-microsite-root="true"] .microsite-card {
@@ -337,11 +349,18 @@ export const MICROSITE_RUNTIME_CSS = `
     background: var(--mm-card-bg, var(--mm-surface));
     border-radius: var(--mm-card-radius, 1.35rem);
     box-shadow: var(--mm-shadow-card, 0 18px 45px rgba(15, 23, 42, 0.08));
+    backdrop-filter: saturate(120%) blur(1px);
   }
 
   [data-microsite-root="true"] .microsite-surface {
     border: 1px solid var(--mm-border);
-    background: var(--mm-surface);
+    background:
+      linear-gradient(
+        165deg,
+        color-mix(in oklab, var(--mm-surface) 90%, var(--mm-accent) 10%) 0%,
+        var(--mm-surface) 52%,
+        color-mix(in oklab, var(--mm-surface) 88%, var(--mm-accent-2) 12%) 100%
+      );
     border-radius: var(--mm-surface-radius, 1.7rem);
     box-shadow: var(--mm-shadow-surface, 0 24px 56px rgba(15, 23, 42, 0.12));
   }
@@ -360,28 +379,39 @@ export const MICROSITE_RUNTIME_CSS = `
   }
 
   [data-microsite-root="true"] .mm-dark-band {
-    background: var(--mm-dark);
+    background:
+      radial-gradient(26rem 16rem at 12% -4%, color-mix(in oklab, var(--mm-accent) 30%, transparent), transparent 72%),
+      radial-gradient(24rem 14rem at 92% 0%, color-mix(in oklab, var(--mm-accent-2) 28%, transparent), transparent 74%),
+      linear-gradient(145deg, color-mix(in oklab, var(--mm-dark) 88%, #010409) 0%, color-mix(in oklab, var(--mm-dark) 80%, var(--mm-ring-middle) 20%) 100%);
     color: #fff;
   }
 
   [data-microsite-root="true"] .mm-pattern-cta {
     height: 100%;
     background:
-      radial-gradient(14rem 10rem at 20% -10%, color-mix(in oklab, var(--mm-accent) 34%, transparent), transparent 70%),
-      radial-gradient(14rem 9rem at 90% 0%, color-mix(in oklab, var(--mm-accent-2) 25%, transparent), transparent 72%),
-      linear-gradient(140deg, color-mix(in oklab, var(--mm-dark) 92%, #000) 0%, var(--mm-dark) 100%);
+      radial-gradient(16rem 11rem at 18% -10%, color-mix(in oklab, var(--mm-accent) 44%, transparent), transparent 68%),
+      radial-gradient(16rem 10rem at 90% 0%, color-mix(in oklab, var(--mm-accent-2) 34%, transparent), transparent 70%),
+      linear-gradient(140deg, color-mix(in oklab, var(--mm-dark) 86%, #020617) 0%, color-mix(in oklab, var(--mm-dark) 74%, var(--mm-ring-middle) 26%) 100%);
   }
 
   [data-microsite-root="true"] .mm-primary-button {
-    background: var(--mm-accent);
+    background:
+      linear-gradient(
+        140deg,
+        color-mix(in oklab, var(--mm-accent) 84%, #ffffff 16%) 0%,
+        color-mix(in oklab, var(--mm-accent) 70%, var(--mm-ring-middle) 30%) 100%
+      );
     color: #fff;
-    border: 1px solid color-mix(in oklab, var(--mm-accent) 80%, #0f172a);
+    border: 1px solid color-mix(in oklab, var(--mm-accent) 58%, var(--mm-ring-middle) 42%);
     border-radius: var(--mm-button-radius, 9999px);
-    transition: all 180ms ease;
+    box-shadow: 0 12px 26px color-mix(in oklab, var(--mm-accent) 34%, transparent);
+    transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
   }
 
   [data-microsite-root="true"] .mm-primary-button:hover {
-    filter: brightness(1.08);
+    transform: translateY(-1px);
+    filter: saturate(1.12);
+    box-shadow: 0 16px 30px color-mix(in oklab, var(--mm-accent) 44%, transparent);
   }
 
   [data-microsite-root="true"] .mm-ring-button {
@@ -433,7 +463,7 @@ export const MICROSITE_RUNTIME_CSS = `
     border: 1px solid color-mix(in oklab, var(--mm-border) 70%, #fff 30%);
     background: var(--mm-surface);
     color: var(--mm-text);
-    box-shadow: 0 4px 18px rgba(15, 23, 42, 0.12);
+    box-shadow: 0 10px 24px color-mix(in oklab, var(--mm-dark) 20%, transparent);
     transition: border-color 180ms ease;
   }
 
@@ -446,16 +476,55 @@ export const MICROSITE_RUNTIME_CSS = `
     box-shadow: 0 0 35px 0 color-mix(in oklab, var(--mm-accent) 55%, transparent);
   }
 
+  [data-microsite-root="true"] .mm-logo-shell {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.9rem;
+    border: 1px solid color-mix(in oklab, var(--mm-border) 64%, var(--mm-accent) 36%);
+    background:
+      radial-gradient(120% 120% at 15% 0%, color-mix(in oklab, var(--mm-accent) 22%, transparent), transparent 58%),
+      linear-gradient(160deg, color-mix(in oklab, var(--mm-surface) 88%, var(--mm-bg) 12%) 0%, color-mix(in oklab, var(--mm-surface) 76%, var(--mm-soft) 24%) 100%);
+    box-shadow:
+      0 10px 24px color-mix(in oklab, var(--mm-dark) 20%, transparent),
+      inset 0 1px 0 color-mix(in oklab, #ffffff 58%, transparent);
+    transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+  }
+
+  [data-microsite-root="true"] .mm-logo-shell:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in oklab, var(--mm-accent) 60%, var(--mm-border) 40%);
+    box-shadow:
+      0 14px 28px color-mix(in oklab, var(--mm-dark) 24%, transparent),
+      0 0 0 1px color-mix(in oklab, var(--mm-accent) 28%, transparent) inset;
+  }
+
+  [data-microsite-root="true"] .mm-logo-shell img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    filter: drop-shadow(0 2px 9px color-mix(in oklab, var(--mm-dark) 22%, transparent));
+  }
+
   [data-microsite-root="true"] .mm-outline-button {
-    border: 1px solid color-mix(in oklab, var(--mm-accent) 40%, #111827);
+    border: 1px solid color-mix(in oklab, var(--mm-accent) 52%, var(--mm-border) 48%);
     color: var(--mm-text);
-    background: color-mix(in oklab, var(--mm-surface) 88%, var(--mm-accent) 12%);
+    background:
+      linear-gradient(
+        145deg,
+        color-mix(in oklab, var(--mm-surface) 82%, var(--mm-accent) 18%) 0%,
+        color-mix(in oklab, var(--mm-surface) 78%, var(--mm-accent-2) 22%) 100%
+      );
     border-radius: var(--mm-button-radius, 9999px);
-    transition: all 180ms ease;
+    box-shadow: 0 8px 20px color-mix(in oklab, var(--mm-accent) 20%, transparent);
+    transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
   }
 
   [data-microsite-root="true"] .mm-outline-button:hover {
-    border-color: var(--mm-accent);
+    transform: translateY(-1px);
+    border-color: color-mix(in oklab, var(--mm-accent) 70%, var(--mm-accent-2) 30%);
+    box-shadow: 0 12px 24px color-mix(in oklab, var(--mm-accent) 28%, transparent);
   }
 
   @keyframes mm-fade-up {
@@ -547,8 +616,9 @@ export const MICROSITE_RUNTIME_CSS = `
 
   [data-microsite-root="true"] .mm-bg-overlay {
     background:
-      radial-gradient(50rem 24rem at 8% 0%, color-mix(in oklab, var(--mm-accent) 28%, transparent), transparent 65%),
-      radial-gradient(36rem 18rem at 100% 0%, color-mix(in oklab, var(--mm-accent-2) 26%, transparent), transparent 66%);
+      radial-gradient(52rem 25rem at 6% 0%, color-mix(in oklab, var(--mm-accent) 38%, transparent), transparent 66%),
+      radial-gradient(40rem 20rem at 100% 0%, color-mix(in oklab, var(--mm-accent-2) 34%, transparent), transparent 68%),
+      linear-gradient(180deg, color-mix(in oklab, var(--mm-bg) 78%, var(--mm-surface) 22%) 0%, var(--mm-bg) 56%, color-mix(in oklab, var(--mm-bg) 76%, var(--mm-dark) 24%) 100%);
   }
 
   [data-microsite-root="true"] .mm-section-divider-top,

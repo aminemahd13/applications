@@ -80,7 +80,7 @@ export function PartnerStripBlock({
                     src={entry.logo}
                     alt={entry.alt}
                     className={cn(
-                      "w-auto filter grayscale brightness-75 contrast-125 hover:grayscale-0 hover:brightness-100 hover:contrast-100",
+                      "w-auto object-contain opacity-85 saturate-[0.72] contrast-110 transition-all duration-200 group-hover:opacity-100 group-hover:saturate-125",
                       SIZE_CLASS[entry.size],
                     )}
                   />
@@ -90,14 +90,14 @@ export function PartnerStripBlock({
                   <Link
                     key={`${entry.logo}-${index}`}
                     href={entry.href}
-                    className="flex h-[3.5rem] items-center bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-[var(--mm-accent)]/[.15] via-transparent to-transparent"
+                    className="mm-logo-shell group flex h-[3.5rem] items-center px-4"
                   >
                     {logo}
                   </Link>
                 ) : (
                   <div
                     key={`${entry.logo}-${index}`}
-                    className="flex h-[3.5rem] items-center bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-[var(--mm-accent)]/[.15] via-transparent to-transparent"
+                    className="mm-logo-shell group flex h-[3.5rem] items-center px-4"
                   >
                     {logo}
                   </div>
