@@ -35,6 +35,7 @@ export function Providers({
   const protectedPrefixes = [
     "/admin",
     "/dashboard",
+    "/events",
     "/inbox",
     "/profile",
     "/applications",
