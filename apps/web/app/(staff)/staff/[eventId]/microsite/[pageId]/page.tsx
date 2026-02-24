@@ -785,6 +785,7 @@ function ArrayItemsEditor<T extends Record<string, unknown>>({
   uploadAsset,
   openMediaLibrary,
   scrollable = true,
+  reorderable = false,
 }: {
   heading?: string;
   onHeadingChange?: (v: string) => void;
@@ -795,8 +796,40 @@ function ArrayItemsEditor<T extends Record<string, unknown>>({
   uploadAsset?: UploadAssetFn;
   openMediaLibrary?: OpenMediaLibrary;
   scrollable?: boolean;
+  reorderable?: boolean;
 }) {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+
+  const reorderItems = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      if (
+        fromIndex === toIndex ||
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= items.length ||
+        toIndex >= items.length
+      ) {
+        return;
+      }
+
+      const reordered = [...items];
+      const [moved] = reordered.splice(fromIndex, 1);
+      if (!moved) return;
+      reordered.splice(toIndex, 0, moved);
+      onItemsChange(reordered);
+
+      setOpenIdx((current) => {
+        if (current === null) return null;
+        if (current === fromIndex) return toIndex;
+        if (fromIndex < current && current <= toIndex) return current - 1;
+        if (toIndex <= current && current < fromIndex) return current + 1;
+        return current;
+      });
+    },
+    [items, onItemsChange],
+  );
 
   return (
     <div className="space-y-4">
@@ -828,7 +861,34 @@ function ArrayItemsEditor<T extends Record<string, unknown>>({
             const isOpen = openIdx === idx;
             const primaryField = fields[0];
             return (
-              <div key={idx} className="rounded-lg border bg-card">
+              <div
+                key={idx}
+                className={cn(
+                  "rounded-lg border bg-card",
+                  reorderable &&
+                    draggingIndex !== null &&
+                    dropIndex === idx &&
+                    draggingIndex !== idx &&
+                    "border-primary/60 bg-primary/5",
+                )}
+                onDragOver={(event) => {
+                  if (!reorderable || draggingIndex === null) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  setDropIndex(idx);
+                }}
+                onDrop={(event) => {
+                  if (!reorderable || draggingIndex === null) {
+                    return;
+                  }
+                  event.preventDefault();
+                  reorderItems(draggingIndex, idx);
+                  setDraggingIndex(null);
+                  setDropIndex(null);
+                }}
+              >
                 <div
                   role="button"
                   tabIndex={0}
@@ -841,6 +901,28 @@ function ArrayItemsEditor<T extends Record<string, unknown>>({
                     }
                   }}
                 >
+                  {reorderable ? (
+                    <button
+                      type="button"
+                      draggable
+                      aria-label={`Reorder item ${idx + 1}`}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md border bg-muted/30 text-muted-foreground transition-colors hover:bg-muted cursor-grab active:cursor-grabbing shrink-0"
+                      onClick={(event) => event.stopPropagation()}
+                      onMouseDown={(event) => event.stopPropagation()}
+                      onDragStart={(event) => {
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", String(idx));
+                        setDraggingIndex(idx);
+                        setDropIndex(idx);
+                      }}
+                      onDragEnd={() => {
+                        setDraggingIndex(null);
+                        setDropIndex(null);
+                      }}
+                    >
+                      <GripVertical className="h-3 w-3" />
+                    </button>
+                  ) : null}
                   {isOpen ? (
                     <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   ) : (
@@ -856,7 +938,11 @@ function ArrayItemsEditor<T extends Record<string, unknown>>({
                     onClick={(e) => {
                       e.stopPropagation();
                       onItemsChange(items.filter((_, i) => i !== idx));
-                      if (openIdx === idx) setOpenIdx(null);
+                      setOpenIdx((current) => {
+                        if (current === null) return null;
+                        if (current === idx) return null;
+                        return current > idx ? current - 1 : current;
+                      });
                     }}
                   >
                     <Trash2 className="h-3 w-3" />
@@ -2644,6 +2730,7 @@ function BlockInspector({
           newItem={{ name: "Partner", url: "" }}
           uploadAsset={uploadAsset}
           openMediaLibrary={openMediaLibrary}
+          reorderable
         />
       );
       break;
