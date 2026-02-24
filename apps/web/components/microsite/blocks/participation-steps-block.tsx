@@ -17,14 +17,22 @@ function isExternalHref(href: string): boolean {
   return href.startsWith("http://") || href.startsWith("https://");
 }
 
-function resolveCtaClass(variant: string): string {
+function normalizeVariant(value: string): "pill" | "outline" | "ghost" {
+  if (value === "outline") return "outline";
+  if (value === "ghost") return "ghost";
+  return "pill";
+}
+
+function resolveCtaClass(variant: "pill" | "outline" | "ghost"): string {
   if (variant === "outline") {
-    return "rounded-xl border border-[#111827] px-7 text-[#111827]";
+    return "rounded-lg border border-[var(--mm-border)] bg-[var(--mm-surface)] text-[var(--mm-text)] hover:border-[var(--mm-accent)]";
   }
+
   if (variant === "ghost") {
-    return "rounded-xl border border-transparent px-7 text-[#111827]";
+    return "rounded-lg border border-transparent bg-transparent text-[var(--mm-text)] hover:bg-[var(--mm-soft)]";
   }
-  return "rounded-full border-2 border-[#e7a400] px-7 text-[#334155] shadow-[0_6px_16px_rgba(30,41,59,0.12)]";
+
+  return "rounded-[var(--mm-button-radius)] border border-[color-mix(in_oklab,var(--mm-accent)_58%,var(--mm-border)_42%)] bg-[var(--mm-surface)] text-[var(--mm-text)] hover:border-[var(--mm-accent)]";
 }
 
 export function ParticipationStepsBlock({
@@ -45,7 +53,7 @@ export function ParticipationStepsBlock({
         ctaLabel,
         ctaHref,
         ctaIcon: String(item.ctaIcon ?? "").trim(),
-        ctaVariant: String(item.ctaVariant ?? "pill").trim().toLowerCase(),
+        ctaVariant: normalizeVariant(String(item.ctaVariant ?? "pill").trim().toLowerCase()),
       };
     })
     .filter((item) => Boolean(item.title || item.description || item.ctaLabel || item.ctaHref));
@@ -63,64 +71,75 @@ export function ParticipationStepsBlock({
     <BlockSection
       block={block}
       defaults={{
-        paddingY: "xl",
+        paddingY: "lg",
         paddingX: "lg",
         width: "wide",
         align: "center",
-        backgroundClass: "bg-[#ececec]",
+        backgroundClass: "bg-transparent",
       }}
     >
-      {heading && (
-        <h2 className="microsite-display text-center text-3xl font-semibold tracking-tight text-[#041a3d] md:text-5xl">
-          {heading}
-        </h2>
-      )}
+      <div className="microsite-surface px-4 py-6 md:px-6 md:py-8">
+        {heading && (
+          <h2 className="microsite-display text-center text-2xl font-semibold tracking-tight text-[var(--mm-text)] md:text-4xl">
+            {heading}
+          </h2>
+        )}
 
-      {items.length > 0 && (
-        <div className={cn("mt-12 grid grid-cols-1 gap-10 md:gap-8", columnsClass)}>
-          {items.map((item, index) => {
-            const IconComponent = item.ctaIcon ? ICON_MAP[item.ctaIcon] : undefined;
-            const hasCta = Boolean(item.ctaLabel && item.ctaHref);
+        {items.length > 0 && (
+          <div className={cn("mt-7 grid grid-cols-1 gap-4 md:gap-5", columnsClass)}>
+            {items.map((item, index) => {
+              const IconComponent = item.ctaIcon ? ICON_MAP[item.ctaIcon] : undefined;
+              const hasCta = Boolean(item.ctaLabel && item.ctaHref);
 
-            return (
-              <article key={`${item.title || "step"}-${index}`} className="mx-auto flex w-full max-w-md flex-col items-center text-center">
-                <span className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-[#205b4a] text-4xl leading-none text-white">
-                  {item.number || index + 1}
-                </span>
+              return (
+                <article
+                  key={`${item.title || "step"}-${index}`}
+                  className="microsite-card mx-auto flex h-full w-full max-w-md flex-col items-center px-4 py-5 text-center md:px-5"
+                >
+                  <span
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-full text-xl font-semibold text-white"
+                    style={{
+                      background:
+                        "linear-gradient(145deg, color-mix(in oklab, var(--mm-accent) 70%, var(--mm-ring-middle) 30%) 0%, color-mix(in oklab, var(--mm-accent) 58%, var(--mm-dark) 42%) 100%)",
+                    }}
+                  >
+                    {item.number || index + 1}
+                  </span>
 
-                {item.title && (
-                  <h3 className="microsite-display mt-7 text-2xl font-semibold leading-tight text-[#184b41] md:text-[2rem]">
-                    {item.title}
-                  </h3>
-                )}
+                  {item.title && (
+                    <h3 className="microsite-display mt-4 text-xl font-semibold leading-tight text-[var(--mm-text)] md:text-2xl">
+                      {item.title}
+                    </h3>
+                  )}
 
-                {item.description && (
-                  <p className="mt-8 whitespace-pre-line text-base leading-relaxed text-[#0f172a] md:text-[1.5rem]">
-                    {item.description}
-                  </p>
-                )}
+                  {item.description && (
+                    <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[var(--mm-text-muted)] md:text-base">
+                      {item.description}
+                    </p>
+                  )}
 
-                {hasCta && (
-                  <div className="mt-10">
-                    <Link
-                      href={item.ctaHref}
-                      target={isExternalHref(item.ctaHref) ? "_blank" : undefined}
-                      rel={isExternalHref(item.ctaHref) ? "noopener noreferrer" : undefined}
-                      className={cn(
-                        "inline-flex min-h-12 items-center justify-center gap-2 bg-white text-base font-medium transition-transform duration-150 hover:-translate-y-0.5 md:text-[1.3rem]",
-                        resolveCtaClass(item.ctaVariant),
-                      )}
-                    >
-                      {IconComponent ? <IconComponent className="h-5 w-5" /> : null}
-                      <span>{item.ctaLabel}</span>
-                    </Link>
-                  </div>
-                )}
-              </article>
-            );
-          })}
-        </div>
-      )}
+                  {hasCta && (
+                    <div className="mt-5">
+                      <Link
+                        href={item.ctaHref}
+                        target={isExternalHref(item.ctaHref) ? "_blank" : undefined}
+                        rel={isExternalHref(item.ctaHref) ? "noopener noreferrer" : undefined}
+                        className={cn(
+                          "inline-flex h-9 items-center justify-center gap-2 px-4 text-sm font-semibold transition-all duration-150 hover:-translate-y-0.5",
+                          resolveCtaClass(item.ctaVariant),
+                        )}
+                      >
+                        {IconComponent ? <IconComponent className="h-4 w-4" /> : null}
+                        <span>{item.ctaLabel}</span>
+                      </Link>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </BlockSection>
   );
 }
