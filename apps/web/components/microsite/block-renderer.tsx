@@ -32,6 +32,7 @@ import { SpeakerSpotlightBlock } from "./blocks/speaker-spotlight-block";
 import { ResourcesBlock } from "./blocks/resources-block";
 import { StickyAlertBarBlock } from "./blocks/sticky-alert-bar-block";
 import { RanksBlock } from "./blocks/ranks-block";
+import { ParticipationStepsBlock } from "./blocks/participation-steps-block";
 
 export function BlockRenderer({
   blocks,
@@ -97,6 +98,8 @@ function SingleBlock({
       return <StatsBlock block={block} />;
     case "STEPS":
       return <StepsBlock block={block} />;
+    case "PARTICIPATION_STEPS":
+      return <ParticipationStepsBlock block={block as Extract<Block, { type: "PARTICIPATION_STEPS" }>} />;
     case "IMAGE_GALLERY":
       return <ImageGalleryBlock block={block} />;
     case "IMAGE_STACK":
