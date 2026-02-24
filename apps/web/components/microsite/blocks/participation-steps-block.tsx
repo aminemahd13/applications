@@ -62,9 +62,9 @@ export function ParticipationStepsBlock({
 
   const columnsClass =
     items.length <= 1
-      ? "md:max-w-xl md:mx-auto"
+      ? "md:max-w-2xl md:mx-auto"
       : items.length === 2
-        ? "md:grid-cols-2 md:max-w-4xl md:mx-auto"
+        ? "md:grid-cols-2 md:max-w-6xl md:mx-auto"
         : "md:grid-cols-3";
 
   return (
@@ -78,68 +78,66 @@ export function ParticipationStepsBlock({
         backgroundClass: "bg-transparent",
       }}
     >
-      <div className="microsite-surface px-4 py-6 md:px-6 md:py-8">
-        {heading && (
-          <h2 className="microsite-display text-center text-2xl font-semibold tracking-tight text-[var(--mm-text)] md:text-4xl">
-            {heading}
-          </h2>
-        )}
+      {heading && (
+        <h2 className="microsite-display text-center text-2xl font-semibold tracking-tight text-[var(--mm-text)] md:text-4xl">
+          {heading}
+        </h2>
+      )}
 
-        {items.length > 0 && (
-          <div className={cn("mt-7 grid grid-cols-1 gap-4 md:gap-5", columnsClass)}>
-            {items.map((item, index) => {
-              const IconComponent = item.ctaIcon ? ICON_MAP[item.ctaIcon] : undefined;
-              const hasCta = Boolean(item.ctaLabel && item.ctaHref);
+      {items.length > 0 && (
+        <div className={cn("mt-7 grid grid-cols-1 gap-6 md:gap-8", columnsClass)}>
+          {items.map((item, index) => {
+            const IconComponent = item.ctaIcon ? ICON_MAP[item.ctaIcon] : undefined;
+            const hasCta = Boolean(item.ctaLabel && item.ctaHref);
 
-              return (
-                <article
-                  key={`${item.title || "step"}-${index}`}
-                  className="microsite-card mx-auto flex h-full w-full max-w-md flex-col items-center px-4 py-5 text-center md:px-5"
+            return (
+              <article
+                key={`${item.title || "step"}-${index}`}
+                className="mx-auto flex h-full w-full flex-col items-center px-3 py-2 text-center md:px-4"
+              >
+                <span
+                  className="inline-flex h-12 w-12 items-center justify-center rounded-full text-xl font-semibold text-white"
+                  style={{
+                    background:
+                      "linear-gradient(145deg, color-mix(in oklab, var(--mm-accent) 70%, var(--mm-ring-middle) 30%) 0%, color-mix(in oklab, var(--mm-accent) 58%, var(--mm-dark) 42%) 100%)",
+                  }}
                 >
-                  <span
-                    className="inline-flex h-11 w-11 items-center justify-center rounded-full text-xl font-semibold text-white"
-                    style={{
-                      background:
-                        "linear-gradient(145deg, color-mix(in oklab, var(--mm-accent) 70%, var(--mm-ring-middle) 30%) 0%, color-mix(in oklab, var(--mm-accent) 58%, var(--mm-dark) 42%) 100%)",
-                    }}
-                  >
-                    {item.number || index + 1}
-                  </span>
+                  {item.number || index + 1}
+                </span>
 
-                  {item.title && (
-                    <h3 className="microsite-display mt-4 text-xl font-semibold leading-tight text-[var(--mm-text)] md:text-2xl">
-                      {item.title}
-                    </h3>
-                  )}
+                {item.title && (
+                  <h3 className="microsite-display mt-4 text-xl font-semibold leading-tight text-[var(--mm-text)] md:text-2xl">
+                    {item.title}
+                  </h3>
+                )}
 
-                  {item.description && (
-                    <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[var(--mm-text-muted)] md:text-base">
-                      {item.description}
-                    </p>
-                  )}
+                {item.description && (
+                  <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[var(--mm-text-muted)] md:text-base">
+                    {item.description}
+                  </p>
+                )}
 
-                  {hasCta && (
-                    <div className="mt-5">
-                      <Link
-                        href={item.ctaHref}
-                        target={isExternalHref(item.ctaHref) ? "_blank" : undefined}
-                        rel={isExternalHref(item.ctaHref) ? "noopener noreferrer" : undefined}
-                        className={cn(
-                          "inline-flex h-9 items-center justify-center gap-2 px-4 text-sm font-semibold transition-all duration-150 hover:-translate-y-0.5",
-                          resolveCtaClass(item.ctaVariant),
-                        )}
-                      >
-                        {IconComponent ? <IconComponent className="h-4 w-4" /> : null}
-                        <span>{item.ctaLabel}</span>
-                      </Link>
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                {hasCta && (
+                  <div className="mt-5">
+                    <Link
+                      href={item.ctaHref}
+                      target={isExternalHref(item.ctaHref) ? "_blank" : undefined}
+                      rel={isExternalHref(item.ctaHref) ? "noopener noreferrer" : undefined}
+                      className={cn(
+                        "inline-flex h-9 items-center justify-center gap-2 px-4 text-sm font-semibold transition-all duration-150 hover:-translate-y-0.5",
+                        resolveCtaClass(item.ctaVariant),
+                      )}
+                    >
+                      {IconComponent ? <IconComponent className="h-4 w-4" /> : null}
+                      <span>{item.ctaLabel}</span>
+                    </Link>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
     </BlockSection>
   );
 }
