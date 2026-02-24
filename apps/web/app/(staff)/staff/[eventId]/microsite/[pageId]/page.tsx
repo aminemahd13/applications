@@ -892,7 +892,11 @@ function ArrayItemsEditor<T extends Record<string, unknown>>({
                 <div
                   role="button"
                   tabIndex={0}
-                  className="w-full flex items-center gap-2 p-3 text-left text-sm hover:bg-muted/50 transition-colors"
+                  draggable={reorderable}
+                  className={cn(
+                    "w-full flex items-center gap-2 p-3 text-left text-sm hover:bg-muted/50 transition-colors",
+                    reorderable ? "cursor-grab active:cursor-grabbing" : "",
+                  )}
                   onClick={() => setOpenIdx(isOpen ? null : idx)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
@@ -900,25 +904,30 @@ function ArrayItemsEditor<T extends Record<string, unknown>>({
                       setOpenIdx(isOpen ? null : idx);
                     }
                   }}
+                  onDragStart={(event) => {
+                    if (!reorderable) {
+                      return;
+                    }
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", String(idx));
+                    setDraggingIndex(idx);
+                    setDropIndex(idx);
+                  }}
+                  onDragEnd={() => {
+                    if (!reorderable) {
+                      return;
+                    }
+                    setDraggingIndex(null);
+                    setDropIndex(null);
+                  }}
                 >
                   {reorderable ? (
                     <button
                       type="button"
-                      draggable
                       aria-label={`Reorder item ${idx + 1}`}
                       className="inline-flex h-6 w-6 items-center justify-center rounded-md border bg-muted/30 text-muted-foreground transition-colors hover:bg-muted cursor-grab active:cursor-grabbing shrink-0"
                       onClick={(event) => event.stopPropagation()}
                       onMouseDown={(event) => event.stopPropagation()}
-                      onDragStart={(event) => {
-                        event.dataTransfer.effectAllowed = "move";
-                        event.dataTransfer.setData("text/plain", String(idx));
-                        setDraggingIndex(idx);
-                        setDropIndex(idx);
-                      }}
-                      onDragEnd={() => {
-                        setDraggingIndex(null);
-                        setDropIndex(null);
-                      }}
                     >
                       <GripVertical className="h-3 w-3" />
                     </button>
