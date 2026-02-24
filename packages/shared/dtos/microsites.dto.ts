@@ -290,6 +290,23 @@ export const StepsBlockSchema = z.object({
     }),
 });
 
+export const ParticipationStepsBlockSchema = z.object({
+    id: z.string(),
+    type: z.literal('PARTICIPATION_STEPS'),
+    data: withSection({
+        heading: z.string().optional(),
+        items: z.array(z.object({
+            number: z.union([z.string(), z.number()]).optional(),
+            title: z.string().optional(),
+            description: z.string().optional(),
+            ctaLabel: z.string().optional(),
+            ctaHref: z.string().optional(),
+            ctaIcon: z.string().optional(),
+            ctaVariant: z.enum(['pill', 'outline', 'ghost']).optional(),
+        }).passthrough()).default([]),
+    }),
+});
+
 export const ImageGalleryBlockSchema = z.object({
     id: z.string(),
     type: z.literal('IMAGE_GALLERY'),
@@ -607,6 +624,7 @@ export const BlockSchema = z.discriminatedUnion('type', [
     LogoCloudBlockSchema,
     StatsBlockSchema,
     StepsBlockSchema,
+    ParticipationStepsBlockSchema,
     ImageGalleryBlockSchema,
     ImageStackBlockSchema,
     PartnerStripBlockSchema,

@@ -126,6 +126,7 @@ type BlockType =
   | "LOGO_CLOUD"
   | "STATS"
   | "STEPS"
+  | "PARTICIPATION_STEPS"
   | "IMAGE_GALLERY"
   | "IMAGE_STACK"
   | "PARTNER_STRIP"
@@ -192,6 +193,7 @@ const BLOCK_CATALOG: {
   { type: "LOGO_CLOUD", label: "Logo Cloud", description: "Partner logos", icon: ImageIcon, category: "Layout" },
   { type: "STATS", label: "Stats", description: "Statistics counter", icon: BarChart3, category: "Content" },
   { type: "STEPS", label: "Steps", description: "Numbered process steps", icon: ListOrdered, category: "Content" },
+  { type: "PARTICIPATION_STEPS", label: "Participation Steps", description: "Three-step participation flow with CTA buttons", icon: ListOrdered, category: "Conversion" },
   { type: "IMAGE_GALLERY", label: "Gallery", description: "Photo gallery grid", icon: Columns, category: "Layout" },
   { type: "IMAGE_STACK", label: "Image Stack", description: "Animated stacked photo carousel", icon: ImageIcon, category: "Media" },
   { type: "PARTNER_STRIP", label: "Partner Strip", description: "Organized/trusted/hosted logos row", icon: ImageIcon, category: "Layout" },
@@ -409,6 +411,39 @@ function getDefaultData(type: BlockType): BlockData {
       return { heading: "By the Numbers", items: [{ label: "Participants", value: "500+" }] };
     case "STEPS":
       return { heading: "How it works", steps: [{ title: "Step 1", description: "Description" }] };
+    case "PARTICIPATION_STEPS":
+      return {
+        heading: "Comment participer ?",
+        items: [
+          {
+            number: "1",
+            title: "Soumets ta candidature",
+            description: "Vous devez remplir et soumettre votre candidature de facon individuelle avant le 20 septembre 2025.",
+            ctaLabel: "Candidature",
+            ctaHref: "#",
+            ctaIcon: "Files",
+            ctaVariant: "pill",
+          },
+          {
+            number: "2",
+            title: "Cree ou rejoins ton equipe",
+            description: "Vous devez creer votre propre equipe ou rejoindre une equipe deja existante avant le 20 septembre 2025.",
+            ctaLabel: "Equipe",
+            ctaHref: "#",
+            ctaIcon: "Files",
+            ctaVariant: "pill",
+          },
+          {
+            number: "3",
+            title: "Passe le test de selection",
+            description: "Les participants ayant soumis un dossier complet et faisant partie d'une equipe de 3 a 5 membres seront invites a passer un test de selection le 28 septembre 2025.",
+            ctaLabel: "Learn more",
+            ctaHref: "#",
+            ctaIcon: "",
+            ctaVariant: "outline",
+          },
+        ],
+      };
     case "IMAGE_GALLERY":
       return { heading: "Gallery", layout: "grid", items: [] };
     case "IMAGE_STACK":
@@ -2695,6 +2730,44 @@ function BlockInspector({
             { key: "description", label: "Description", multiline: true },
           ]}
           newItem={{ title: "New step", description: "" }}
+        />
+      );
+      break;
+
+    case "PARTICIPATION_STEPS":
+      content = (
+        <ArrayItemsEditor
+          heading={(data.heading as string) ?? ""}
+          onHeadingChange={(v) => updateField("heading", v)}
+          items={(data.items as {
+            number: string;
+            title: string;
+            description: string;
+            ctaLabel: string;
+            ctaHref: string;
+            ctaIcon?: string;
+            ctaVariant?: string;
+          }[]) ?? []}
+          onItemsChange={(items) => updateField("items", items)}
+          fields={[
+            { key: "number", label: "Number" },
+            { key: "title", label: "Title" },
+            { key: "description", label: "Description", multiline: true },
+            { key: "ctaLabel", label: "Button label" },
+            { key: "ctaHref", label: "Button link" },
+            { key: "ctaIcon", label: "Button icon (Lucide name)" },
+            { key: "ctaVariant", label: "Button style (pill|outline|ghost)" },
+          ]}
+          newItem={{
+            number: "1",
+            title: "New step",
+            description: "",
+            ctaLabel: "Learn more",
+            ctaHref: "#",
+            ctaIcon: "",
+            ctaVariant: "pill",
+          }}
+          reorderable
         />
       );
       break;
