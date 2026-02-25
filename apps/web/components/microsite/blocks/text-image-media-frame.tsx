@@ -120,7 +120,7 @@ export function TextImageMediaFrame({
   const caption = activeFrame?.caption || fallbackCaption;
 
   return (
-    <figure className="overflow-hidden rounded-[1.6rem] border border-[var(--mm-border)] bg-[var(--mm-surface)] p-3 shadow-[0_20px_50px_rgba(15,23,42,0.14)] md:p-4">
+    <figure className="space-y-2.5">
       <div className="mm-director-frame">
         {preparedFrames.map((frame, index) => {
           const isActive = index === activeIndex;
@@ -177,10 +177,9 @@ export function TextImageMediaFrame({
         <MarkdownText
           content={caption}
           as="figcaption"
-          className="mt-2.5 text-sm text-[var(--mm-text-muted)]"
+          className="text-sm text-[var(--mm-text-muted)]"
         />
       )}
     </figure>
   );
 }
-
