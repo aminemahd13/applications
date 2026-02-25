@@ -57,7 +57,9 @@ export function CtaBlock({
   // Support both editor format (heading/description/primaryButton) and legacy (label/variant/href)
   const heading = data.heading;
   const description = data.description;
-  const buttonLabel = data.primaryButton?.label ?? data.label;
+  const buttonLabel = String(data.primaryButton?.label ?? data.label ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   const buttonHref = resolveCtaHref(data, eventSlug);
   const faqHref = eventSlug ? `/events/${eventSlug}/faq` : "/faq";
   const isExternal = buttonHref?.startsWith('http');
@@ -96,7 +98,7 @@ export function CtaBlock({
             rel={isExternal ? "noopener noreferrer" : undefined}
             className="mm-ring-button"
           >
-            <span>
+            <span className="mm-ring-button-inner">
               <Scroll className="h-5 w-5" />
               <MarkdownText content={buttonLabel} mode="inline" as="span" />
             </span>
