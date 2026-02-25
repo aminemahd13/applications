@@ -1,5 +1,6 @@
 import { Block } from "@event-platform/shared";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type GridItem = { title: string; text?: string; icon?: string };
 type GridBlockData = Extract<Block, { type: "GRID" }>["data"] & { heading?: string };
@@ -31,9 +32,12 @@ export function GridBlock({ block }: { block: Extract<Block, { type: "GRID" }> }
       }}
     >
       {heading && (
-        <h2 className="microsite-display mb-12 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-          {heading}
-        </h2>
+        <MarkdownText
+          content={heading}
+          mode="inline"
+          as="h2"
+          className="microsite-display mb-12 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+        />
       )}
       <div className={`grid gap-6 md:gap-8 ${COLS_CLASS[columns] ?? COLS_CLASS[3]}`}>
         {items.map((item, idx) => (
@@ -41,13 +45,17 @@ export function GridBlock({ block }: { block: Extract<Block, { type: "GRID" }> }
             key={idx}
             className="microsite-card p-6 transition-transform hover:-translate-y-1 md:p-7"
           >
-            <h3 className="microsite-display mb-2 text-xl font-semibold text-[var(--mm-text)]">
-              {item.title}
-            </h3>
+            <MarkdownText
+              content={item.title}
+              mode="inline"
+              as="h3"
+              className="microsite-display mb-2 text-xl font-semibold text-[var(--mm-text)]"
+            />
             {item.text && (
-              <p className="text-sm leading-relaxed text-[var(--mm-text-muted)]">
-                {item.text}
-              </p>
+              <MarkdownText
+                content={item.text}
+                className="text-sm leading-relaxed text-[var(--mm-text-muted)]"
+              />
             )}
           </div>
         ))}

@@ -2,6 +2,7 @@ import { Block } from "@event-platform/shared";
 import { cn } from "@/lib/utils";
 import { BlockSection } from "./block-section";
 import { stripUnsafeHtml } from "@/lib/sanitize";
+import { MarkdownText } from "../markdown-text";
 
 export function CustomCodeBlock({ block }: { block: Extract<Block, { type: "CUSTOM_CODE" }> }) {
   const data = (block.data || {}) as {
@@ -25,9 +26,12 @@ export function CustomCodeBlock({ block }: { block: Extract<Block, { type: "CUST
       }}
     >
       {data.title && (
-        <h2 className="microsite-display mb-6 text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-          {data.title}
-        </h2>
+        <MarkdownText
+          content={data.title}
+          mode="inline"
+          as="h2"
+          className="microsite-display mb-6 text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+        />
       )}
       <div className={cn("microsite-surface p-4 md:p-6", data.wrapperClass)}>
         {data.css && <style dangerouslySetInnerHTML={{ __html: data.css }} />}

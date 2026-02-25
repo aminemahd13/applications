@@ -3,6 +3,7 @@ import * as Icons from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type CardGridItem = NonNullable<Extract<Block, { type: "CARD_GRID" }>["data"]>["items"][number];
 type CardGridRenderItem = CardGridItem & {
@@ -46,9 +47,12 @@ export function CardGridBlock({ block }: { block: Extract<Block, { type: 'CARD_G
       }}
     >
       {heading && (
-        <h2 className="microsite-display mb-12 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-          {heading}
-        </h2>
+        <MarkdownText
+          content={heading}
+          mode="inline"
+          as="h2"
+          className="microsite-display mb-12 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+        />
       )}
       <div className={`grid grid-cols-1 gap-6 md:grid-cols-2 md:gap-8 ${columnClass}`}>
         {items.map((item: CardGridRenderItem, idx: number) => {
@@ -70,22 +74,26 @@ export function CardGridBlock({ block }: { block: Extract<Block, { type: 'CARD_G
                 </div>
               )}
 
-              <h3 className="microsite-display mb-2 text-2xl font-semibold text-[var(--mm-text)]">
-                {item.title}
-              </h3>
+              <MarkdownText
+                content={item.title}
+                mode="inline"
+                as="h3"
+                className="microsite-display mb-2 text-2xl font-semibold text-[var(--mm-text)]"
+              />
 
               {description && (
-                <p className="flex-grow leading-relaxed text-[var(--mm-text-muted)]">
-                  {description}
-                </p>
+                <MarkdownText
+                  content={description}
+                  className="flex-grow leading-relaxed text-[var(--mm-text-muted)]"
+                />
               )}
 
               {item.cta?.label && item.cta?.href && (
                 <Link
-                  href={item.cta.href}
-                  className="mt-5 inline-flex items-center text-sm font-semibold text-[var(--mm-accent)] transition-opacity hover:opacity-80"
-                >
-                  {item.cta.label}
+                href={item.cta.href}
+                className="mt-5 inline-flex items-center text-sm font-semibold text-[var(--mm-accent)] transition-opacity hover:opacity-80"
+              >
+                  <MarkdownText content={item.cta.label} mode="inline" as="span" />
                 </Link>
               )}
             </article>

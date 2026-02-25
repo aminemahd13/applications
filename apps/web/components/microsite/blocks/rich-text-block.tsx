@@ -1,6 +1,7 @@
 import { Block } from "@event-platform/shared";
 import { BlockSection } from "./block-section";
 import { stripUnsafeHtml } from "@/lib/sanitize";
+import { looksLikeHtml, markdownToHtml } from "@/lib/markdown";
 
 type RichTextData = Extract<Block, { type: "RICH_TEXT" }>["data"] & {
   content?: string;
@@ -9,12 +10,15 @@ type RichTextData = Extract<Block, { type: "RICH_TEXT" }>["data"] & {
 export function RichTextBlock({ block }: { block: Extract<Block, { type: "RICH_TEXT" }> }) {
   const data = (block.data || {}) as RichTextData;
   // The page editor stores HTML in `content`, the schema uses `doc`
-  const htmlContent =
+  const rawContent =
     typeof data.content === "string"
       ? data.content
       : typeof data.doc === "string"
         ? data.doc
         : "";
+  const htmlContent = looksLikeHtml(rawContent)
+    ? stripUnsafeHtml(rawContent)
+    : markdownToHtml(rawContent, "block");
 
   if (!htmlContent) return null;
 
@@ -30,7 +34,7 @@ export function RichTextBlock({ block }: { block: Extract<Block, { type: "RICH_T
       }}
       containerClassName="microsite-surface p-6 md:p-8 prose prose-zinc prose-lg prose-headings:font-semibold prose-a:text-[var(--mm-accent)] prose-img:rounded-xl"
     >
-      <div dangerouslySetInnerHTML={{ __html: stripUnsafeHtml(htmlContent) }} />
+      <div dangerouslySetInnerHTML={{ __html: htmlContent }} />
     </BlockSection>
   );
 }

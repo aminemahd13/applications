@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import { Bus, CarFront, Clock3, Hotel, MapPin, Plane, Ticket, Train, Wallet } from "lucide-react";
 import Link from "next/link";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type VenueDetail = {
   label?: string;
@@ -68,7 +69,12 @@ export function VenueBlock({
     >
       {heading && (
         <div className="mb-10 text-center">
-          <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{heading}</h2>
+          <MarkdownText
+            content={heading}
+            mode="inline"
+            as="h2"
+            className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+          />
         </div>
       )}
 
@@ -92,8 +98,20 @@ export function VenueBlock({
 
         <article className="microsite-card space-y-5 p-6">
           <div className="space-y-2">
-            {venueName && <h3 className="microsite-display text-2xl font-semibold text-[var(--mm-text)]">{venueName}</h3>}
-            {address && <p className="text-sm leading-relaxed text-[var(--mm-text-muted)]">{address}</p>}
+            {venueName && (
+              <MarkdownText
+                content={venueName}
+                mode="inline"
+                as="h3"
+                className="microsite-display text-2xl font-semibold text-[var(--mm-text)]"
+              />
+            )}
+            {address && (
+              <MarkdownText
+                content={address}
+                className="text-sm leading-relaxed text-[var(--mm-text-muted)]"
+              />
+            )}
           </div>
 
           {details.length > 0 && (
@@ -105,8 +123,12 @@ export function VenueBlock({
                   <div key={idx} className="flex items-start gap-2 rounded-xl border border-[var(--mm-border)] bg-[var(--mm-soft)] px-3 py-2.5">
                     <Icon className="mt-0.5 h-4 w-4 text-[var(--mm-accent)]" />
                     <div className="min-w-0">
-                      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--mm-text-muted)]">{detail.label || "Detail"}</p>
-                      <p className="text-sm text-[var(--mm-text)]">{detail.value || "-"}</p>
+                      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--mm-text-muted)]">
+                        <MarkdownText content={detail.label || "Detail"} mode="inline" as="span" />
+                      </p>
+                      <p className="text-sm text-[var(--mm-text)]">
+                        <MarkdownText content={detail.value || "-"} mode="inline" as="span" />
+                      </p>
                     </div>
                   </div>
                 );
@@ -118,13 +140,13 @@ export function VenueBlock({
             <div className="flex flex-wrap gap-2">
               {highlights.map((highlight, idx) => (
                 <span key={idx} className="inline-flex rounded-full border border-[var(--mm-border)] bg-[var(--mm-surface)] px-3 py-1 text-xs text-[var(--mm-text-muted)]">
-                  {highlight}
+                  <MarkdownText content={highlight} mode="inline" as="span" />
                 </span>
               ))}
             </div>
           )}
 
-          {notes && <p className="text-sm leading-relaxed text-[var(--mm-text-muted)]">{notes}</p>}
+          {notes && <MarkdownText content={notes} className="text-sm leading-relaxed text-[var(--mm-text-muted)]" />}
 
           <div className="flex flex-wrap gap-2">
             {data.mapLink && (
@@ -144,7 +166,7 @@ export function VenueBlock({
                 rel={isExternalHref(data.cta.href) ? "noopener noreferrer" : undefined}
                 className="mm-primary-button inline-flex h-10 items-center rounded-[var(--mm-button-radius)] px-4 text-sm font-semibold"
               >
-                {data.cta.label}
+                <MarkdownText content={data.cta.label} mode="inline" as="span" />
               </Link>
             )}
           </div>

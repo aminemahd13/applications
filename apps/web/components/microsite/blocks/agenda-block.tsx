@@ -2,6 +2,7 @@ import { Block } from "@event-platform/shared";
 import Link from "next/link";
 import { CalendarDays, Clock3, MapPin, UserRound } from "lucide-react";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type AgendaSession = {
   time?: string;
@@ -64,9 +65,19 @@ export function AgendaBlock({
       {(heading || description) && (
         <div className="mb-10 space-y-3 text-center">
           {heading && (
-            <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{heading}</h2>
+            <MarkdownText
+              content={heading}
+              mode="inline"
+              as="h2"
+              className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+            />
           )}
-          {description && <p className="mx-auto max-w-3xl text-base text-[var(--mm-text-muted)] md:text-lg">{description}</p>}
+          {description && (
+            <MarkdownText
+              content={description}
+              className="mx-auto max-w-3xl text-base text-[var(--mm-text-muted)] md:text-lg"
+            />
+          )}
         </div>
       )}
 
@@ -81,15 +92,22 @@ export function AgendaBlock({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--mm-border)] bg-[var(--mm-surface)] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--mm-text-muted)]">
                     <CalendarDays className="h-3.5 w-3.5" />
-                    {day.label || `Day ${dayIdx + 1}`}
+                    <MarkdownText content={day.label || `Day ${dayIdx + 1}`} mode="inline" as="span" />
                   </span>
                   {day.date && (
                     <span className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--mm-accent)]">
-                      {day.date}
+                      <MarkdownText content={day.date} mode="inline" as="span" />
                     </span>
                   )}
                 </div>
-                {day.title && <h3 className="microsite-display mt-3 text-2xl font-semibold text-[var(--mm-text)]">{day.title}</h3>}
+                {day.title && (
+                  <MarkdownText
+                    content={day.title}
+                    mode="inline"
+                    as="h3"
+                    className="microsite-display mt-3 text-2xl font-semibold text-[var(--mm-text)]"
+                  />
+                )}
               </header>
 
               <div className="divide-y divide-[var(--mm-border)]">
@@ -102,27 +120,35 @@ export function AgendaBlock({
                       </p>
                       {session.track && (
                         <p className="w-fit rounded-full border border-[var(--mm-border)] bg-[var(--mm-surface)] px-2 py-0.5 text-[11px] uppercase tracking-[0.1em] text-[var(--mm-text-muted)]">
-                          {session.track}
+                          <MarkdownText content={session.track} mode="inline" as="span" />
                         </p>
                       )}
                     </div>
 
                     <div className="space-y-2">
-                      <h4 className="text-lg font-semibold text-[var(--mm-text)]">{session.title || "Session"}</h4>
+                      <MarkdownText
+                        content={session.title || "Session"}
+                        mode="inline"
+                        as="h4"
+                        className="text-lg font-semibold text-[var(--mm-text)]"
+                      />
                       {session.description && (
-                        <p className="text-sm leading-relaxed text-[var(--mm-text-muted)]">{session.description}</p>
+                        <MarkdownText
+                          content={session.description}
+                          className="text-sm leading-relaxed text-[var(--mm-text-muted)]"
+                        />
                       )}
                       <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--mm-text-muted)]">
                         {session.speaker && (
                           <span className="inline-flex items-center gap-1.5">
                             <UserRound className="h-3.5 w-3.5" />
-                            {session.speaker}
+                            <MarkdownText content={session.speaker} mode="inline" as="span" />
                           </span>
                         )}
                         {session.location && (
                           <span className="inline-flex items-center gap-1.5">
                             <MapPin className="h-3.5 w-3.5" />
-                            {session.location}
+                            <MarkdownText content={session.location} mode="inline" as="span" />
                           </span>
                         )}
                       </div>
@@ -133,7 +159,7 @@ export function AgendaBlock({
                           rel={isExternalHref(session.cta.href) ? "noopener noreferrer" : undefined}
                           className="mm-outline-button inline-flex h-9 items-center rounded-[var(--mm-button-radius)] px-3 text-xs font-semibold"
                         >
-                          {session.cta.label}
+                          <MarkdownText content={session.cta.label} mode="inline" as="span" />
                         </Link>
                       )}
                     </div>

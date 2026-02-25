@@ -33,6 +33,8 @@ import { ResourcesBlock } from "./blocks/resources-block";
 import { StickyAlertBarBlock } from "./blocks/sticky-alert-bar-block";
 import { RanksBlock } from "./blocks/ranks-block";
 import { ParticipationStepsBlock } from "./blocks/participation-steps-block";
+import { RegistrationChecklistBlock } from "./blocks/registration-checklist-block";
+import { TracksOverviewBlock } from "./blocks/tracks-overview-block";
 
 export function BlockRenderer({
   blocks,
@@ -100,6 +102,10 @@ function SingleBlock({
       return <StepsBlock block={block} />;
     case "PARTICIPATION_STEPS":
       return <ParticipationStepsBlock block={block as Extract<Block, { type: "PARTICIPATION_STEPS" }>} />;
+    case "REGISTRATION_CHECKLIST":
+      return <RegistrationChecklistBlock block={block as Extract<Block, { type: "REGISTRATION_CHECKLIST" }>} />;
+    case "TRACKS_OVERVIEW":
+      return <TracksOverviewBlock block={block as Extract<Block, { type: "TRACKS_OVERVIEW" }>} />;
     case "IMAGE_GALLERY":
       return <ImageGalleryBlock block={block} />;
     case "IMAGE_STACK":

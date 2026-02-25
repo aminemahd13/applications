@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type ImageGalleryItem = NonNullable<Extract<Block, { type: "IMAGE_GALLERY" }>["data"]>["items"][number];
 type GalleryEditorItem = ImageGalleryItem & { url?: string };
@@ -139,9 +140,12 @@ export function ImageGalleryBlock({ block }: { block: Extract<Block, { type: 'IM
       }}
     >
       {title && (
-        <h2 className="microsite-display mb-12 text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-          {title}
-        </h2>
+        <MarkdownText
+          content={title}
+          mode="inline"
+          as="h2"
+          className="microsite-display mb-12 text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+        />
       )}
       {layout === "carousel" ? (
         <div
@@ -187,7 +191,7 @@ export function ImageGalleryBlock({ block }: { block: Extract<Block, { type: 'IM
                 />
                 {item.caption && (
                   <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-4 text-sm font-medium text-white opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100">
-                    {item.caption}
+                    <MarkdownText content={item.caption} mode="inline" as="span" />
                   </span>
                 )}
               </button>
@@ -226,7 +230,7 @@ export function ImageGalleryBlock({ block }: { block: Extract<Block, { type: 'IM
                 />
                 {item.caption && (
                   <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-4 text-sm font-medium text-white opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100">
-                    {item.caption}
+                    <MarkdownText content={item.caption} mode="inline" as="span" />
                   </span>
                 )}
               </button>
@@ -288,7 +292,14 @@ export function ImageGalleryBlock({ block }: { block: Extract<Block, { type: 'IM
               </div>
 
               <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent px-6 pb-6 pt-16 text-white">
-                {activeItem.caption && <p className="text-sm font-medium">{activeItem.caption}</p>}
+                {activeItem.caption && (
+                  <MarkdownText
+                    content={activeItem.caption}
+                    mode="inline"
+                    as="p"
+                    className="text-sm font-medium"
+                  />
+                )}
                 <p className="text-xs text-white/75">{(activeIndex ?? 0) + 1} / {items.length}</p>
               </div>
             </div>

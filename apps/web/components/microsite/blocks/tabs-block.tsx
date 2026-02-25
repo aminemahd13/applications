@@ -4,6 +4,7 @@ import { Block } from "@event-platform/shared";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type TabsBlockProps = {
   block: Extract<Block, { type: 'TABS' }>;
@@ -39,16 +40,14 @@ export function TabsBlock({ block }: TabsBlockProps) {
                 : "border-transparent text-[var(--mm-text-muted)] hover:text-[var(--mm-text)]"
             )}
           >
-            {tab.label}
+            <MarkdownText content={tab.label} mode="inline" as="span" />
           </button>
         ))}
       </div>
 
       {/* Tab Content */}
       <div className="rounded-2xl border border-[var(--mm-border)] bg-[var(--mm-surface)] p-6 prose prose-zinc max-w-none md:p-8">
-        <div className="whitespace-pre-wrap">
-           {tabs[activeTab].content}
-        </div>
+        <MarkdownText content={tabs[activeTab].content} />
       </div>
     </BlockSection>
   );

@@ -47,6 +47,8 @@ import {
   AlertCircle,
   Trophy,
   Upload,
+  ClipboardCheck,
+  BookOpen,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -127,6 +129,8 @@ type BlockType =
   | "STATS"
   | "STEPS"
   | "PARTICIPATION_STEPS"
+  | "REGISTRATION_CHECKLIST"
+  | "TRACKS_OVERVIEW"
   | "IMAGE_GALLERY"
   | "IMAGE_STACK"
   | "PARTNER_STRIP"
@@ -194,6 +198,8 @@ const BLOCK_CATALOG: {
   { type: "STATS", label: "Stats", description: "Statistics counter", icon: BarChart3, category: "Content" },
   { type: "STEPS", label: "Steps", description: "Numbered process steps", icon: ListOrdered, category: "Content" },
   { type: "PARTICIPATION_STEPS", label: "Participation Steps", description: "Three-step participation flow with CTA buttons", icon: ListOrdered, category: "Conversion" },
+  { type: "REGISTRATION_CHECKLIST", label: "Registration Checklist", description: "Show required items and registration readiness", icon: ClipboardCheck, category: "Conversion" },
+  { type: "TRACKS_OVERVIEW", label: "Tracks Overview", description: "Present event tracks, audiences, and focus areas", icon: BookOpen, category: "Program" },
   { type: "IMAGE_GALLERY", label: "Gallery", description: "Photo gallery grid", icon: Columns, category: "Layout" },
   { type: "IMAGE_STACK", label: "Image Stack", description: "Animated stacked photo carousel", icon: ImageIcon, category: "Media" },
   { type: "PARTNER_STRIP", label: "Partner Strip", description: "Organized/trusted/hosted logos row", icon: ImageIcon, category: "Layout" },
@@ -224,13 +230,13 @@ const PAGE_TEMPLATES: Array<{
     id: "launch",
     label: "Launch Page",
     description: "Deadline-focused page with urgency, proof, and conversion.",
-    blocks: ["HERO", "ANNOUNCEMENT", "COUNTDOWN", "STATS", "TESTIMONIALS", "FAQ", "CTA"],
+    blocks: ["HERO", "ANNOUNCEMENT", "COUNTDOWN", "REGISTRATION_CHECKLIST", "STATS", "FAQ", "CTA"],
   },
   {
     id: "program",
     label: "Program Overview",
     description: "Show structure, tracks, schedule, and speakers.",
-    blocks: ["HERO", "STICKY_ALERT_BAR", "AGENDA", "CALENDAR", "SPEAKER_SPOTLIGHT", "TEAM_GRID", "CTA"],
+    blocks: ["HERO", "TRACKS_OVERVIEW", "STICKY_ALERT_BAR", "AGENDA", "CALENDAR", "SPEAKER_SPOTLIGHT", "TEAM_GRID", "CTA"],
   },
   {
     id: "gallery",
@@ -245,10 +251,10 @@ const PAGE_TEMPLATES: Array<{
     blocks: ["HERO", "CARD_GRID", "PARTNER_STRIP", "LOGO_CLOUD", "STATS", "CTA"],
   },
   {
-    id: "ticketing",
-    label: "Ticketing Funnel",
-    description: "Promote urgency, credibility, and clear next action.",
-    blocks: ["HERO", "ANNOUNCEMENT", "COUNTDOWN", "STATS", "FAQ", "CTA"],
+    id: "registration",
+    label: "Registration Funnel",
+    description: "Convert visitors into registrants for free events.",
+    blocks: ["HERO", "ANNOUNCEMENT", "REGISTRATION_CHECKLIST", "COUNTDOWN", "PARTICIPATION_STEPS", "FAQ", "CTA"],
   },
   {
     id: "onsite",
@@ -441,6 +447,61 @@ function getDefaultData(type: BlockType): BlockData {
             ctaHref: "#",
             ctaIcon: "",
             ctaVariant: "outline",
+          },
+        ],
+      };
+    case "REGISTRATION_CHECKLIST":
+      return {
+        heading: "Inscription gratuite - checklist",
+        description: "Prepare these items before submitting your free registration.",
+        note: "No participation fees are required for this event.",
+        cta: { label: "Register now", href: "#" },
+        secondaryCta: { label: "Read eligibility", href: "#faq" },
+        items: [
+          {
+            title: "Valid identity information",
+            details: "Provide your full name, email, and phone number.",
+            required: true,
+          },
+          {
+            title: "School or university details",
+            details: "Mention current level and institution.",
+            required: true,
+          },
+          {
+            title: "Motivation note (optional)",
+            details: "Share why you want to join Math&Maroc.",
+            required: false,
+          },
+        ],
+      };
+    case "TRACKS_OVERVIEW":
+      return {
+        heading: "Choose your track",
+        description: "Find the track that best matches your level and interests.",
+        columns: 3,
+        highlightFree: true,
+        tracks: [
+          {
+            title: "Olympiad Foundations",
+            audience: "High school students",
+            focus: "Problem-solving strategy, algebra, geometry, and combinatorics drills.",
+            seats: "120",
+            cta: { label: "Track details", href: "#" },
+          },
+          {
+            title: "Advanced Problem Solving",
+            audience: "Bac+1 to Bac+3 students",
+            focus: "Proof techniques, advanced combinatorics, and contest simulations.",
+            seats: "90",
+            cta: { label: "Track details", href: "#" },
+          },
+          {
+            title: "Math & AI Applied Lab",
+            audience: "University students and graduates",
+            focus: "Applied mathematics workshops linked to data and AI use-cases.",
+            seats: "60",
+            cta: { label: "Track details", href: "#" },
           },
         ],
       };
@@ -694,6 +755,7 @@ function getBlockSearchText(block: Block): string {
     data.subtitle,
     data.message,
     data.description,
+    data.note,
     data.text,
     data.venueName,
     data.caption,
@@ -2772,6 +2834,165 @@ function BlockInspector({
       );
       break;
 
+    case "REGISTRATION_CHECKLIST":
+      content = (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Heading</Label>
+            <Input value={(data.heading as string) ?? ""} onChange={(e) => updateField("heading", e.target.value)} />
+          </div>
+          <div className="space-y-2">
+            <Label>Description</Label>
+            <Textarea value={(data.description as string) ?? ""} onChange={(e) => updateField("description", e.target.value)} rows={3} />
+          </div>
+          <div className="space-y-2">
+            <Label>Note</Label>
+            <Textarea value={(data.note as string) ?? ""} onChange={(e) => updateField("note", e.target.value)} rows={2} />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Primary label</Label>
+              <Input
+                value={(data.cta as { label?: string })?.label ?? ""}
+                onChange={(e) => updateField("cta", { ...(data.cta as object ?? {}), label: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Primary link</Label>
+              <Input
+                value={(data.cta as { href?: string })?.href ?? ""}
+                onChange={(e) => updateField("cta", { ...(data.cta as object ?? {}), href: e.target.value })}
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Secondary label</Label>
+              <Input
+                value={(data.secondaryCta as { label?: string })?.label ?? ""}
+                onChange={(e) => updateField("secondaryCta", { ...(data.secondaryCta as object ?? {}), label: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Secondary link</Label>
+              <Input
+                value={(data.secondaryCta as { href?: string })?.href ?? ""}
+                onChange={(e) => updateField("secondaryCta", { ...(data.secondaryCta as object ?? {}), href: e.target.value })}
+              />
+            </div>
+          </div>
+          <ArrayItemsEditor
+            heading=""
+            items={(data.items as { title: string; details?: string; required?: boolean }[]) ?? []}
+            onItemsChange={(items) => updateField("items", items)}
+            fields={[
+              { key: "title", label: "Title" },
+              { key: "details", label: "Details", multiline: true },
+              { key: "required", label: "Required (true/false)" },
+            ]}
+            newItem={{ title: "Checklist item", details: "", required: true }}
+            reorderable
+          />
+        </div>
+      );
+      break;
+
+    case "TRACKS_OVERVIEW": {
+      const tracks = ((data.tracks as Record<string, unknown>[]) ?? []).map((item) => ({
+        title: String(item.title ?? ""),
+        audience: String(item.audience ?? ""),
+        focus: String(item.focus ?? ""),
+        seats: String(item.seats ?? ""),
+        ctaLabel: String((item.cta as { label?: string } | undefined)?.label ?? ""),
+        ctaHref: String((item.cta as { href?: string } | undefined)?.href ?? ""),
+      }));
+
+      const persistTracks = (nextTracks: typeof tracks) => {
+        updateField(
+          "tracks",
+          nextTracks.map((track) => ({
+            title: track.title,
+            audience: track.audience,
+            focus: track.focus,
+            seats: track.seats,
+            cta: { label: track.ctaLabel, href: track.ctaHref },
+          })),
+        );
+      };
+
+      content = (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Heading</Label>
+            <Input value={(data.heading as string) ?? ""} onChange={(e) => updateField("heading", e.target.value)} />
+          </div>
+          <div className="space-y-2">
+            <Label>Description</Label>
+            <Textarea value={(data.description as string) ?? ""} onChange={(e) => updateField("description", e.target.value)} rows={3} />
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Columns</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {[1, 2, 3].map((count) => (
+                  <Button
+                    key={count}
+                    size="sm"
+                    variant={Number(data.columns ?? 3) === count ? "default" : "outline"}
+                    onClick={() => updateField("columns", count)}
+                  >
+                    {count}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Show "Free" badge</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  size="sm"
+                  variant={(data.highlightFree as boolean | undefined) !== false ? "default" : "outline"}
+                  onClick={() => updateField("highlightFree", true)}
+                >
+                  On
+                </Button>
+                <Button
+                  size="sm"
+                  variant={(data.highlightFree as boolean | undefined) === false ? "default" : "outline"}
+                  onClick={() => updateField("highlightFree", false)}
+                >
+                  Off
+                </Button>
+              </div>
+            </div>
+          </div>
+          <ArrayItemsEditor
+            heading=""
+            items={tracks}
+            onItemsChange={persistTracks}
+            fields={[
+              { key: "title", label: "Track title" },
+              { key: "audience", label: "Audience" },
+              { key: "focus", label: "Focus", multiline: true },
+              { key: "seats", label: "Seats" },
+              { key: "ctaLabel", label: "CTA label" },
+              { key: "ctaHref", label: "CTA link" },
+            ]}
+            newItem={{
+              title: "Track name",
+              audience: "",
+              focus: "",
+              seats: "",
+              ctaLabel: "",
+              ctaHref: "",
+            }}
+            reorderable
+          />
+        </div>
+      );
+      break;
+    }
+
     case "CARD_GRID":
       content = (
         <ArrayItemsEditor
@@ -3879,6 +4100,9 @@ function BlockInspector({
 
   return (
     <div className="space-y-4 pb-6">
+      <div className="rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+        All microsite text fields support Markdown (headings, lists, links, emphasis, inline code).
+      </div>
       <Accordion type="multiple" defaultValue={["content"]} className="w-full space-y-3">
         <AccordionItem value="content" className="rounded-xl border bg-card px-3">
           <AccordionTrigger className="text-sm font-semibold">Content</AccordionTrigger>

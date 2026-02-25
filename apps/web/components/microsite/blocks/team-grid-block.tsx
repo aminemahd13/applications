@@ -4,6 +4,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type TeamMember = NonNullable<Extract<Block, { type: "TEAM_GRID" }>["data"]>["members"][number];
 type TeamMemberRender = TeamMember & {
@@ -75,14 +76,18 @@ export function TeamGridBlock({ block }: { block: Extract<Block, { type: "TEAM_G
       {(heading || data.description) && (
         <div className="mx-auto mb-10 max-w-3xl text-center">
           {heading && (
-            <h2 className={cn("microsite-display font-semibold text-[var(--mm-text)]", isComfortable ? "text-3xl md:text-5xl" : "text-2xl md:text-4xl")}>
-              {heading}
-            </h2>
+            <MarkdownText
+              content={heading}
+              mode="inline"
+              as="h2"
+              className={cn("microsite-display font-semibold text-[var(--mm-text)]", isComfortable ? "text-3xl md:text-5xl" : "text-2xl md:text-4xl")}
+            />
           )}
           {data.description && (
-            <p className="mt-3 text-sm text-[var(--mm-text-muted)] md:text-base">
-              {data.description}
-            </p>
+            <MarkdownText
+              content={data.description}
+              className="mt-3 text-sm text-[var(--mm-text-muted)] md:text-base"
+            />
           )}
         </div>
       )}
@@ -122,25 +127,26 @@ export function TeamGridBlock({ block }: { block: Extract<Block, { type: "TEAM_G
               </div>
 
               <h3 className={cn("microsite-display font-semibold text-[var(--mm-text)]", isComfortable ? "text-2xl" : "text-lg md:text-xl")}>
-                {memberName}
+                <MarkdownText content={memberName} mode="inline" as="span" />
               </h3>
 
               {(member.role || member.team) && (
                 <p className={cn("mt-1 font-semibold uppercase tracking-[0.16em] text-[var(--mm-accent)]", isComfortable ? "text-sm" : "text-[11px]")}>
-                  {[member.role, member.team].filter(Boolean).join(" • ")}
+                  <MarkdownText content={[member.role, member.team].filter(Boolean).join(" - ")} mode="inline" as="span" />
                 </p>
               )}
 
               {member.location && (
                 <p className="mt-1 text-xs text-[var(--mm-text-muted)]">
-                  {member.location}
+                  <MarkdownText content={member.location} mode="inline" as="span" />
                 </p>
               )}
 
               {showBio && member.bio && (
-                <p className={cn("mt-2 leading-relaxed text-[var(--mm-text-muted)]", isComfortable ? "text-sm" : "text-xs")}>
-                  {member.bio}
-                </p>
+                <MarkdownText
+                  content={member.bio}
+                  className={cn("mt-2 leading-relaxed text-[var(--mm-text-muted)]", isComfortable ? "text-sm" : "text-xs")}
+                />
               )}
 
               {showSocials && member.socials && member.socials.length > 0 && (

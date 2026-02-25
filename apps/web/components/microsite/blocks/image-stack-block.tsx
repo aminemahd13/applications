@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { Block } from "@event-platform/shared";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type ImageStackData = Extract<Block, { type: "IMAGE_STACK" }>["data"] & {
   heading?: string;
@@ -68,12 +69,18 @@ export function ImageStackBlock({
       containerClassName="space-y-6"
     >
       {heading && (
-        <h2 className="microsite-display text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-          {heading}
-        </h2>
+        <MarkdownText
+          content={heading}
+          mode="inline"
+          as="h2"
+          className="microsite-display text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+        />
       )}
       {caption && (
-        <p className="mx-auto max-w-3xl text-center text-[var(--mm-text-muted)]">{caption}</p>
+        <MarkdownText
+          content={caption}
+          className="mx-auto max-w-3xl text-center text-[var(--mm-text-muted)]"
+        />
       )}
 
       <div className="relative mx-auto h-60 w-full max-w-sm antialiased md:h-80 md:max-w-lg">

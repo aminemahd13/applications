@@ -2,6 +2,7 @@ import { Block } from "@event-platform/shared";
 import Link from "next/link";
 import { CalendarDays, MapPin } from "lucide-react";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type CalendarItem = NonNullable<Extract<Block, { type: "CALENDAR" }>["data"]>["items"][number];
 type CalendarData = Extract<Block, { type: "CALENDAR" }>["data"] & {
@@ -214,11 +215,23 @@ export function CalendarBlock({
       {(heading || description || timezoneLabel) && (
         <div className="mb-9 space-y-3 text-center">
           {heading && (
-            <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{heading}</h2>
+            <MarkdownText
+              content={heading}
+              mode="inline"
+              as="h2"
+              className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+            />
           )}
-          {description && <p className="mx-auto max-w-3xl text-base text-[var(--mm-text-muted)] md:text-lg">{description}</p>}
+          {description && (
+            <MarkdownText
+              content={description}
+              className="mx-auto max-w-3xl text-base text-[var(--mm-text-muted)] md:text-lg"
+            />
+          )}
           {timezoneLabel && (
-            <p className="text-xs uppercase tracking-[0.12em] text-[var(--mm-text-muted)]">Timezone: {timezoneLabel}</p>
+            <p className="text-xs uppercase tracking-[0.12em] text-[var(--mm-text-muted)]">
+              Timezone: <MarkdownText content={timezoneLabel} mode="inline" as="span" />
+            </p>
           )}
         </div>
       )}
@@ -232,7 +245,12 @@ export function CalendarBlock({
               </div>
               {days.map((day) => (
                 <div key={day} className="border-l border-[var(--mm-border)] px-3 py-3">
-                  <p className="text-sm font-semibold text-[var(--mm-text)]">{formatDayHeader(day)}</p>
+                  <MarkdownText
+                    content={formatDayHeader(day)}
+                    mode="inline"
+                    as="p"
+                    className="text-sm font-semibold text-[var(--mm-text)]"
+                  />
                 </div>
               ))}
             </div>
@@ -252,7 +270,9 @@ export function CalendarBlock({
                           title={item.title ?? undefined}
                         >
                           <CalendarDays className="h-3 w-3 shrink-0 text-[var(--mm-accent)]" />
-                          <span className="truncate">{item.title || "Untitled"}</span>
+                          <span className="truncate">
+                            <MarkdownText content={item.title || "Untitled"} mode="inline" as="span" />
+                          </span>
                         </span>
                       ))}
                     </div>
@@ -311,12 +331,24 @@ export function CalendarBlock({
                           background: "color-mix(in oklab, var(--mm-accent) 12%, var(--mm-surface) 88%)",
                         }}
                       >
-                        <p className="truncate font-semibold text-[var(--mm-text)]">{item.title || "Untitled event"}</p>
-                        <p className="truncate text-[var(--mm-text-muted)]">{resolveTimeRange(item)}</p>
+                        <MarkdownText
+                          content={item.title || "Untitled event"}
+                          mode="inline"
+                          as="p"
+                          className="truncate font-semibold text-[var(--mm-text)]"
+                        />
+                        <MarkdownText
+                          content={resolveTimeRange(item)}
+                          mode="inline"
+                          as="p"
+                          className="truncate text-[var(--mm-text-muted)]"
+                        />
                         {showMeta && item.location && (
                           <p className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-[var(--mm-text-muted)]">
                             <MapPin className="h-3 w-3 shrink-0" />
-                            <span className="truncate">{item.location}</span>
+                            <span className="truncate">
+                              <MarkdownText content={item.location} mode="inline" as="span" />
+                            </span>
                           </p>
                         )}
                         {showMeta && item.cta?.label && item.cta?.href && (
@@ -326,7 +358,7 @@ export function CalendarBlock({
                             rel={isExternalHref(item.cta.href) ? "noopener noreferrer" : undefined}
                             className="mt-1 inline-flex text-[11px] font-semibold text-[var(--mm-accent)] hover:underline"
                           >
-                            {item.cta.label}
+                            <MarkdownText content={item.cta.label} mode="inline" as="span" />
                           </Link>
                         )}
                       </article>

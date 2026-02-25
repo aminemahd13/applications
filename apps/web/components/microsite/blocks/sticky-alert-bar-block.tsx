@@ -2,6 +2,7 @@ import type { Block } from "@event-platform/shared";
 import Link from "next/link";
 import { AlertTriangle, CheckCircle2, Info, Megaphone } from "lucide-react";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type AlertTone = "info" | "success" | "warning" | "urgent";
 type AlertData = Extract<Block, { type: "STICKY_ALERT_BAR" }>["data"] & {
@@ -49,12 +50,12 @@ function AlertBar({ data }: { data: AlertData }) {
         <div className="min-w-0">
           {data.badge && (
             <p className="truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--mm-text-muted)]">
-              {data.badge}
+              <MarkdownText content={data.badge} mode="inline" as="span" />
             </p>
           )}
           {data.message && (
             <p className="line-clamp-2 text-sm font-medium leading-relaxed text-[var(--mm-text)]">
-              {data.message}
+              <MarkdownText content={data.message} mode="inline" as="span" />
             </p>
           )}
         </div>
@@ -66,7 +67,7 @@ function AlertBar({ data }: { data: AlertData }) {
           rel={isExternalHref(data.cta?.href ?? "") ? "noopener noreferrer" : undefined}
           className="mm-primary-button inline-flex h-8 shrink-0 items-center px-3 text-xs font-semibold"
         >
-          {data.cta?.label}
+          <MarkdownText content={data.cta?.label} mode="inline" as="span" />
         </Link>
       )}
     </div>

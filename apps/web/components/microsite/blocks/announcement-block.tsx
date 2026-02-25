@@ -2,6 +2,7 @@ import { Block } from "@event-platform/shared";
 import Link from "next/link";
 import { AlertTriangle, CheckCircle2, Info, Megaphone } from "lucide-react";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type AnnouncementTone = "info" | "success" | "warning" | "urgent";
 type AnnouncementData = Extract<Block, { type: "ANNOUNCEMENT" }>["data"] & {
@@ -65,10 +66,15 @@ export function AnnouncementBlock({
           <div className="min-w-0 space-y-1">
             {data.badge && (
               <span className="inline-flex rounded-full border border-[var(--mm-border)] bg-[var(--mm-soft)] px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--mm-text-muted)]">
-                {data.badge}
+                <MarkdownText content={data.badge} mode="inline" as="span" />
               </span>
             )}
-            {message && <p className="text-sm leading-relaxed text-[var(--mm-text)] md:text-base">{message}</p>}
+            {message && (
+              <MarkdownText
+                content={message}
+                className="text-sm leading-relaxed text-[var(--mm-text)] md:text-base"
+              />
+            )}
           </div>
         </div>
 
@@ -81,7 +87,7 @@ export function AnnouncementBlock({
                 rel={isExternalHref(data.cta?.href ?? "") ? "noopener noreferrer" : undefined}
                 className="mm-primary-button inline-flex h-10 items-center rounded-[var(--mm-button-radius)] px-4 text-sm font-semibold"
               >
-                {data.cta?.label}
+                <MarkdownText content={data.cta?.label} mode="inline" as="span" />
               </Link>
             )}
             {hasSecondary && (
@@ -91,7 +97,7 @@ export function AnnouncementBlock({
                 rel={isExternalHref(data.secondaryCta?.href ?? "") ? "noopener noreferrer" : undefined}
                 className="mm-outline-button inline-flex h-10 items-center rounded-[var(--mm-button-radius)] px-4 text-sm font-semibold"
               >
-                {data.secondaryCta?.label}
+                <MarkdownText content={data.secondaryCta?.label} mode="inline" as="span" />
               </Link>
             )}
           </div>

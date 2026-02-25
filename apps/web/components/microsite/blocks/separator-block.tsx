@@ -1,6 +1,7 @@
 import { Block } from "@event-platform/shared";
 import { cn } from "@/lib/utils";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type SeparatorData = Extract<Block, { type: "SEPARATOR" }>["data"] & {
   label?: string;
@@ -101,7 +102,7 @@ export function SeparatorBlock({ block }: { block: Extract<Block, { type: "SEPAR
               <SeparatorLine variant={variant} thickness={thickness} />
             </div>
             <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--mm-text-muted)]">
-              {label}
+              <MarkdownText content={label} mode="inline" as="span" />
             </span>
             <div className="min-w-0 flex-1">
               <SeparatorLine variant={variant} thickness={thickness} />

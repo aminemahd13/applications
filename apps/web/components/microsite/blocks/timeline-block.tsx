@@ -1,5 +1,6 @@
 import { Block } from "@event-platform/shared";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type TimelineItem = NonNullable<Extract<Block, { type: "TIMELINE" }>["data"]>["items"][number];
 type TimelineRenderItem = TimelineItem & {
@@ -28,9 +29,12 @@ export function TimelineBlock({ block }: { block: Extract<Block, { type: 'TIMELI
       }}
     >
       {heading && (
-        <h2 className="microsite-display mb-14 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-          {heading}
-        </h2>
+        <MarkdownText
+          content={heading}
+          mode="inline"
+          as="h2"
+          className="microsite-display mb-14 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+        />
       )}
       <div className="relative ml-4 space-y-10 border-l-2 border-[var(--mm-border)] md:ml-6">
         {items.map((item: TimelineRenderItem, idx: number) => (
@@ -39,16 +43,17 @@ export function TimelineBlock({ block }: { block: Extract<Block, { type: 'TIMELI
 
             <div className="flex flex-col gap-3 md:flex-row md:items-baseline md:gap-8">
               <div className="w-fit rounded-full border border-[var(--mm-border)] bg-[var(--mm-soft)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--mm-accent)] md:min-w-[7rem] md:text-center">
-                {item.date}
+                <MarkdownText content={item.date} mode="inline" as="span" />
               </div>
               <div className="microsite-card px-5 py-4">
                 <h3 className="microsite-display mb-2 text-2xl font-semibold text-[var(--mm-text)]">
-                  {item.title ?? item.label}
+                  <MarkdownText content={item.title ?? item.label} mode="inline" as="span" />
                 </h3>
                 {(item.description ?? item.details) && (
-                  <p className="whitespace-pre-wrap leading-relaxed text-[var(--mm-text-muted)]">
-                    {item.description ?? item.details}
-                  </p>
+                  <MarkdownText
+                    content={item.description ?? item.details}
+                    className="leading-relaxed text-[var(--mm-text-muted)]"
+                  />
                 )}
               </div>
             </div>

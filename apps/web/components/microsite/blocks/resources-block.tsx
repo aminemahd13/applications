@@ -5,6 +5,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type ResourceKind = "brochure" | "map" | "policy" | "deck" | "document" | "other";
 
@@ -102,14 +103,18 @@ export function ResourcesBlock({
       {(data.heading || data.description) && (
         <div className="mb-8 max-w-3xl">
           {data.heading && (
-            <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-              {data.heading}
-            </h2>
+            <MarkdownText
+              content={data.heading}
+              mode="inline"
+              as="h2"
+              className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+            />
           )}
           {data.description && (
-            <p className="mt-3 text-sm leading-relaxed text-[var(--mm-text-muted)] md:text-base">
-              {data.description}
-            </p>
+            <MarkdownText
+              content={data.description}
+              className="mt-3 text-sm leading-relaxed text-[var(--mm-text-muted)] md:text-base"
+            />
           )}
         </div>
       )}
@@ -134,18 +139,23 @@ export function ResourcesBlock({
                   </span>
                 </div>
                 <h3 className="microsite-display text-xl font-semibold text-[var(--mm-text)]">
-                  {resource.title || "Untitled Resource"}
+                  <MarkdownText content={resource.title || "Untitled Resource"} mode="inline" as="span" />
                 </h3>
                 {resource.description && (
-                  <p className="mt-2 text-sm leading-relaxed text-[var(--mm-text-muted)]">
-                    {resource.description}
-                  </p>
+                  <MarkdownText
+                    content={resource.description}
+                    className="mt-2 text-sm leading-relaxed text-[var(--mm-text-muted)]"
+                  />
                 )}
               </div>
 
               <div className="mt-5 flex items-center justify-between gap-3">
                 <p className="text-xs text-[var(--mm-text-muted)]">
-                  {[resource.fileType, resource.sizeLabel].filter(Boolean).join(" | ") || "File"}
+                  <MarkdownText
+                    content={[resource.fileType, resource.sizeLabel].filter(Boolean).join(" | ") || "File"}
+                    mode="inline"
+                    as="span"
+                  />
                 </p>
                 {hasHref ? (
                   <Link
@@ -155,7 +165,7 @@ export function ResourcesBlock({
                     className="mm-outline-button inline-flex h-9 items-center gap-1.5 px-3 text-xs font-semibold"
                   >
                     <Download className="h-3.5 w-3.5" />
-                    Download
+                    <MarkdownText content="Download" mode="inline" as="span" />
                   </Link>
                 ) : (
                   <span className="inline-flex h-9 items-center rounded-[var(--mm-button-radius)] bg-[var(--mm-soft)] px-3 text-xs font-semibold text-[var(--mm-text-muted)]">

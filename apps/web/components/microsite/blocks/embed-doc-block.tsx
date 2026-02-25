@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type EmbedDocData = Extract<Block, { type: "EMBED_DOC" }>["data"] & {
   title?: string;
@@ -51,14 +52,18 @@ export function EmbedDocBlock({ block }: { block: Extract<Block, { type: "EMBED_
       {(data.title || data.caption) && (
         <div className="mb-6 max-w-3xl">
           {data.title && (
-            <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-              {data.title}
-            </h2>
+            <MarkdownText
+              content={data.title}
+              mode="inline"
+              as="h2"
+              className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+            />
           )}
           {data.caption && (
-            <p className="mt-3 text-sm leading-relaxed text-[var(--mm-text-muted)] md:text-base">
-              {data.caption}
-            </p>
+            <MarkdownText
+              content={data.caption}
+              className="mt-3 text-sm leading-relaxed text-[var(--mm-text-muted)] md:text-base"
+            />
           )}
         </div>
       )}

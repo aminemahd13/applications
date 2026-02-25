@@ -2,6 +2,7 @@
 
 import { Block } from "@event-platform/shared";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type RanksData = Extract<Block, { type: "RANKS" }>["data"];
 
@@ -20,13 +21,13 @@ function PrizeBadge({ value }: { value: string }) {
   const key = value.toLowerCase().trim();
   const style = PRIZE_STYLES[key];
   if (!style) {
-    return <span className="text-[var(--mm-text-muted)] text-xs">{value}</span>;
+    return <MarkdownText content={value} mode="inline" as="span" className="text-[var(--mm-text-muted)] text-xs" />;
   }
   return (
     <span
       className={`inline-block rounded-full px-2.5 py-0.5 text-[11px] font-semibold tracking-wide uppercase whitespace-nowrap ${style.bg} ${style.text}`}
     >
-      {value}
+      <MarkdownText content={value} mode="inline" as="span" />
     </span>
   );
 }
@@ -62,14 +63,18 @@ export function RanksBlock({ block }: { block: Extract<Block, { type: "RANKS" }>
       {(heading || description) && (
         <div className="text-center space-y-2">
           {heading && (
-            <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-              {heading}
-            </h2>
+            <MarkdownText
+              content={heading}
+              mode="inline"
+              as="h2"
+              className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+            />
           )}
           {description && (
-            <p className="text-base text-[var(--mm-text-muted)] max-w-2xl mx-auto">
-              {description}
-            </p>
+            <MarkdownText
+              content={description}
+              className="text-base text-[var(--mm-text-muted)] max-w-2xl mx-auto"
+            />
           )}
         </div>
       )}
@@ -92,7 +97,7 @@ export function RanksBlock({ block }: { block: Extract<Block, { type: "RANKS" }>
                   key={ci}
                   className="px-4 py-3 first:rounded-tl-2xl last:rounded-tr-2xl whitespace-nowrap"
                 >
-                  {col}
+                  <MarkdownText content={col} mode="inline" as="span" />
                 </th>
               ))}
             </tr>
@@ -116,7 +121,7 @@ export function RanksBlock({ block }: { block: Extract<Block, { type: "RANKS" }>
                       key={ci}
                       className="px-4 py-3 text-[var(--mm-text)] whitespace-nowrap"
                     >
-                      {isPrize ? <PrizeBadge value={cell} /> : cell}
+                      {isPrize ? <PrizeBadge value={cell} /> : <MarkdownText content={cell} mode="inline" as="span" />}
                     </td>
                   );
                 })}
