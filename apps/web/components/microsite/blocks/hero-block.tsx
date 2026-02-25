@@ -123,6 +123,9 @@ export function HeroBlock({
   const ctaHref = resolveHeroCtaHref(cta, eventSlug);
   const secondaryHref = resolveHeroCtaHref(secondaryCta, eventSlug);
   const faqHref = eventSlug ? `/events/${eventSlug}/faq` : "/faq";
+  const primaryCtaLabel = String(cta?.label ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   const customLogo = resolveAssetUrl(logoAssetKey || logoUrl || siteLogoAssetKey || "");
   const heroImageUrl = resolveAssetUrl(heroImage || "");
   const hasCustomLogo = customLogo !== "";
@@ -329,11 +332,11 @@ export function HeroBlock({
                   )}
                   style={{ animationDelay: "0.35s", animationFillMode: "forwards" }}
                 >
-                  {cta?.label && (
+                  {primaryCtaLabel && (
                     <FeedbackLink href={ctaHref} className="mm-ring-button">
-                      <span>
+                      <span className="mm-ring-button-inner">
                         <Scroll className="h-5 w-5" />
-                        <MarkdownText content={cta.label} mode="inline" as="span" />
+                        <MarkdownText content={primaryCtaLabel} mode="inline" as="span" />
                       </span>
                     </FeedbackLink>
                   )}

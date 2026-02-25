@@ -433,14 +433,16 @@ export const MICROSITE_RUNTIME_CSS = `
     background: conic-gradient(from 90deg at 50% 50%, var(--mm-ring-start) 0%, var(--mm-ring-middle) 50%, var(--mm-ring-start) 100%);
   }
 
-  [data-microsite-root="true"] .mm-ring-button > span {
+  [data-microsite-root="true"] .mm-ring-button > .mm-ring-button-inner {
     position: relative;
     display: inline-flex;
     height: 100%;
-    width: 100%;
+    width: auto;
+    min-width: fit-content;
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
+    white-space: nowrap;
     border-radius: var(--mm-button-radius, 9999px);
     background: var(--mm-surface);
     padding: 0 1.5rem;
@@ -454,7 +456,7 @@ export const MICROSITE_RUNTIME_CSS = `
     filter: saturate(1.08);
   }
 
-  [data-microsite-root="true"] .mm-ring-button:hover > span {
+  [data-microsite-root="true"] .mm-ring-button:hover > .mm-ring-button-inner {
     box-shadow: 0 10px 22px color-mix(in oklab, var(--mm-accent) 20%, transparent) inset;
   }
 
