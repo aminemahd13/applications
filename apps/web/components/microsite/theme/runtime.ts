@@ -422,6 +422,7 @@ export const MICROSITE_RUNTIME_CSS = `
     border-radius: var(--mm-button-radius, 9999px);
     padding: 1px;
     outline: none;
+    transition: transform 180ms ease, filter 180ms ease;
   }
 
   [data-microsite-root="true"] .mm-ring-button::before {
@@ -445,6 +446,16 @@ export const MICROSITE_RUNTIME_CSS = `
     padding: 0 1.5rem;
     color: var(--mm-text);
     backdrop-filter: blur(24px);
+    transition: transform 180ms ease, box-shadow 180ms ease;
+  }
+
+  [data-microsite-root="true"] .mm-ring-button:hover {
+    transform: translateY(-1px);
+    filter: saturate(1.08);
+  }
+
+  [data-microsite-root="true"] .mm-ring-button:hover > span {
+    box-shadow: 0 10px 22px color-mix(in oklab, var(--mm-accent) 20%, transparent) inset;
   }
 
   @keyframes mm-spin {
@@ -469,6 +480,42 @@ export const MICROSITE_RUNTIME_CSS = `
 
   [data-microsite-root="true"] .mm-faq-button:hover {
     border-color: var(--mm-accent);
+  }
+
+  [data-microsite-root="true"] .mm-feedback-link {
+    position: relative;
+  }
+
+  [data-microsite-root="true"] .mm-feedback-link[data-cta-state="loading"] {
+    filter: saturate(1.05);
+  }
+
+  [data-microsite-root="true"] .mm-feedback-link[data-cta-state="success"] {
+    filter: saturate(1.12);
+  }
+
+  [data-microsite-root="true"] .mm-feedback-badge {
+    position: absolute;
+    right: 0.2rem;
+    top: 0.2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 1.15rem;
+    min-width: 1.15rem;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in oklab, var(--mm-accent) 58%, var(--mm-border) 42%);
+    background: var(--mm-surface);
+    color: var(--mm-accent);
+    box-shadow: 0 8px 20px color-mix(in oklab, var(--mm-dark) 20%, transparent);
+    transition: opacity 180ms ease, transform 180ms ease;
+    transform: scale(0.92);
+    z-index: 2;
+  }
+
+  [data-microsite-root="true"] .mm-feedback-link[data-cta-state="loading"] .mm-feedback-badge,
+  [data-microsite-root="true"] .mm-feedback-link[data-cta-state="success"] .mm-feedback-badge {
+    transform: scale(1);
   }
 
   [data-microsite-root="true"] .custom-shadow {
@@ -639,5 +686,229 @@ export const MICROSITE_RUNTIME_CSS = `
     height: 100%;
     width: min(75%, 80rem);
     margin-inline: auto;
+  }
+
+  [data-microsite-root="true"] table {
+    width: 100%;
+    border-collapse: collapse;
+    border: 1px solid var(--mm-border);
+    border-radius: 0.85rem;
+    overflow: hidden;
+  }
+
+  [data-microsite-root="true"] th,
+  [data-microsite-root="true"] td {
+    border: 1px solid color-mix(in oklab, var(--mm-border) 70%, var(--mm-accent) 30%);
+    padding: 0.45rem 0.6rem;
+    text-align: left;
+    font-size: 0.86rem;
+  }
+
+  [data-microsite-root="true"] th {
+    background: color-mix(in oklab, var(--mm-soft) 82%, var(--mm-accent) 18%);
+    color: var(--mm-text);
+  }
+
+  [data-microsite-root="true"] .mm-task-item {
+    list-style: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-left: -1.2rem;
+  }
+
+  [data-microsite-root="true"] .mm-task-box {
+    margin-top: 0.2rem;
+    display: inline-flex;
+    height: 0.92rem;
+    width: 0.92rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.2rem;
+    border: 1px solid color-mix(in oklab, var(--mm-border) 74%, var(--mm-accent) 26%);
+    background: var(--mm-surface);
+    color: transparent;
+    font-size: 0.7rem;
+    line-height: 1;
+  }
+
+  [data-microsite-root="true"] .mm-task-box.is-checked {
+    border-color: color-mix(in oklab, var(--mm-accent) 68%, var(--mm-border) 32%);
+    background: color-mix(in oklab, var(--mm-accent) 28%, var(--mm-surface) 72%);
+    color: var(--mm-accent);
+  }
+
+  [data-microsite-root="true"] .mm-director-frame {
+    position: relative;
+    height: clamp(15rem, 32vw, 23rem);
+    width: 100%;
+    overflow: hidden;
+    border-radius: var(--mm-card-radius, 1.35rem);
+    border: 1px solid color-mix(in oklab, var(--mm-border) 74%, var(--mm-accent) 26%);
+    background: color-mix(in oklab, var(--mm-soft) 70%, var(--mm-surface) 30%);
+    box-shadow:
+      0 24px 52px color-mix(in oklab, var(--mm-dark) 26%, transparent),
+      inset 0 1px 0 color-mix(in oklab, #ffffff 58%, transparent);
+  }
+
+  [data-microsite-root="true"] .mm-director-frame::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 3;
+    background:
+      linear-gradient(180deg, transparent 0%, color-mix(in oklab, var(--mm-dark) 16%, transparent) 68%, color-mix(in oklab, var(--mm-dark) 30%, transparent) 100%);
+  }
+
+  [data-microsite-root="true"] .mm-hero-slide {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 420ms ease;
+    z-index: 1;
+  }
+
+  [data-microsite-root="true"] .mm-hero-slide.is-active {
+    opacity: 1;
+    z-index: 2;
+  }
+
+  [data-microsite-root="true"] .mm-hero-slide img {
+    transform-origin: center;
+    will-change: transform, clip-path, filter;
+  }
+
+  @keyframes mm-hero-pan-left {
+    0% {
+      transform: scale(1.08) translateX(3.5%);
+    }
+    100% {
+      transform: scale(1.14) translateX(-3.5%);
+    }
+  }
+
+  @keyframes mm-hero-pan-right {
+    0% {
+      transform: scale(1.08) translateX(-3.5%);
+    }
+    100% {
+      transform: scale(1.14) translateX(3.5%);
+    }
+  }
+
+  @keyframes mm-hero-zoom-in {
+    0% {
+      transform: scale(1.01);
+    }
+    100% {
+      transform: scale(1.16);
+    }
+  }
+
+  @keyframes mm-hero-parallax {
+    0% {
+      transform: scale(1.14) translateY(-2%) translateX(-0.7%);
+    }
+    50% {
+      transform: scale(1.12) translateY(1.5%) translateX(0.8%);
+    }
+    100% {
+      transform: scale(1.15) translateY(-1.2%) translateX(-0.6%);
+    }
+  }
+
+  @keyframes mm-hero-split-reveal {
+    0% {
+      clip-path: inset(0 50% 0 50%);
+      transform: scale(1.07);
+      filter: saturate(0.95);
+    }
+    35% {
+      clip-path: inset(0 26% 0 26%);
+    }
+    100% {
+      clip-path: inset(0 0 0 0);
+      transform: scale(1.14);
+      filter: saturate(1.08);
+    }
+  }
+
+  [data-microsite-root="true"] .mm-hero-anim-pan-left {
+    animation: mm-hero-pan-left 6.2s ease forwards;
+  }
+
+  [data-microsite-root="true"] .mm-hero-anim-pan-right {
+    animation: mm-hero-pan-right 6.2s ease forwards;
+  }
+
+  [data-microsite-root="true"] .mm-hero-anim-zoom-in {
+    animation: mm-hero-zoom-in 6.2s ease forwards;
+  }
+
+  [data-microsite-root="true"] .mm-hero-anim-parallax {
+    animation: mm-hero-parallax 6.2s ease-in-out forwards;
+  }
+
+  [data-microsite-root="true"] .mm-hero-anim-split-reveal {
+    animation: mm-hero-split-reveal 6.2s cubic-bezier(0.22, 0.72, 0.2, 1) forwards;
+  }
+
+  [data-microsite-root="true"] .mm-hero-frame-label {
+    position: absolute;
+    left: 0.75rem;
+    bottom: 0.75rem;
+    z-index: 4;
+    max-width: calc(100% - 6rem);
+    border-radius: 9999px;
+    border: 1px solid color-mix(in oklab, var(--mm-border) 55%, transparent);
+    background: color-mix(in oklab, var(--mm-dark) 46%, transparent);
+    padding: 0.2rem 0.65rem;
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: #f8fafc;
+    backdrop-filter: blur(8px);
+  }
+
+  [data-microsite-root="true"] .mm-hero-dots {
+    position: absolute;
+    right: 0.75rem;
+    bottom: 0.7rem;
+    z-index: 4;
+    display: flex;
+    gap: 0.35rem;
+  }
+
+  [data-microsite-root="true"] .mm-hero-dot {
+    width: 0.58rem;
+    height: 0.58rem;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in oklab, #ffffff 75%, transparent);
+    background: color-mix(in oklab, #ffffff 30%, transparent);
+    transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease;
+  }
+
+  [data-microsite-root="true"] .mm-hero-dot.is-active {
+    transform: scale(1.15);
+    background: #ffffff;
+    border-color: #ffffff;
+  }
+
+  [data-microsite-root="true"].mm-motion-reduced .mm-hero-anim-pan-left,
+  [data-microsite-root="true"].mm-motion-reduced .mm-hero-anim-pan-right,
+  [data-microsite-root="true"].mm-motion-reduced .mm-hero-anim-zoom-in,
+  [data-microsite-root="true"].mm-motion-reduced .mm-hero-anim-parallax,
+  [data-microsite-root="true"].mm-motion-reduced .mm-hero-anim-split-reveal {
+    animation-duration: 2.4s;
+  }
+
+  [data-microsite-root="true"].mm-motion-none .mm-hero-anim-pan-left,
+  [data-microsite-root="true"].mm-motion-none .mm-hero-anim-pan-right,
+  [data-microsite-root="true"].mm-motion-none .mm-hero-anim-zoom-in,
+  [data-microsite-root="true"].mm-motion-none .mm-hero-anim-parallax,
+  [data-microsite-root="true"].mm-motion-none .mm-hero-anim-split-reveal {
+    animation: none !important;
+    transform: scale(1.08);
+    clip-path: inset(0 0 0 0) !important;
   }
 `;

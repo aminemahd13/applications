@@ -1,8 +1,8 @@
 import { Block } from "@event-platform/shared";
-import Link from "next/link";
 import { MessageCircleIcon, Scroll } from "lucide-react";
 import { BlockSection } from "./block-section";
 import { MarkdownText } from "../markdown-text";
+import { FeedbackLink } from "../feedback-link";
 
 type CtaBlockData = Extract<Block, { type: "CTA" }>["data"] & {
   heading?: string;
@@ -90,7 +90,7 @@ export function CtaBlock({
       )}
       <div className="flex items-center gap-4">
         {buttonLabel && (
-          <Link
+          <FeedbackLink
             href={buttonHref}
             target={isExternal ? "_blank" : undefined}
             rel={isExternal ? "noopener noreferrer" : undefined}
@@ -100,12 +100,12 @@ export function CtaBlock({
               <Scroll className="h-5 w-5" />
               <MarkdownText content={buttonLabel} mode="inline" as="span" />
             </span>
-          </Link>
+          </FeedbackLink>
         )}
-        <Link href={faqHref} className="mm-faq-button px-4 py-2">
+        <FeedbackLink href={faqHref} className="mm-faq-button px-4 py-2">
           <MessageCircleIcon className="h-5 w-5" />
           <span className="hidden sm:inline-block">FAQ</span>
-        </Link>
+        </FeedbackLink>
       </div>
     </BlockSection>
   );

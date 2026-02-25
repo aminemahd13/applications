@@ -18,6 +18,18 @@ describe("markdownToHtml", () => {
     expect(html).toContain("<li>alpha</li>");
   });
 
+  it("renders checklists and tables", () => {
+    const html = markdownToHtml(
+      "- [x] Profile complete\n- [ ] Upload motivation letter\n\n| Track | Seats |\n| --- | --- |\n| Foundations | 120 |",
+    );
+
+    expect(html).toContain('class="mm-task-item"');
+    expect(html).toContain('class="mm-task-box is-checked"');
+    expect(html).toContain("<table>");
+    expect(html).toContain("<th>Track</th>");
+    expect(html).toContain("<td>120</td>");
+  });
+
   it("sanitizes unsafe links", () => {
     const html = markdownToHtml("[bad](javascript:alert(1))", "inline");
 
@@ -32,4 +44,3 @@ describe("looksLikeHtml", () => {
     expect(looksLikeHtml("Plain **markdown**")).toBe(false);
   });
 });
-
