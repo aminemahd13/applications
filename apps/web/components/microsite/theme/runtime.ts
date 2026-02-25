@@ -418,9 +418,13 @@ export const MICROSITE_RUNTIME_CSS = `
     position: relative;
     display: inline-flex;
     height: 2.75rem;
+    width: fit-content;
+    max-width: 100%;
+    flex: 0 0 auto;
     overflow: hidden;
     border-radius: var(--mm-button-radius, 9999px);
     padding: 1px;
+    isolation: isolate;
     outline: none;
     transition: transform 180ms ease, filter 180ms ease;
   }
@@ -435,17 +439,18 @@ export const MICROSITE_RUNTIME_CSS = `
 
   [data-microsite-root="true"] .mm-ring-button > .mm-ring-button-inner {
     position: relative;
+    z-index: 1;
     display: inline-flex;
     height: 100%;
     width: auto;
-    min-width: fit-content;
+    min-width: 0;
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
     white-space: nowrap;
     border-radius: var(--mm-button-radius, 9999px);
     background: var(--mm-surface);
-    padding: 0 1.5rem;
+    padding: 0 1.15rem;
     color: var(--mm-text);
     backdrop-filter: blur(24px);
     transition: transform 180ms ease, box-shadow 180ms ease;
