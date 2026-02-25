@@ -129,6 +129,7 @@ type BlockType =
   | "STATS"
   | "STEPS"
   | "PARTICIPATION_STEPS"
+  | "PAST_PROBLEMS"
   | "REGISTRATION_CHECKLIST"
   | "TRACKS_OVERVIEW"
   | "IMAGE_GALLERY"
@@ -198,6 +199,7 @@ const BLOCK_CATALOG: {
   { type: "STATS", label: "Stats", description: "Statistics counter", icon: BarChart3, category: "Content" },
   { type: "STEPS", label: "Steps", description: "Numbered process steps", icon: ListOrdered, category: "Content" },
   { type: "PARTICIPATION_STEPS", label: "Participation Steps", description: "Three-step participation flow with CTA buttons", icon: ListOrdered, category: "Conversion" },
+  { type: "PAST_PROBLEMS", label: "Past Problems", description: "Download sheets with difficulty tags and solution links", icon: FileText, category: "Program" },
   { type: "REGISTRATION_CHECKLIST", label: "Registration Checklist", description: "Show required items and registration readiness", icon: ClipboardCheck, category: "Conversion" },
   { type: "TRACKS_OVERVIEW", label: "Tracks Overview", description: "Present event tracks, audiences, and focus areas", icon: BookOpen, category: "Program" },
   { type: "IMAGE_GALLERY", label: "Gallery", description: "Photo gallery grid", icon: Columns, category: "Layout" },
@@ -227,40 +229,78 @@ const PAGE_TEMPLATES: Array<{
   blocks: BlockType[];
 }> = [
   {
-    id: "launch",
-    label: "Launch Page",
-    description: "Deadline-focused page with urgency, proof, and conversion.",
-    blocks: ["HERO", "ANNOUNCEMENT", "COUNTDOWN", "REGISTRATION_CHECKLIST", "STATS", "FAQ", "CTA"],
+    id: "apply",
+    label: "Apply",
+    description: "Clear value proposition, free registration path, and urgency.",
+    blocks: ["HERO", "TRACKS_OVERVIEW", "REGISTRATION_CHECKLIST", "COUNTDOWN", "PARTICIPATION_STEPS", "FAQ", "CTA"],
   },
   {
     id: "program",
-    label: "Program Overview",
-    description: "Show structure, tracks, schedule, and speakers.",
-    blocks: ["HERO", "TRACKS_OVERVIEW", "STICKY_ALERT_BAR", "AGENDA", "CALENDAR", "SPEAKER_SPOTLIGHT", "TEAM_GRID", "CTA"],
+    label: "Program",
+    description: "Show learning journey: what you learn, selection process, and outcomes.",
+    blocks: ["HERO", "TRACKS_OVERVIEW", "PARTICIPATION_STEPS", "STATS", "AGENDA", "CTA"],
   },
   {
-    id: "gallery",
-    label: "Media Story",
-    description: "Visual-first layout for recap or promotion pages.",
-    blocks: ["HERO", "IMAGE_STACK", "IMAGE_GALLERY", "VIDEO_EMBED", "TESTIMONIALS", "CTA"],
-  },
-  {
-    id: "partners",
-    label: "Partnership Pitch",
-    description: "Value proposition, logos, metrics, and contact action.",
-    blocks: ["HERO", "CARD_GRID", "PARTNER_STRIP", "LOGO_CLOUD", "STATS", "CTA"],
-  },
-  {
-    id: "registration",
-    label: "Registration Funnel",
-    description: "Convert visitors into registrants for free events.",
-    blocks: ["HERO", "ANNOUNCEMENT", "REGISTRATION_CHECKLIST", "COUNTDOWN", "PARTICIPATION_STEPS", "FAQ", "CTA"],
+    id: "results",
+    label: "Results",
+    description: "Publish rankings with reference sheets and solutions.",
+    blocks: ["HERO", "ANNOUNCEMENT", "RANKS", "PAST_PROBLEMS", "TESTIMONIALS", "CTA"],
   },
   {
     id: "onsite",
-    label: "On-site Logistics",
-    description: "Help attendees navigate location, schedule, and readiness.",
+    label: "On-site",
+    description: "Venue, schedule, and practical logistics for attendees.",
     blocks: ["HERO", "STICKY_ALERT_BAR", "CALENDAR", "VENUE", "RESOURCES", "FAQ", "CTA"],
+  },
+];
+
+type StarterVariantId = "beginner" | "advanced";
+
+const STARTER_VARIANTS: Array<{
+  id: StarterVariantId;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "beginner",
+    label: "Beginner version",
+    description: "Simple and clear content with essential fields only.",
+  },
+  {
+    id: "advanced",
+    label: "Advanced version",
+    description: "Richer structure with stronger storytelling and detail.",
+  },
+];
+
+const MARKDOWN_HELP_SNIPPETS: Array<{
+  id: string;
+  label: string;
+  snippet: string;
+}> = [
+  {
+    id: "links",
+    label: "Links and emphasis",
+    snippet:
+      "**Registration is free.** [Apply now](/applications/event/event-slug)\n\nUse `inline code` for short references.",
+  },
+  {
+    id: "checklist",
+    label: "Checklist",
+    snippet:
+      "- [x] Create your participant profile\n- [x] Select your track\n- [ ] Upload your motivation note\n- [ ] Confirm your contact details",
+  },
+  {
+    id: "table",
+    label: "Table",
+    snippet:
+      "| Track | Level | Seats |\n| --- | --- | --- |\n| Foundations | Beginner | 120 |\n| Advanced | Intermediate | 90 |\n| Olympiad Lab | Advanced | 60 |",
+  },
+  {
+    id: "callout",
+    label: "Callout",
+    snippet:
+      "> **Tip:** submit early.\n> Applications are reviewed in waves and early submissions are prioritized.",
   },
 ];
 
@@ -303,14 +343,28 @@ function getDefaultData(type: BlockType): BlockData {
   switch (type) {
     case "HERO":
       return {
-        title: "Welcome",
-        subtitle: "Your event description here",
+        title: "Math&Maroc 2026",
+        subtitle: "A free national event where ambitious students train, collaborate, and solve high-level mathematics problems.",
+        valueProposition: "Free registration. Merit-based selection. Real olympiad-level growth.",
+        deadlineLabel: "Registration closes on 15 September 2026",
         eyebrow: "Applications are open",
-        layout: "centered",
-        cta: { label: "Apply Now", href: "#" },
+        layout: "split",
+        directorMode: true,
+        frameIntervalMs: 4200,
+        cta: { label: "Register for free", href: "#" },
         secondaryCta: { label: "See Program", href: "#program" },
         showFaqButton: true,
-        facts: [],
+        facts: [
+          { value: "3500+", label: "Participants", icon: "users" },
+          { value: "8", label: "Editions", icon: "calendar" },
+          { value: "100%", label: "Free event", icon: "map" },
+        ],
+        trustLogos: [],
+        heroFrames: [
+          { name: "Opening session", url: "", animation: "pan-left" },
+          { name: "Team problem solving", url: "", animation: "zoom-in" },
+          { name: "Mentor workshop", url: "", animation: "split-reveal" },
+        ],
       };
     case "ANNOUNCEMENT":
       return {
@@ -447,6 +501,29 @@ function getDefaultData(type: BlockType): BlockData {
             ctaHref: "#",
             ctaIcon: "",
             ctaVariant: "outline",
+          },
+        ],
+      };
+    case "PAST_PROBLEMS":
+      return {
+        heading: "Past Problems",
+        description: "Practice with previous sheets and compare your approach with official solutions.",
+        problems: [
+          {
+            title: "Selection Test - 2025",
+            year: "2025",
+            difficulty: "advanced",
+            tags: ["Algebra", "Geometry"],
+            sheetHref: "#",
+            solutionHref: "#",
+          },
+          {
+            title: "Final Round - 2024",
+            year: "2024",
+            difficulty: "olympiad",
+            tags: ["Combinatorics", "Number Theory"],
+            sheetHref: "#",
+            solutionHref: "#",
           },
         ],
       };
@@ -677,6 +754,300 @@ function getDefaultData(type: BlockType): BlockData {
   }
 }
 
+function getStarterData(type: BlockType, variant: StarterVariantId): BlockData {
+  if (variant === "beginner") {
+    return getDefaultData(type);
+  }
+
+  switch (type) {
+    case "HERO":
+      return {
+        title: "Math&Maroc 2026 - Applications",
+        subtitle: "A free, high-impact mathematics journey for ambitious students across Morocco.",
+        valueProposition: "Free registration. Merit-based selection. Real olympiad-level growth.",
+        deadlineLabel: "Priority deadline: 15 September 2026",
+        eyebrow: "New edition now open",
+        layout: "split",
+        directorMode: true,
+        frameIntervalMs: 4200,
+        cta: { label: "Register for free", href: "#" },
+        secondaryCta: { label: "View program", href: "#program" },
+        showFaqButton: true,
+        facts: [
+          { value: "3,500+", label: "Participants", icon: "users" },
+          { value: "8", label: "Completed editions", icon: "calendar" },
+          { value: "100%", label: "Free event", icon: "map" },
+        ],
+        trustLogos: [
+          { name: "Partner 1", assetKey: "", alt: "Partner 1" },
+          { name: "Partner 2", assetKey: "", alt: "Partner 2" },
+          { name: "Partner 3", assetKey: "", alt: "Partner 3" },
+        ],
+        heroFrames: [
+          { name: "Opening keynote", assetKey: "", animation: "pan-left" },
+          { name: "Workshop session", assetKey: "", animation: "zoom-in" },
+          { name: "Problem-solving room", assetKey: "", animation: "parallax" },
+          { name: "Closing ceremony", assetKey: "", animation: "split-reveal" },
+        ],
+      };
+    case "TRACKS_OVERVIEW":
+      return {
+        heading: "What you'll learn",
+        description: "Choose the learning path that matches your current level and target outcomes.",
+        columns: 3,
+        highlightFree: true,
+        tracks: [
+          {
+            title: "Foundations",
+            audience: "Beginner contestants",
+            focus: "Core techniques in algebra, geometry, and number theory.",
+            seats: "140",
+            cta: { label: "See curriculum", href: "#" },
+          },
+          {
+            title: "Selection Prep",
+            audience: "Intermediate contestants",
+            focus: "Timed drills, proof writing, and mock selection tests.",
+            seats: "110",
+            cta: { label: "See curriculum", href: "#" },
+          },
+          {
+            title: "Olympiad Lab",
+            audience: "Advanced contestants",
+            focus: "Deep olympiad problems with mentor-led solution reviews.",
+            seats: "70",
+            cta: { label: "See curriculum", href: "#" },
+          },
+        ],
+      };
+    case "PARTICIPATION_STEPS":
+      return {
+        heading: "Selection process",
+        items: [
+          {
+            number: "1",
+            title: "Create your profile",
+            description: "Submit your basic information and academic background.",
+            ctaLabel: "Start profile",
+            ctaHref: "#",
+            ctaIcon: "UserRoundPlus",
+            ctaVariant: "pill",
+          },
+          {
+            number: "2",
+            title: "Complete registration",
+            description: "Confirm your track, upload supporting details, and validate your data.",
+            ctaLabel: "Registration form",
+            ctaHref: "#",
+            ctaIcon: "ClipboardCheck",
+            ctaVariant: "outline",
+          },
+          {
+            number: "3",
+            title: "Pass the selection test",
+            description: "Qualified candidates receive the test invite and schedule by email.",
+            ctaLabel: "Selection details",
+            ctaHref: "#",
+            ctaIcon: "GraduationCap",
+            ctaVariant: "outline",
+          },
+          {
+            number: "4",
+            title: "Confirm your seat",
+            description: "Accepted participants confirm attendance before the final deadline.",
+            ctaLabel: "Seat confirmation",
+            ctaHref: "#",
+            ctaIcon: "BadgeCheck",
+            ctaVariant: "ghost",
+          },
+        ],
+      };
+    case "STATS":
+      return {
+        heading: "Outcomes",
+        items: [
+          { label: "Participants trained", value: "3,500+" },
+          { label: "Selection pass rate", value: "27%" },
+          { label: "Mentor hours delivered", value: "1,200+" },
+          { label: "Editions completed", value: "8" },
+        ],
+      };
+    case "PAST_PROBLEMS":
+      return {
+        heading: "Past Problems",
+        description: "Train with previous tests, tagged by level, and review official solutions.",
+        problems: [
+          {
+            title: "Selection Test 2025",
+            year: "2025",
+            difficulty: "advanced",
+            tags: ["Algebra", "Geometry"],
+            sheetHref: "#",
+            solutionHref: "#",
+          },
+          {
+            title: "Final Round 2024",
+            year: "2024",
+            difficulty: "olympiad",
+            tags: ["Combinatorics", "Number Theory"],
+            sheetHref: "#",
+            solutionHref: "#",
+          },
+          {
+            title: "Qualifier Set 2023",
+            year: "2023",
+            difficulty: "intermediate",
+            tags: ["Inequalities", "Functions"],
+            sheetHref: "#",
+            solutionHref: "#",
+          },
+        ],
+      };
+    case "REGISTRATION_CHECKLIST":
+      return {
+        heading: "Registration checklist",
+        description: "Everything you need before submitting your application.",
+        note: "Math&Maroc is free. No registration fees are required.",
+        cta: { label: "Submit registration", href: "#" },
+        secondaryCta: { label: "Eligibility guide", href: "#faq" },
+        items: [
+          { title: "Personal information", details: "Full name, valid email, and phone number.", required: true },
+          { title: "Academic details", details: "Current school/university and education level.", required: true },
+          { title: "Track preference", details: "Select the track matching your level.", required: true },
+          { title: "Motivation note", details: "Short statement about your goals (recommended).", required: false },
+        ],
+      };
+    case "FAQ":
+      return {
+        heading: "Frequently Asked Questions",
+        items: [
+          {
+            question: "Is Math&Maroc free?",
+            answer: "Yes. Registration and participation are fully free.",
+          },
+          {
+            question: "How does selection work?",
+            answer: "Selection is merit-based and includes profile review plus a test.",
+          },
+          {
+            question: "Can I join remotely?",
+            answer: "Format depends on the edition. Check the program and venue blocks for exact details.",
+          },
+        ],
+      };
+    case "CTA":
+      return {
+        heading: "Ready to apply?",
+        description: "Start your free registration now and secure your place before the deadline.",
+        variant: "primary",
+        action: "LINK",
+        primaryButton: { label: "Register for free", href: "#" },
+      };
+    case "AGENDA":
+      return {
+        heading: "Program Agenda",
+        description: "From fundamentals to advanced sessions, organized as a full learning journey.",
+        layout: "stacked",
+        days: [
+          {
+            label: "Day 1",
+            date: "2026-10-14",
+            title: "Foundations and orientation",
+            sessions: [
+              {
+                time: "09:00",
+                endTime: "10:00",
+                title: "Opening and roadmap",
+                speaker: "Program Director",
+                track: "Main Stage",
+                location: "Hall A",
+                description: "Objectives, format, and performance expectations.",
+              },
+              {
+                time: "10:30",
+                endTime: "12:00",
+                title: "Core methods workshop",
+                speaker: "Mentor Team",
+                track: "Workshop",
+                location: "Studio 1",
+                description: "Key techniques for solving olympiad-style questions.",
+              },
+            ],
+          },
+          {
+            label: "Day 2",
+            date: "2026-10-15",
+            title: "Selection prep and advanced practice",
+            sessions: [
+              {
+                time: "09:30",
+                endTime: "11:00",
+                title: "Mock test",
+                speaker: "Selection Committee",
+                track: "Assessment",
+                location: "Hall B",
+                description: "Timed simulation with official-style constraints.",
+              },
+            ],
+          },
+        ],
+      };
+    case "CALENDAR":
+      return {
+        heading: "On-site calendar",
+        description: "A clear schedule for sessions, test windows, and logistics.",
+        timezoneLabel: "UTC",
+        layout: "agenda",
+        items: [
+          {
+            date: "2026-10-14",
+            title: "Check-in and welcome",
+            startTime: "08:30",
+            endTime: "09:15",
+            location: "Main entrance",
+            description: "Badge collection and venue orientation.",
+            tag: "Logistics",
+            cta: { label: "Map", href: "#venue" },
+          },
+          {
+            date: "2026-10-14",
+            title: "Training block",
+            startTime: "09:30",
+            endTime: "12:00",
+            location: "Hall A",
+            description: "Guided problem-solving sessions with mentors.",
+            tag: "Program",
+            cta: { label: "Session details", href: "#" },
+          },
+          {
+            date: "2026-10-15",
+            title: "Selection test",
+            startTime: "10:00",
+            endTime: "12:00",
+            location: "Hall B",
+            description: "Official selection exam for shortlisted candidates.",
+            tag: "Assessment",
+            cta: { label: "Rules", href: "#" },
+          },
+        ],
+      };
+    case "RANKS":
+      return {
+        heading: "Results 2026",
+        description: "Official rankings and scores for this edition.",
+        columns: ["Rank", "Full Name", "Institution", "Level", "P1", "P2", "P3", "P4", "Total", "Prize"],
+        rows: [
+          ["1", "Ait Ben Omar Salma", "Lycée Al Khawarizmi", "Bac", "9", "9", "8", "8", "34", "First Prize"],
+          ["2", "Rami El Idrissi", "ENSA Rabat", "Bac+1", "8", "8", "8", "7", "31", "Second Prize"],
+          ["3", "Yasmine Kabbaj", "Lycée Mohammed V", "Bac", "8", "7", "7", "7", "29", "Third Prize"],
+        ],
+        highlightPrizes: true,
+      };
+    default:
+      return getDefaultData(type);
+  }
+}
+
 function sanitizeBlocksForSave(inputBlocks: Block[]): Block[] {
   function sanitizeJson(value: unknown): unknown {
     if (value === null || value === undefined) return undefined;
@@ -753,6 +1124,8 @@ function getBlockSearchText(block: Block): string {
     data.heading,
     data.label,
     data.subtitle,
+    data.valueProposition,
+    data.deadlineLabel,
     data.message,
     data.description,
     data.note,
@@ -1762,10 +2135,47 @@ function BlockInspector({
     onChange({ ...data, ...patch });
   };
 
+  const applyStarterVariant = (variant: StarterVariantId) => {
+    const starterData = getStarterData(block.type, variant);
+    const currentSection = data.section as SectionStyle | undefined;
+    onChange({
+      ...starterData,
+      ...(currentSection ? { section: currentSection } : {}),
+    });
+    toast.success(
+      variant === "beginner"
+        ? "Beginner starter applied"
+        : "Advanced starter applied",
+    );
+  };
+
+  const copyMarkdownSnippet = async (snippet: string) => {
+    try {
+      await navigator.clipboard.writeText(snippet);
+      toast.success("Markdown snippet copied");
+    } catch {
+      toast.error("Unable to copy snippet");
+    }
+  };
+
   let content: ReactNode;
 
   switch (block.type) {
-    case "HERO":
+    case "HERO": {
+      const trustLogos = ((data.trustLogos as Record<string, unknown>[]) ?? []).map((item) => ({
+        name: String(item.name ?? ""),
+        assetKey: String(item.assetKey ?? item.url ?? ""),
+        alt: String(item.alt ?? ""),
+      }));
+
+      const heroFrames = ((data.heroFrames as Record<string, unknown>[]) ?? []).map((item) => ({
+        name: String(item.name ?? ""),
+        assetKey: String(item.assetKey ?? item.url ?? ""),
+        alt: String(item.alt ?? ""),
+        href: String(item.href ?? ""),
+        animation: String(item.animation ?? ""),
+      }));
+
       content = (
         <div className="space-y-4">
           <div className="space-y-2">
@@ -1774,7 +2184,28 @@ function BlockInspector({
           </div>
           <div className="space-y-2">
             <Label>Subtitle</Label>
-            <Textarea value={(data.subtitle as string) ?? ""} onChange={(e) => updateField("subtitle", e.target.value)} rows={3} />
+            <Textarea
+              value={(data.subtitle as string) ?? ""}
+              onChange={(e) => updateField("subtitle", e.target.value)}
+              rows={3}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Value Proposition</Label>
+            <Textarea
+              value={(data.valueProposition as string) ?? ""}
+              rows={2}
+              placeholder="Free registration. Merit-based selection. Real olympiad-level growth."
+              onChange={(e) => updateField("valueProposition", e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Deadline Label</Label>
+            <Input
+              value={(data.deadlineLabel as string) ?? ""}
+              placeholder="Registration closes on 15 September 2026"
+              onChange={(e) => updateField("deadlineLabel", e.target.value)}
+            />
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-2">
@@ -1800,6 +2231,38 @@ function BlockInspector({
                 value={(data.eyebrow as string) ?? ""}
                 placeholder="Applications open now"
                 onChange={(e) => updateField("eyebrow", e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Director Mode</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  size="sm"
+                  variant={(data.directorMode as boolean | undefined) !== false ? "default" : "outline"}
+                  onClick={() => updateField("directorMode", true)}
+                >
+                  On
+                </Button>
+                <Button
+                  size="sm"
+                  variant={(data.directorMode as boolean | undefined) === false ? "default" : "outline"}
+                  onClick={() => updateField("directorMode", false)}
+                >
+                  Off
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Frame Interval (ms)</Label>
+              <Input
+                type="number"
+                min={1800}
+                max={12000}
+                value={(data.frameIntervalMs as number | undefined) ?? ""}
+                placeholder="4200"
+                onChange={(e) => updateField("frameIntervalMs", parseOptionalBoundedInt(e.target.value, 1800, 12000))}
               />
             </div>
           </div>
@@ -1855,7 +2318,7 @@ function BlockInspector({
             </p>
           </div>
           <div className="space-y-2">
-            <Label>Hero Image (Split Layout)</Label>
+            <Label>Fallback Hero Image (used when no frame is set)</Label>
             <div className="flex items-center gap-2">
               <Input
                 type="file"
@@ -1891,6 +2354,64 @@ function BlockInspector({
               onChange={(e) => updateField("heroImage", e.target.value)}
             />
           </div>
+          <Separator />
+          <ArrayItemsEditor
+            heading="Trust strip logos"
+            items={trustLogos}
+            onItemsChange={(items) =>
+              updateField(
+                "trustLogos",
+                items.map((item) => ({
+                  name: item.name,
+                  assetKey: item.assetKey,
+                  alt: item.alt,
+                })),
+              )
+            }
+            fields={[
+              { key: "name", label: "Name" },
+              { key: "assetKey", label: "Logo image", type: "image", placeholder: "Asset key or URL" },
+              { key: "alt", label: "Alt text" },
+            ]}
+            newItem={{ name: "Partner", assetKey: "", alt: "Partner logo" }}
+            uploadAsset={uploadAsset}
+            openMediaLibrary={openMediaLibrary}
+            reorderable
+          />
+          <Separator />
+          <ArrayItemsEditor
+            heading="Hero frames (director mode)"
+            items={heroFrames}
+            onItemsChange={(items) =>
+              updateField(
+                "heroFrames",
+                items.map((item) => ({
+                  name: item.name,
+                  assetKey: item.assetKey,
+                  alt: item.alt,
+                  href: item.href,
+                  animation: item.animation,
+                })),
+              )
+            }
+            fields={[
+              { key: "name", label: "Frame name" },
+              { key: "assetKey", label: "Frame image", type: "image", placeholder: "Asset key or URL" },
+              { key: "alt", label: "Alt text" },
+              { key: "href", label: "Frame link (optional)" },
+              { key: "animation", label: "Animation (pan-left|pan-right|zoom-in|parallax|split-reveal)" },
+            ]}
+            newItem={{
+              name: "Frame",
+              assetKey: "",
+              alt: "Hero frame",
+              href: "",
+              animation: "zoom-in",
+            }}
+            uploadAsset={uploadAsset}
+            openMediaLibrary={openMediaLibrary}
+            reorderable
+          />
           <Separator />
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Call to Action</p>
           <div className="grid grid-cols-2 gap-2">
@@ -1946,6 +2467,7 @@ function BlockInspector({
           </div>
           <Separator />
           <ArrayItemsEditor
+            heading="Trust facts"
             items={(data.facts as { label: string; value: string; icon?: string }[]) ?? []}
             onItemsChange={(items) => updateField("facts", items)}
             fields={[
@@ -1954,10 +2476,12 @@ function BlockInspector({
               { key: "icon", label: "Icon (optional)" },
             ]}
             newItem={{ label: "Label", value: "Value" }}
+            reorderable
           />
         </div>
       );
       break;
+    }
 
     case "ANNOUNCEMENT":
       content = (
@@ -2831,6 +3355,63 @@ function BlockInspector({
           }}
           reorderable
         />
+      );
+      break;
+
+    case "PAST_PROBLEMS":
+      content = (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Heading</Label>
+            <Input value={(data.heading as string) ?? ""} onChange={(e) => updateField("heading", e.target.value)} />
+          </div>
+          <div className="space-y-2">
+            <Label>Description</Label>
+            <Textarea value={(data.description as string) ?? ""} onChange={(e) => updateField("description", e.target.value)} rows={3} />
+          </div>
+          <ArrayItemsEditor
+            heading=""
+            items={(data.problems as {
+              title: string;
+              year?: string;
+              difficulty?: string;
+              tags?: string[] | string;
+              sheetHref?: string;
+              solutionHref?: string;
+            }[]) ?? []}
+            onItemsChange={(items) =>
+              updateField(
+                "problems",
+                items.map((item) => ({
+                  ...item,
+                  tags: Array.isArray(item.tags)
+                    ? item.tags
+                    : String(item.tags ?? "")
+                        .split(",")
+                        .map((entry) => entry.trim())
+                        .filter(Boolean),
+                })),
+              )
+            }
+            fields={[
+              { key: "title", label: "Problem title" },
+              { key: "year", label: "Year" },
+              { key: "difficulty", label: "Difficulty (intro|intermediate|advanced|olympiad)" },
+              { key: "tags", label: "Tags (comma-separated)" },
+              { key: "sheetHref", label: "Sheet link / asset key" },
+              { key: "solutionHref", label: "Solution link / asset key" },
+            ]}
+            newItem={{
+              title: "Problem",
+              year: "",
+              difficulty: "intermediate",
+              tags: "Algebra, Geometry",
+              sheetHref: "",
+              solutionHref: "",
+            }}
+            reorderable
+          />
+        </div>
       );
       break;
 
@@ -4103,6 +4684,27 @@ function BlockInspector({
       <div className="rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
         All microsite text fields support Markdown (headings, lists, links, emphasis, inline code).
       </div>
+      <div className="rounded-lg border bg-muted/20 p-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Section starter templates
+        </p>
+        <div className="mt-2 grid gap-2">
+          {STARTER_VARIANTS.map((variant) => (
+            <Button
+              key={`${block.type}-${variant.id}`}
+              type="button"
+              variant="outline"
+              className="h-auto justify-start px-3 py-2 text-left"
+              onClick={() => applyStarterVariant(variant.id)}
+            >
+              <span className="block text-sm font-medium">{variant.label}</span>
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                {variant.description}
+              </span>
+            </Button>
+          ))}
+        </div>
+      </div>
       <Accordion type="multiple" defaultValue={["content"]} className="w-full space-y-3">
         <AccordionItem value="content" className="rounded-xl border bg-card px-3">
           <AccordionTrigger className="text-sm font-semibold">Content</AccordionTrigger>
@@ -4119,6 +4721,30 @@ function BlockInspector({
               uploadAsset={uploadAsset}
               openMediaLibrary={openMediaLibrary}
             />
+          </AccordionContent>
+        </AccordionItem>
+        <AccordionItem value="markdown-helper" className="rounded-xl border bg-card px-3">
+          <AccordionTrigger className="text-sm font-semibold">Markdown Helper</AccordionTrigger>
+          <AccordionContent className="space-y-3 pt-2">
+            {MARKDOWN_HELP_SNIPPETS.map((item) => (
+              <div key={item.id} className="rounded-lg border bg-muted/20 p-2.5">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-xs font-medium">{item.label}</p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => void copyMarkdownSnippet(item.snippet)}
+                  >
+                    <Copy className="mr-1 h-3 w-3" />
+                    Copy
+                  </Button>
+                </div>
+                <pre className="overflow-auto rounded-md bg-background p-2 text-[11px] leading-relaxed">
+                  <code>{item.snippet}</code>
+                </pre>
+              </div>
+            ))}
           </AccordionContent>
         </AccordionItem>
       </Accordion>
@@ -4396,7 +5022,7 @@ export default function MicrositePageEditor() {
     const generatedBlocks = template.blocks.map((type) => ({
       id: createId(),
       type,
-      data: getDefaultData(type),
+      data: getStarterData(type, "advanced"),
     }));
 
     const nextBlocks = mode === "replace" ? generatedBlocks : [...blocks, ...generatedBlocks];
@@ -4405,7 +5031,7 @@ export default function MicrositePageEditor() {
     setShowTemplates(false);
     toast.success(
       mode === "replace"
-        ? `Applied "${template.label}" template`
+        ? `Applied "${template.label}" preset`
         : `Added "${template.label}" blocks`,
     );
   }
@@ -4787,7 +5413,7 @@ export default function MicrositePageEditor() {
             </Button>
             <Button variant="outline" size="sm" className="shrink-0" onClick={() => setShowTemplates(true)}>
               <LayoutGrid className="mr-1.5 h-3.5 w-3.5" />
-              Templates
+              Presets
             </Button>
             <Button variant="outline" size="sm" className="shrink-0" onClick={() => setShowChecklist(true)}>
               {completedChecklistCount === checklistItems.length ? (
@@ -4878,7 +5504,7 @@ export default function MicrositePageEditor() {
                     <div className="flex items-center gap-2">
                       <Button size="sm" variant="outline" className="flex-1" onClick={() => setShowTemplates(true)}>
                         <LayoutGrid className="mr-1 h-3 w-3" />
-                        Template
+                        Preset
                       </Button>
                       <Button size="sm" variant="outline" className="flex-1" onClick={() => setShowCatalog(true)}>
                         <Plus className="mr-1 h-3 w-3" />
@@ -4955,11 +5581,11 @@ export default function MicrositePageEditor() {
                     <div className="rounded-lg border bg-muted/30 p-3">
                       <p className="text-sm font-medium">Quick start</p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Open templates or add blocks by category.
+                        Open Math&Maroc presets or add blocks by category.
                       </p>
                       <div className="mt-3 flex gap-2">
                         <Button size="sm" variant="outline" className="flex-1" onClick={() => setShowTemplates(true)}>
-                          Templates
+                          Presets
                         </Button>
                         <Button size="sm" className="flex-1" onClick={() => setShowCatalog(true)}>
                           Catalog
@@ -5265,7 +5891,7 @@ export default function MicrositePageEditor() {
                         </Button>
                         <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => setShowTemplates(true)}>
                           <LayoutGrid className="mr-2 h-3.5 w-3.5" />
-                          Apply template
+                          Apply preset
                         </Button>
                         <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => setShowCatalog(true)}>
                           <Plus className="mr-2 h-3.5 w-3.5" />
@@ -5369,9 +5995,9 @@ export default function MicrositePageEditor() {
       <Dialog open={showTemplates} onOpenChange={setShowTemplates}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Page Templates</DialogTitle>
+            <DialogTitle>Math&Maroc Presets</DialogTitle>
             <DialogDescription>
-              Start faster with pre-structured section sets you can edit block-by-block.
+              Start faster with goal-based presets: Apply, Program, Results, and On-site.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 md:grid-cols-2">
@@ -5394,7 +6020,7 @@ export default function MicrositePageEditor() {
                     size="sm"
                     variant="default"
                     onClick={() => {
-                      if (blocks.length > 0 && !window.confirm("Replace all current blocks with this template?")) {
+                      if (blocks.length > 0 && !window.confirm("Replace all current blocks with this preset?")) {
                         return;
                       }
                       applyTemplate(template.id, "replace");

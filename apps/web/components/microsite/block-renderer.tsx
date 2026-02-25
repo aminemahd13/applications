@@ -35,6 +35,7 @@ import { RanksBlock } from "./blocks/ranks-block";
 import { ParticipationStepsBlock } from "./blocks/participation-steps-block";
 import { RegistrationChecklistBlock } from "./blocks/registration-checklist-block";
 import { TracksOverviewBlock } from "./blocks/tracks-overview-block";
+import { PastProblemsBlock } from "./blocks/past-problems-block";
 
 export function BlockRenderer({
   blocks,
@@ -102,6 +103,8 @@ function SingleBlock({
       return <StepsBlock block={block} />;
     case "PARTICIPATION_STEPS":
       return <ParticipationStepsBlock block={block as Extract<Block, { type: "PARTICIPATION_STEPS" }>} />;
+    case "PAST_PROBLEMS":
+      return <PastProblemsBlock block={block as Extract<Block, { type: "PAST_PROBLEMS" }>} />;
     case "REGISTRATION_CHECKLIST":
       return <RegistrationChecklistBlock block={block as Extract<Block, { type: "REGISTRATION_CHECKLIST" }>} />;
     case "TRACKS_OVERVIEW":

@@ -91,6 +91,24 @@ function isOrderedListLine(line: string): boolean {
   return /^\d+[.)]\s+/.test(line.trim());
 }
 
+function splitTableCells(line: string): string[] {
+  const normalized = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return normalized.split("|").map((cell) => cell.trim());
+}
+
+function isTableDividerLine(line: string): boolean {
+  const cells = splitTableCells(line);
+  if (cells.length === 0) return false;
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function isTableStart(lines: string[], startIndex: number): boolean {
+  const headerLine = lines[startIndex]?.trim() ?? "";
+  const dividerLine = lines[startIndex + 1]?.trim() ?? "";
+  if (!headerLine.includes("|")) return false;
+  return isTableDividerLine(dividerLine);
+}
+
 function parseFencedCode(lines: string[], startIndex: number): { html: string; nextIndex: number } {
   const fenceLine = lines[startIndex] ?? "";
   const language = fenceLine.trim().slice(3).trim();
@@ -141,7 +159,22 @@ function parseList(lines: string[], startIndex: number, ordered: boolean): { htm
 
     const match = trimmed.match(itemRegex);
     if (match) {
-      items.push(applyInlineMarkdown(match[1]));
+      const content = match[1];
+      if (!ordered) {
+        const taskMatch = content.match(/^\[( |x|X)\]\s+(.*)$/);
+        if (taskMatch) {
+          const isChecked = taskMatch[1].toLowerCase() === "x";
+          const taskContent = applyInlineMarkdown(taskMatch[2]);
+          items.push(
+            `<li class="mm-task-item"><span class="mm-task-box${
+              isChecked ? " is-checked" : ""
+            }">${isChecked ? "✓" : ""}</span><span>${taskContent}</span></li>`,
+          );
+          cursor += 1;
+          continue;
+        }
+      }
+      items.push(`<li>${applyInlineMarkdown(content)}</li>`);
       cursor += 1;
       continue;
     }
@@ -149,7 +182,10 @@ function parseList(lines: string[], startIndex: number, ordered: boolean): { htm
     const isContinuation = /^\s{2,}\S/.test(current);
     if (isContinuation && items.length > 0) {
       const continuation = applyInlineMarkdown(trimmed);
-      items[items.length - 1] = `${items[items.length - 1]}<br />${continuation}`;
+      items[items.length - 1] = items[items.length - 1].replace(
+        /<\/li>$/,
+        `<br />${continuation}</li>`,
+      );
       cursor += 1;
       continue;
     }
@@ -158,7 +194,36 @@ function parseList(lines: string[], startIndex: number, ordered: boolean): { htm
 
   const tag = ordered ? "ol" : "ul";
   return {
-    html: `<${tag}>${items.map((item) => `<li>${item}</li>`).join("")}</${tag}>`,
+    html: `<${tag}>${items.join("")}</${tag}>`,
+    nextIndex: cursor,
+  };
+}
+
+function parseTable(lines: string[], startIndex: number): { html: string; nextIndex: number } {
+  const headerCells = splitTableCells(lines[startIndex] ?? "");
+  let cursor = startIndex + 2;
+  const bodyRows: string[][] = [];
+
+  while (cursor < lines.length) {
+    const current = lines[cursor] ?? "";
+    const trimmed = current.trim();
+    if (!trimmed) break;
+    if (!trimmed.includes("|")) break;
+    const rowCells = splitTableCells(current);
+    if (rowCells.length === 0) break;
+    bodyRows.push(rowCells);
+    cursor += 1;
+  }
+
+  const headerHtml = `<tr>${headerCells
+    .map((cell) => `<th>${applyInlineMarkdown(cell)}</th>`)
+    .join("")}</tr>`;
+  const bodyHtml = bodyRows
+    .map((row) => `<tr>${row.map((cell) => `<td>${applyInlineMarkdown(cell)}</td>`).join("")}</tr>`)
+    .join("");
+
+  return {
+    html: `<table><thead>${headerHtml}</thead><tbody>${bodyHtml}</tbody></table>`,
     nextIndex: cursor,
   };
 }
@@ -177,7 +242,8 @@ function parseParagraph(lines: string[], startIndex: number): { html: string; ne
       isDividerLine(current) ||
       isQuoteLine(current) ||
       isUnorderedListLine(current) ||
-      isOrderedListLine(current)
+      isOrderedListLine(current) ||
+      isTableStart(lines, cursor)
     ) {
       break;
     }
@@ -208,6 +274,13 @@ function renderBlockMarkdown(input: string): string {
     if (/^```/.test(trimmed)) {
       const { html: codeHtml, nextIndex } = parseFencedCode(lines, cursor);
       html.push(codeHtml);
+      cursor = nextIndex;
+      continue;
+    }
+
+    if (isTableStart(lines, cursor)) {
+      const { html: tableHtml, nextIndex } = parseTable(lines, cursor);
+      html.push(tableHtml);
       cursor = nextIndex;
       continue;
     }

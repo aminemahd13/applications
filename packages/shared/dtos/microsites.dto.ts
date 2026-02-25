@@ -45,14 +45,37 @@ export const HeroBlockSchema = z.object({
     data: withSection({
         title: z.string().optional(),
         subtitle: z.string().optional(),
+        valueProposition: z.string().optional(),
+        deadlineLabel: z.string().optional(),
+        eyebrow: z.string().optional(),
         logoAssetKey: z.string().optional(),
         logoUrl: z.string().optional(),
         logoAlt: z.string().optional(),
+        heroImage: z.string().optional(),
+        layout: z.enum(['centered', 'split']).optional(),
+        directorMode: z.boolean().default(true),
+        frameIntervalMs: z.number().int().min(1800).max(12000).optional(),
+        showFaqButton: z.boolean().optional(),
         cta: CtaLinkSchema.optional(),
+        secondaryCta: CtaLinkSchema.optional(),
         facts: z.array(z.object({
             label: z.string().optional(),
             value: z.string().optional(),
             icon: z.string().optional(),
+        }).passthrough()).default([]),
+        trustLogos: z.array(z.object({
+            name: z.string().optional(),
+            assetKey: z.string().optional(),
+            url: z.string().optional(),
+            alt: z.string().optional(),
+        }).passthrough()).default([]),
+        heroFrames: z.array(z.object({
+            name: z.string().optional(),
+            assetKey: z.string().optional(),
+            url: z.string().optional(),
+            alt: z.string().optional(),
+            href: z.string().optional(),
+            animation: z.enum(['pan-left', 'pan-right', 'zoom-in', 'parallax', 'split-reveal']).optional(),
         }).passthrough()).default([]),
     }),
 });
@@ -304,6 +327,25 @@ export const ParticipationStepsBlockSchema = z.object({
             ctaIcon: z.string().optional(),
             ctaVariant: z.enum(['pill', 'outline', 'ghost']).optional(),
         }).passthrough()).default([]),
+    }),
+});
+
+const PastProblemItemSchema = z.object({
+    title: z.string().optional(),
+    year: z.string().optional(),
+    difficulty: z.enum(['intro', 'intermediate', 'advanced', 'olympiad']).optional(),
+    tags: z.array(z.string()).optional(),
+    sheetHref: z.string().optional(),
+    solutionHref: z.string().optional(),
+}).passthrough();
+
+export const PastProblemsBlockSchema = z.object({
+    id: z.string(),
+    type: z.literal('PAST_PROBLEMS'),
+    data: withSection({
+        heading: z.string().optional(),
+        description: z.string().optional(),
+        problems: z.array(PastProblemItemSchema).default([]),
     }),
 });
 
@@ -660,6 +702,7 @@ export const BlockSchema = z.discriminatedUnion('type', [
     StatsBlockSchema,
     StepsBlockSchema,
     ParticipationStepsBlockSchema,
+    PastProblemsBlockSchema,
     RegistrationChecklistBlockSchema,
     TracksOverviewBlockSchema,
     ImageGalleryBlockSchema,
