@@ -6,6 +6,7 @@ import type { Block } from "@event-platform/shared";
 import Link from "next/link";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type TeamTooltipData = Extract<Block, { type: "TEAM_TOOLTIP" }>["data"] & {
   heading?: string;
@@ -55,12 +56,18 @@ export function TeamTooltipBlock({
       containerClassName="space-y-6 text-center"
     >
       {heading && (
-        <h2 className="microsite-display text-3xl font-bold text-[var(--mm-text)] md:text-5xl">
-          {heading}
-        </h2>
+        <MarkdownText
+          content={heading}
+          mode="inline"
+          as="h2"
+          className="microsite-display text-3xl font-bold text-[var(--mm-text)] md:text-5xl"
+        />
       )}
       {description && (
-        <p className="mx-auto max-w-screen-md text-center text-[var(--mm-text-muted)]">{description}</p>
+        <MarkdownText
+          content={description}
+          className="mx-auto max-w-screen-md text-center text-[var(--mm-text-muted)]"
+        />
       )}
       <div className="mb-10 flex w-full flex-row items-center justify-center">
         <AnimatedTooltip items={items} />
@@ -70,7 +77,7 @@ export function TeamTooltipBlock({
           <button className="relative p-[2px] text-sm">
             <div className="absolute inset-0 rounded-[var(--mm-button-radius)] bg-gradient-to-r from-[var(--mm-accent)] to-[var(--mm-ring-middle)]" />
             <div className="group relative rounded-[var(--mm-button-radius)] bg-[var(--mm-surface)] px-8 py-2 text-[var(--mm-text)] transition duration-200 hover:bg-transparent hover:text-white">
-              {ctaLabel}
+              <MarkdownText content={ctaLabel} mode="inline" as="span" />
             </div>
           </button>
         </Link>
@@ -129,9 +136,13 @@ function AnimatedTooltip({
                 <div className="absolute inset-x-10 z-30 -bottom-px h-px w-[20%] bg-gradient-to-r from-transparent via-emerald-500 to-transparent" />
                 <div className="absolute left-10 z-30 -bottom-px h-px w-[40%] bg-gradient-to-r from-transparent via-sky-500 to-transparent" />
                 <div className="relative z-30 text-base font-bold text-white">
-                  {item.name}
+                  <MarkdownText content={item.name} mode="inline" as="span" />
                 </div>
-                {item.designation && <div className="text-xs text-white">{item.designation}</div>}
+                {item.designation && (
+                  <div className="text-xs text-white">
+                    <MarkdownText content={item.designation} mode="inline" as="span" />
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

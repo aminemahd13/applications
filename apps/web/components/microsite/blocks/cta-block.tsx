@@ -2,6 +2,7 @@ import { Block } from "@event-platform/shared";
 import Link from "next/link";
 import { MessageCircleIcon, Scroll } from "lucide-react";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type CtaBlockData = Extract<Block, { type: "CTA" }>["data"] & {
   heading?: string;
@@ -74,14 +75,18 @@ export function CtaBlock({
       containerClassName="mm-pattern-cta custom-shadow w-full p-10 md:w-1/2 flex flex-col items-center gap-6 text-white"
     >
       {heading && (
-        <h2 className="microsite-display text-3xl font-semibold md:text-5xl">
-          {heading}
-        </h2>
+        <MarkdownText
+          content={heading}
+          mode="inline"
+          as="h2"
+          className="microsite-display text-3xl font-semibold md:text-5xl"
+        />
       )}
       {description && (
-        <p className="max-w-2xl text-base leading-relaxed text-white/90 md:text-lg">
-          {description}
-        </p>
+        <MarkdownText
+          content={description}
+          className="max-w-2xl text-base leading-relaxed text-white/90 md:text-lg"
+        />
       )}
       <div className="flex items-center gap-4">
         {buttonLabel && (
@@ -93,7 +98,7 @@ export function CtaBlock({
           >
             <span>
               <Scroll className="h-5 w-5" />
-              {buttonLabel}
+              <MarkdownText content={buttonLabel} mode="inline" as="span" />
             </span>
           </Link>
         )}

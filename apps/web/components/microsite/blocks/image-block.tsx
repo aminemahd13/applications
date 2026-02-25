@@ -2,6 +2,7 @@
 import { Block } from "@event-platform/shared";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type ImageBlockData = Extract<Block, { type: "IMAGE" }>["data"] & {
   src?: string;
@@ -40,9 +41,11 @@ export function ImageBlock({ block }: { block: Extract<Block, { type: "IMAGE" }>
           loading="lazy"
         />
         {caption && (
-          <figcaption className="mt-3 text-center text-sm text-[var(--mm-text-muted)]">
-            {caption}
-          </figcaption>
+          <MarkdownText
+            content={caption}
+            as="figcaption"
+            className="mt-3 text-center text-sm text-[var(--mm-text-muted)]"
+          />
         )}
       </figure>
     </BlockSection>

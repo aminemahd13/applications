@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type FaqItem = NonNullable<Extract<Block, { type: "FAQ" }>["data"]>["items"][number];
 type FaqRenderItem = FaqItem & { question?: string; answer?: string };
@@ -31,9 +32,12 @@ export function FaqBlock({ block }: { block: Extract<Block, { type: 'FAQ' }> }) 
       }}
     >
       {heading && (
-        <h2 className="microsite-display mb-12 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-          {heading}
-        </h2>
+        <MarkdownText
+          content={heading}
+          mode="inline"
+          as="h2"
+          className="microsite-display mb-12 text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+        />
       )}
       <div className="space-y-4">
         {items.map((item: FaqRenderItem, idx: number) => {
@@ -50,7 +54,7 @@ export function FaqBlock({ block }: { block: Extract<Block, { type: 'FAQ' }> }) 
                 className="flex w-full items-center justify-between p-6 text-left focus:outline-none"
               >
                 <span className="text-lg font-medium text-[var(--mm-text)]">
-                  {question}
+                  <MarkdownText content={question} mode="inline" as="span" />
                 </span>
                 {isOpen ? (
                   <ChevronUp className="h-5 w-5 text-[var(--mm-text-muted)]" />
@@ -65,7 +69,7 @@ export function FaqBlock({ block }: { block: Extract<Block, { type: 'FAQ' }> }) 
                 )}
               >
                 <div className="border-t border-[var(--mm-border)] p-6 pt-0 leading-relaxed text-[var(--mm-text-muted)]">
-                  {answer}
+                  <MarkdownText content={answer} />
                 </div>
               </div>
             </div>

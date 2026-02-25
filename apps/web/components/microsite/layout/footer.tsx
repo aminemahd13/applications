@@ -4,6 +4,7 @@ import { Facebook, Twitter, Instagram, Linkedin, Youtube, Globe } from "lucide-r
 import { resolveMicrositeHref } from "./link-utils";
 import { cn } from "@/lib/utils";
 import { resolveAssetUrl } from "../asset-url";
+import { MarkdownText } from "../markdown-text";
 
 type FooterSettings = MicrositeSettings["footer"];
 type BrandingSettings = MicrositeSettings["branding"];
@@ -95,10 +96,10 @@ export function Footer({
                 </div>
               )}
               {showTagline && (
-                <p className={cn("max-w-[15rem] text-sm leading-relaxed", bodyTextClass)}>
-                  {branding?.tagline ||
-                    "Unlocking the scientific potential of Moroccan youth."}
-                </p>
+                <MarkdownText
+                  content={branding?.tagline || "Unlocking the scientific potential of Moroccan youth."}
+                  className={cn("max-w-[15rem] text-sm leading-relaxed", bodyTextClass)}
+                />
               )}
 
               {showSocials && socials.length > 0 && (
@@ -125,7 +126,7 @@ export function Footer({
               {columns.map((col, idx) => (
                 <div key={idx}>
                   <h3 className={cn("mb-3 font-bold", headingClass)}>
-                    {col.title}
+                    <MarkdownText content={col.title} mode="inline" as="span" />
                   </h3>
                   <ul className="space-y-2">
                     {(col.links || []).map((link, lIdx) => (
@@ -134,7 +135,7 @@ export function Footer({
                           href={resolveMicrositeHref(link.href, basePath)}
                           className={linkClass}
                         >
-                          {link.label}
+                          <MarkdownText content={link.label} mode="inline" as="span" />
                         </Link>
                       </li>
                     ))}
@@ -145,9 +146,10 @@ export function Footer({
           </div>
 
           {showDividers && <div className={cn("my-6 h-px w-full", dividerClass)} />}
-          <p className={cn("text-sm", legalClass)}>
-            {legalText || `Math&Maroc (c) ${new Date().getFullYear()}. All rights reserved.`}
-          </p>
+          <MarkdownText
+            content={legalText || `Math&Maroc (c) ${new Date().getFullYear()}. All rights reserved.`}
+            className={cn("text-sm", legalClass)}
+          />
         </div>
       </div>
     </footer>

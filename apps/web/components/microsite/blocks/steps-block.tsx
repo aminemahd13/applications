@@ -1,5 +1,6 @@
 import { Block } from "@event-platform/shared";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type StepItem = NonNullable<Extract<Block, { type: "STEPS" }>["data"]>["steps"][number];
 type StepsData = Extract<Block, { type: "STEPS" }>["data"] & { heading?: string };
@@ -40,9 +41,12 @@ export function StepsBlock({ block }: { block: Extract<Block, { type: 'STEPS' }>
         className="mm-dark-band"
       >
         {heading && (
-          <h2 className="microsite-display mb-12 text-center text-3xl font-semibold text-white md:text-5xl">
-            {heading}
-          </h2>
+          <MarkdownText
+            content={heading}
+            mode="inline"
+            as="h2"
+            className="microsite-display mb-12 text-center text-3xl font-semibold text-white md:text-5xl"
+          />
         )}
 
         <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
@@ -53,12 +57,12 @@ export function StepsBlock({ block }: { block: Extract<Block, { type: 'STEPS' }>
               </span>
 
               <div className="p-6 text-lg">
-                {step.title}
+                <MarkdownText content={step.title} mode="inline" as="span" />
               </div>
 
               {step.description && (
                 <div className="p-6 text-sm text-zinc-200">
-                  {step.description}
+                  <MarkdownText content={step.description} />
                 </div>
               )}
             </div>

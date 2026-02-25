@@ -6,6 +6,7 @@ import type { ComponentType } from "react";
 import { BlockSection } from "./block-section";
 import { resolveAssetUrl } from "../asset-url";
 import { cn } from "@/lib/utils";
+import { MarkdownText } from "../markdown-text";
 
 // Map icon strings to components if needed, or just use generic for now
 const ICONS: Record<string, ComponentType<{ className?: string }>> = {
@@ -130,7 +131,7 @@ export function HeroBlock({
                   )}
                   style={{ animationDelay: "0.18s", animationFillMode: "forwards" }}
                 >
-                  {eyebrow}
+                  <MarkdownText content={eyebrow} mode="inline" as="span" />
                 </p>
               )}
 
@@ -157,7 +158,7 @@ export function HeroBlock({
                   style={{ animationDelay: "0.25s", animationFillMode: "forwards" }}
                 >
                   <span className="inline-block bg-gradient-to-br from-[var(--mm-accent)] via-[var(--mm-ring-middle)] to-[var(--mm-text)] bg-clip-text text-transparent">
-                    {heading}
+                    <MarkdownText content={heading} mode="inline" as="span" />
                   </span>
                 </h1>
               )}
@@ -170,7 +171,7 @@ export function HeroBlock({
                   )}
                   style={{ animationDelay: "0.28s", animationFillMode: "forwards" }}
                 >
-                  {subtitle}
+                  <MarkdownText content={subtitle} mode="inline" as="span" />
                 </p>
               )}
 
@@ -191,8 +192,9 @@ export function HeroBlock({
                       >
                         {Icon ? <Icon className="h-4 w-4 text-[var(--mm-accent)]" /> : null}
                         <span>
-                          {fact.value}
-                          {fact.label ? ` • ${fact.label}` : ""}
+                          <MarkdownText content={fact.value} mode="inline" as="span" />
+                          {fact.label ? " - " : ""}
+                          {fact.label ? <MarkdownText content={fact.label} mode="inline" as="span" /> : null}
                         </span>
                       </div>
                     );
@@ -212,7 +214,7 @@ export function HeroBlock({
                     <Link href={ctaHref} className="mm-ring-button">
                       <span>
                         <Scroll className="h-5 w-5" />
-                        {cta.label}
+                        <MarkdownText content={cta.label} mode="inline" as="span" />
                       </span>
                     </Link>
                   )}
@@ -223,7 +225,7 @@ export function HeroBlock({
                       rel={isExternalHref(secondaryHref) ? "noopener noreferrer" : undefined}
                       className="mm-outline-button inline-flex items-center px-4 py-2 text-sm font-semibold"
                     >
-                      {secondaryCta.label}
+                      <MarkdownText content={secondaryCta.label} mode="inline" as="span" />
                     </Link>
                   )}
                   {shouldShowFaq && (

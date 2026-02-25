@@ -307,6 +307,41 @@ export const ParticipationStepsBlockSchema = z.object({
     }),
 });
 
+export const RegistrationChecklistBlockSchema = z.object({
+    id: z.string(),
+    type: z.literal('REGISTRATION_CHECKLIST'),
+    data: withSection({
+        heading: z.string().optional(),
+        description: z.string().optional(),
+        note: z.string().optional(),
+        cta: CtaLinkSchema.optional(),
+        secondaryCta: CtaLinkSchema.optional(),
+        items: z.array(z.object({
+            title: z.string().optional(),
+            details: z.string().optional(),
+            required: z.boolean().optional(),
+        }).passthrough()).default([]),
+    }),
+});
+
+export const TracksOverviewBlockSchema = z.object({
+    id: z.string(),
+    type: z.literal('TRACKS_OVERVIEW'),
+    data: withSection({
+        heading: z.string().optional(),
+        description: z.string().optional(),
+        columns: z.number().int().min(1).max(3).default(3),
+        highlightFree: z.boolean().default(true),
+        tracks: z.array(z.object({
+            title: z.string().optional(),
+            audience: z.string().optional(),
+            focus: z.string().optional(),
+            seats: z.string().optional(),
+            cta: CtaLinkSchema.optional(),
+        }).passthrough()).default([]),
+    }),
+});
+
 export const ImageGalleryBlockSchema = z.object({
     id: z.string(),
     type: z.literal('IMAGE_GALLERY'),
@@ -625,6 +660,8 @@ export const BlockSchema = z.discriminatedUnion('type', [
     StatsBlockSchema,
     StepsBlockSchema,
     ParticipationStepsBlockSchema,
+    RegistrationChecklistBlockSchema,
+    TracksOverviewBlockSchema,
     ImageGalleryBlockSchema,
     ImageStackBlockSchema,
     PartnerStripBlockSchema,

@@ -4,6 +4,7 @@ import type { LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type ParticipationStep = NonNullable<Extract<Block, { type: "PARTICIPATION_STEPS" }>["data"]>["items"][number];
 type ParticipationStepsData = Extract<Block, { type: "PARTICIPATION_STEPS" }>["data"] & {
@@ -79,9 +80,12 @@ export function ParticipationStepsBlock({
       }}
     >
       {heading && (
-        <h2 className="microsite-display text-center text-2xl font-semibold tracking-tight text-[var(--mm-text)] md:text-4xl">
-          {heading}
-        </h2>
+        <MarkdownText
+          content={heading}
+          mode="inline"
+          as="h2"
+          className="microsite-display text-center text-2xl font-semibold tracking-tight text-[var(--mm-text)] md:text-4xl"
+        />
       )}
 
       {items.length > 0 && (
@@ -106,15 +110,19 @@ export function ParticipationStepsBlock({
                 </span>
 
                 {item.title && (
-                  <h3 className="microsite-display mt-4 text-xl font-semibold leading-tight text-[var(--mm-text)] md:text-2xl">
-                    {item.title}
-                  </h3>
+                  <MarkdownText
+                    content={item.title}
+                    mode="inline"
+                    as="h3"
+                    className="microsite-display mt-4 text-xl font-semibold leading-tight text-[var(--mm-text)] md:text-2xl"
+                  />
                 )}
 
                 {item.description && (
-                  <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[var(--mm-text-muted)] md:text-base">
-                    {item.description}
-                  </p>
+                  <MarkdownText
+                    content={item.description}
+                    className="mt-3 text-sm leading-relaxed text-[var(--mm-text-muted)] md:text-base"
+                  />
                 )}
 
                 {hasCta && (
@@ -129,7 +137,7 @@ export function ParticipationStepsBlock({
                       )}
                     >
                       {IconComponent ? <IconComponent className="h-4 w-4" /> : null}
-                      <span>{item.ctaLabel}</span>
+                      <MarkdownText content={item.ctaLabel} mode="inline" as="span" />
                     </Link>
                   </div>
                 )}

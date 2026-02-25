@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { cn } from "@/lib/utils";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type SpotlightSpeaker = NonNullable<Extract<Block, { type: "SPEAKER_SPOTLIGHT" }>["data"]>["speakers"][number];
 type SpotlightData = Extract<Block, { type: "SPEAKER_SPOTLIGHT" }>["data"] & {
@@ -79,14 +80,18 @@ export function SpeakerSpotlightBlock({
       {(data.heading || data.description) && (
         <div className="mb-10 max-w-3xl">
           {data.heading && (
-            <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-              {data.heading}
-            </h2>
+            <MarkdownText
+              content={data.heading}
+              mode="inline"
+              as="h2"
+              className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+            />
           )}
           {data.description && (
-            <p className="mt-3 text-sm leading-relaxed text-[var(--mm-text-muted)] md:text-base">
-              {data.description}
-            </p>
+            <MarkdownText
+              content={data.description}
+              className="mt-3 text-sm leading-relaxed text-[var(--mm-text-muted)] md:text-base"
+            />
           )}
         </div>
       )}
@@ -111,11 +116,11 @@ export function SpeakerSpotlightBlock({
                 </div>
                 <div className="min-w-0">
                   <h3 className="microsite-display truncate text-xl font-semibold text-[var(--mm-text)]">
-                    {speaker.name || "Speaker"}
+                    <MarkdownText content={speaker.name || "Speaker"} mode="inline" as="span" />
                   </h3>
                   {(speaker.role || speaker.organization) && (
                     <p className="truncate text-xs uppercase tracking-[0.14em] text-[var(--mm-accent)]">
-                      {[speaker.role, speaker.organization].filter(Boolean).join(" | ")}
+                      <MarkdownText content={[speaker.role, speaker.organization].filter(Boolean).join(" | ")} mode="inline" as="span" />
                     </p>
                   )}
                 </div>
@@ -123,7 +128,10 @@ export function SpeakerSpotlightBlock({
 
               {speaker.sessionTitle && (
                 <p className="mb-4 text-sm leading-relaxed text-[var(--mm-text-muted)]">
-                  Session: <span className="font-semibold text-[var(--mm-text)]">{speaker.sessionTitle}</span>
+                  Session:{" "}
+                  <span className="font-semibold text-[var(--mm-text)]">
+                    <MarkdownText content={speaker.sessionTitle} mode="inline" as="span" />
+                  </span>
                 </p>
               )}
 
@@ -136,7 +144,7 @@ export function SpeakerSpotlightBlock({
                     className="mm-outline-button inline-flex h-9 items-center gap-1.5 px-3 text-xs font-semibold"
                   >
                     <CalendarDays className="h-3.5 w-3.5" />
-                    Session
+                    <MarkdownText content="Session" mode="inline" as="span" />
                   </Link>
                 )}
                 <button
@@ -151,7 +159,7 @@ export function SpeakerSpotlightBlock({
                   )}
                 >
                   <UserRound className="h-3.5 w-3.5" />
-                  Quick Bio
+                  <MarkdownText content="Quick Bio" mode="inline" as="span" />
                 </button>
               </div>
             </article>
@@ -169,17 +177,18 @@ export function SpeakerSpotlightBlock({
           {activeSpeaker && (
             <div className="space-y-4">
               <DialogTitle className="microsite-display text-2xl font-semibold text-[var(--mm-text)]">
-                {activeSpeaker.name || "Speaker"}
+                <MarkdownText content={activeSpeaker.name || "Speaker"} mode="inline" as="span" />
               </DialogTitle>
               {(activeSpeaker.role || activeSpeaker.organization) && (
                 <DialogDescription className="text-xs uppercase tracking-[0.14em] text-[var(--mm-accent)]">
-                  {[activeSpeaker.role, activeSpeaker.organization].filter(Boolean).join(" | ")}
+                  <MarkdownText content={[activeSpeaker.role, activeSpeaker.organization].filter(Boolean).join(" | ")} mode="inline" as="span" />
                 </DialogDescription>
               )}
               {activeSpeaker.bio && (
-                <p className="text-sm leading-relaxed text-[var(--mm-text-muted)]">
-                  {activeSpeaker.bio}
-                </p>
+                <MarkdownText
+                  content={activeSpeaker.bio}
+                  className="text-sm leading-relaxed text-[var(--mm-text-muted)]"
+                />
               )}
               {activeSpeaker.sessionTitle && activeSpeaker.sessionHref && (
                 <Link
@@ -189,7 +198,7 @@ export function SpeakerSpotlightBlock({
                   className="mm-primary-button inline-flex h-10 items-center gap-2 px-4 text-sm font-semibold"
                 >
                   <CalendarDays className="h-4 w-4" />
-                  View Session
+                  <MarkdownText content="View Session" mode="inline" as="span" />
                 </Link>
               )}
             </div>

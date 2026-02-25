@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Timer } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type CountdownMilestone = {
   label?: string;
@@ -114,8 +115,20 @@ export function CountdownBlock({
         </div>
         {(title || subtitle) && (
           <div className="space-y-2">
-            {title && <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">{title}</h2>}
-            {subtitle && <p className="text-base text-[var(--mm-text-muted)] md:text-lg">{subtitle}</p>}
+            {title && (
+              <MarkdownText
+                content={title}
+                mode="inline"
+                as="h2"
+                className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+              />
+            )}
+            {subtitle && (
+              <MarkdownText
+                content={subtitle}
+                className="text-base text-[var(--mm-text-muted)] md:text-lg"
+              />
+            )}
           </div>
         )}
 
@@ -130,13 +143,16 @@ export function CountdownBlock({
           </div>
         ) : (
           <div className="rounded-2xl border border-[var(--mm-border)] bg-[var(--mm-soft)] px-4 py-5">
-            <p className="text-lg font-semibold text-[var(--mm-text)]">{endedLabel}</p>
+            <MarkdownText
+              content={endedLabel}
+              className="text-lg font-semibold text-[var(--mm-text)]"
+            />
           </div>
         )}
 
         {data.timezoneLabel && (
           <p className="text-xs uppercase tracking-[0.12em] text-[var(--mm-text-muted)]">
-            Timezone: {data.timezoneLabel}
+            Timezone: <MarkdownText content={data.timezoneLabel} mode="inline" as="span" />
           </p>
         )}
 
@@ -144,8 +160,9 @@ export function CountdownBlock({
           <div className="flex flex-wrap justify-center gap-2">
             {milestones.map((milestone, idx) => (
               <span key={idx} className="inline-flex rounded-full border border-[var(--mm-border)] bg-[var(--mm-surface)] px-3 py-1.5 text-xs font-medium text-[var(--mm-text-muted)]">
-                {milestone.label}
-                {milestone.value ? `: ${milestone.value}` : ""}
+                <MarkdownText content={milestone.label} mode="inline" as="span" />
+                {milestone.value ? ": " : ""}
+                {milestone.value ? <MarkdownText content={milestone.value} mode="inline" as="span" /> : null}
               </span>
             ))}
           </div>
@@ -160,7 +177,7 @@ export function CountdownBlock({
                 rel={isExternalHref(data.cta.href ?? "") ? "noopener noreferrer" : undefined}
                 className="mm-primary-button inline-flex h-10 items-center rounded-[var(--mm-button-radius)] px-4 text-sm font-semibold"
               >
-                {data.cta.label}
+                <MarkdownText content={data.cta.label} mode="inline" as="span" />
               </Link>
             )}
             {data.secondaryCta?.label && (
@@ -170,7 +187,7 @@ export function CountdownBlock({
                 rel={isExternalHref(data.secondaryCta.href ?? "") ? "noopener noreferrer" : undefined}
                 className="mm-outline-button inline-flex h-10 items-center rounded-[var(--mm-button-radius)] px-4 text-sm font-semibold"
               >
-                {data.secondaryCta.label}
+                <MarkdownText content={data.secondaryCta.label} mode="inline" as="span" />
               </Link>
             )}
           </div>

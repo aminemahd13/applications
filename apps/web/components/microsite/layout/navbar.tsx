@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { normalizeMicrositeBasePath, resolveMicrositeHref } from "./link-utils";
 import { resolveAssetUrl } from "../asset-url";
 import { usePathname } from "next/navigation";
+import { MarkdownText } from "../markdown-text";
 
 type NavigationSettings = MicrositeSettings["navigation"];
 
@@ -242,11 +243,11 @@ export function Navbar({
           )}
           <div className="min-w-0">
             <span className="block truncate text-base font-semibold tracking-tight text-[var(--mm-text)] sm:text-lg">
-              {siteName || "Math&Maroc"}
+              <MarkdownText content={siteName || "Math&Maroc"} mode="inline" as="span" />
             </span>
             {showTagline && tagline && (
               <span className="hidden max-w-[20rem] truncate text-[11px] uppercase tracking-[0.14em] text-[var(--mm-text-muted)] lg:block">
-                {tagline}
+                <MarkdownText content={tagline} mode="inline" as="span" />
               </span>
             )}
           </div>
@@ -262,7 +263,7 @@ export function Navbar({
                   href={resolveMicrositeHref(link.href, basePath)}
                   className="text-sm font-medium text-[var(--mm-text-muted)] transition-colors hover:text-[var(--mm-text)]"
                 >
-                  {link.label}
+                  <MarkdownText content={link.label} mode="inline" as="span" />
                 </Link>
               );
             }
@@ -286,7 +287,7 @@ export function Navbar({
                     setOpenDropdown((current) => (current === idx ? null : idx));
                   }}
                 >
-                  {link.label}
+                  <MarkdownText content={link.label} mode="inline" as="span" />
                   <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", openDropdown === idx ? "rotate-180" : "")} />
                 </button>
                 <div
@@ -306,7 +307,7 @@ export function Navbar({
                         href={resolveMicrositeHref(child.href, basePath)}
                         className="block rounded-lg px-3 py-2 text-sm text-[var(--mm-text-muted)] transition-colors hover:bg-[var(--mm-soft)] hover:text-[var(--mm-text)]"
                       >
-                        {child.label}
+                        <MarkdownText content={child.label} mode="inline" as="span" />
                       </Link>
                     ))}
                   </div>
@@ -331,7 +332,7 @@ export function Navbar({
               href={resolvedLoginHref}
               className="rounded-[var(--mm-button-radius)] border border-[var(--mm-border)] px-4 py-1.5 text-sm text-[var(--mm-text)] transition-colors hover:border-[var(--mm-accent)]"
             >
-              {loginLabel || "Se connecter"}
+              <MarkdownText content={loginLabel || "Se connecter"} mode="inline" as="span" />
             </Link>
           )}
           {cta && (
@@ -339,7 +340,7 @@ export function Navbar({
               href={resolveMicrositeHref(cta.href, basePath)}
               className={CTA_VARIANTS[cta.variant ?? "primary"]}
             >
-              {cta.label}
+              <MarkdownText content={cta.label} mode="inline" as="span" />
             </Link>
           )}
         </div>
@@ -370,7 +371,7 @@ export function Navbar({
                     className="flex min-h-11 flex-1 items-center rounded-md px-3 py-2 text-sm font-semibold text-[var(--mm-text)] transition-colors hover:bg-[var(--mm-surface)]"
                     onClick={() => setMobileMenuOpen(false)}
                   >
-                    {link.label}
+                    <MarkdownText content={link.label} mode="inline" as="span" />
                   </Link>
                   {hasChildren && (
                     <button
@@ -392,7 +393,7 @@ export function Navbar({
                         className="block min-h-10 rounded-lg px-3 py-2 text-sm text-[var(--mm-text-muted)] transition-colors hover:bg-[var(--mm-surface)] hover:text-[var(--mm-text)]"
                         onClick={() => setMobileMenuOpen(false)}
                       >
-                        {child.label}
+                        <MarkdownText content={child.label} mode="inline" as="span" />
                       </Link>
                     ))}
                   </div>
@@ -416,7 +417,7 @@ export function Navbar({
                 className="rounded-[var(--mm-button-radius)] border border-[var(--mm-border)] px-5 py-2 text-center text-sm font-medium text-[var(--mm-text)]"
                 onClick={() => setMobileMenuOpen(false)}
               >
-                {loginLabel || "Se connecter"}
+                <MarkdownText content={loginLabel || "Se connecter"} mode="inline" as="span" />
               </Link>
             )}
             {cta && (
@@ -425,7 +426,7 @@ export function Navbar({
                 className={cn("w-full text-center", CTA_VARIANTS[cta.variant ?? "primary"])}
                 onClick={() => setMobileMenuOpen(false)}
               >
-                {cta.label}
+                <MarkdownText content={cta.label} mode="inline" as="span" />
               </Link>
             )}
           </div>

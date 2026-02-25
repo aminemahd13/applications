@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Block } from "@event-platform/shared";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type LogoItem = NonNullable<Extract<Block, { type: "LOGO_CLOUD" }>["data"]>["logos"][number];
 type LogoRenderItem = LogoItem & { imageUrl?: string };
@@ -99,9 +100,12 @@ export function LogoCloudBlock({ block }: { block: Extract<Block, { type: 'LOGO_
       }}
     >
       {title && (
-        <h2 className="mb-10 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--mm-text-muted)]">
-          {title}
-        </h2>
+        <MarkdownText
+          content={title}
+          mode="inline"
+          as="h2"
+          className="mb-10 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--mm-text-muted)]"
+        />
       )}
 
       <div

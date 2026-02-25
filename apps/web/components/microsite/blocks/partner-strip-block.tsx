@@ -3,6 +3,7 @@ import type { Block } from "@event-platform/shared";
 import { cn } from "@/lib/utils";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type PartnerStripData = Extract<Block, { type: "PARTNER_STRIP" }>["data"] & {
   heading?: string;
@@ -64,14 +65,22 @@ export function PartnerStripBlock({
       containerClassName="space-y-4"
     >
       {heading && (
-        <p className="text-center text-xs font-semibold uppercase tracking-[0.18em] text-[var(--mm-text-muted)]">
-          {heading}
-        </p>
+        <MarkdownText
+          content={heading}
+          mode="inline"
+          as="p"
+          className="text-center text-xs font-semibold uppercase tracking-[0.18em] text-[var(--mm-text-muted)]"
+        />
       )}
       <div className="flex w-full flex-col items-center justify-between space-y-4 md:flex-row md:space-y-0">
         {grouped.map((group) => (
           <div key={group.label} className="flex items-center space-x-4">
-            <p className="text-sm text-[var(--mm-text-muted)]">{group.label}</p>
+            <MarkdownText
+              content={group.label}
+              mode="inline"
+              as="p"
+              className="text-sm text-[var(--mm-text-muted)]"
+            />
             <div className="flex items-center space-x-6">
               {group.entries.map((entry, index) => {
                 const logo = (

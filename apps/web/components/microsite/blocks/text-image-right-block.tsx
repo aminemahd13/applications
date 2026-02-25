@@ -4,6 +4,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
+import { MarkdownText } from "../markdown-text";
 
 type TextImageRightData = Extract<Block, { type: "TEXT_IMAGE_RIGHT" }>["data"] & {
   heading?: string;
@@ -49,14 +50,18 @@ export function TextImageRightBlock({ block }: { block: Extract<Block, { type: "
       <div className={cn("grid items-center gap-6 md:gap-10", hasImage ? "lg:grid-cols-2" : "max-w-3xl")}>
         <div className="space-y-4 md:space-y-5">
           {heading && (
-            <h2 className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-              {heading}
-            </h2>
+            <MarkdownText
+              content={heading}
+              mode="inline"
+              as="h2"
+              className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+            />
           )}
           {text && (
-            <p className="whitespace-pre-line text-base leading-relaxed text-[var(--mm-text-muted)] md:text-lg">
-              {text}
-            </p>
+            <MarkdownText
+              content={text}
+              className="text-base leading-relaxed text-[var(--mm-text-muted)] md:text-lg"
+            />
           )}
           {ctaLabel && ctaHref && (
             <div className="pt-1">
@@ -66,7 +71,7 @@ export function TextImageRightBlock({ block }: { block: Extract<Block, { type: "
                 rel={isExternalHref(ctaHref) ? "noopener noreferrer" : undefined}
                 className="mm-primary-button inline-flex h-10 items-center px-5 text-sm font-semibold"
               >
-                {ctaLabel}
+                <MarkdownText content={ctaLabel} mode="inline" as="span" />
               </Link>
             </div>
           )}
@@ -81,9 +86,11 @@ export function TextImageRightBlock({ block }: { block: Extract<Block, { type: "
               className="h-auto w-full rounded-xl object-cover"
             />
             {caption && (
-              <figcaption className="mt-2.5 text-sm text-[var(--mm-text-muted)]">
-                {caption}
-              </figcaption>
+              <MarkdownText
+                content={caption}
+                as="figcaption"
+                className="mt-2.5 text-sm text-[var(--mm-text-muted)]"
+              />
             )}
           </figure>
         )}

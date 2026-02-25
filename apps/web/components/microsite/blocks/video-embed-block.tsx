@@ -1,6 +1,7 @@
 import { Block } from "@event-platform/shared";
 import { BlockSection } from "./block-section";
 import { resolveAssetUrl } from "../asset-url";
+import { MarkdownText } from "../markdown-text";
 
 function toEmbedUrl(rawUrl: string): string {
   const url = rawUrl.trim();
@@ -64,9 +65,12 @@ export function VideoEmbedBlock({ block }: { block: Extract<Block, { type: "VIDE
       }}
     >
       {data.title && (
-        <h2 className="microsite-display mb-8 text-3xl font-semibold text-[var(--mm-text)] md:text-5xl">
-          {data.title}
-        </h2>
+        <MarkdownText
+          content={data.title}
+          mode="inline"
+          as="h2"
+          className="microsite-display mb-8 text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+        />
       )}
       <div className="aspect-video w-full overflow-hidden rounded-[1.6rem] border border-[var(--mm-border)] bg-black shadow-xl">
         {isDirect ? (
@@ -89,7 +93,7 @@ export function VideoEmbedBlock({ block }: { block: Extract<Block, { type: "VIDE
         )}
       </div>
       {data.caption && (
-        <p className="mt-4 text-sm text-[var(--mm-text-muted)]">{data.caption}</p>
+        <MarkdownText content={data.caption} className="mt-4 text-sm text-[var(--mm-text-muted)]" />
       )}
     </BlockSection>
   );
