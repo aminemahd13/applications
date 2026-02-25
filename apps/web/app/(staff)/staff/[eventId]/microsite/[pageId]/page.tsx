@@ -256,23 +256,6 @@ const PAGE_TEMPLATES: Array<{
 
 type StarterVariantId = "beginner" | "advanced";
 
-const STARTER_VARIANTS: Array<{
-  id: StarterVariantId;
-  label: string;
-  description: string;
-}> = [
-  {
-    id: "beginner",
-    label: "Beginner version",
-    description: "Simple and clear content with essential fields only.",
-  },
-  {
-    id: "advanced",
-    label: "Advanced version",
-    description: "Richer structure with stronger storytelling and detail.",
-  },
-];
-
 const MARKDOWN_HELP_SNIPPETS: Array<{
   id: string;
   label: string;
@@ -2171,20 +2154,6 @@ function BlockInspector({
   };
   const updateFields = (patch: Record<string, unknown>) => {
     onChange({ ...data, ...patch });
-  };
-
-  const applyStarterVariant = (variant: StarterVariantId) => {
-    const starterData = getStarterData(block.type, variant);
-    const currentSection = data.section as SectionStyle | undefined;
-    onChange({
-      ...starterData,
-      ...(currentSection ? { section: currentSection } : {}),
-    });
-    toast.success(
-      variant === "beginner"
-        ? "Beginner starter applied"
-        : "Advanced starter applied",
-    );
   };
 
   const copyMarkdownSnippet = async (snippet: string) => {
@@ -4799,27 +4768,6 @@ function BlockInspector({
     <div className="space-y-4 pb-6">
       <div className="rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
         All microsite text fields support Markdown (headings, lists, links, emphasis, inline code).
-      </div>
-      <div className="rounded-lg border bg-muted/20 p-3">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Section starter templates
-        </p>
-        <div className="mt-2 grid gap-2">
-          {STARTER_VARIANTS.map((variant) => (
-            <Button
-              key={`${block.type}-${variant.id}`}
-              type="button"
-              variant="outline"
-              className="h-auto justify-start px-3 py-2 text-left"
-              onClick={() => applyStarterVariant(variant.id)}
-            >
-              <span className="block text-sm font-medium">{variant.label}</span>
-              <span className="mt-0.5 block text-xs text-muted-foreground">
-                {variant.description}
-              </span>
-            </Button>
-          ))}
-        </div>
       </div>
       <Accordion type="multiple" defaultValue={["content"]} className="w-full space-y-3">
         <AccordionItem value="content" className="rounded-xl border bg-card px-3">
