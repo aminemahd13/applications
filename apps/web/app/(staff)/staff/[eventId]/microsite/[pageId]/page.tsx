@@ -724,6 +724,9 @@ function getDefaultData(type: BlockType): BlockData {
         imageUrl: "",
         alt: "",
         caption: "",
+        directorMode: true,
+        frameIntervalMs: 4200,
+        imageFrames: [],
         cta: { label: "Explore details", href: "#" },
       };
     case "TEXT_IMAGE_RIGHT":
@@ -733,6 +736,9 @@ function getDefaultData(type: BlockType): BlockData {
         imageUrl: "",
         alt: "",
         caption: "",
+        directorMode: true,
+        frameIntervalMs: 4200,
+        imageFrames: [],
         cta: { label: "Learn more", href: "#" },
       };
     case "TESTIMONIALS":
@@ -1030,6 +1036,38 @@ function getStarterData(type: BlockType, variant: StarterVariantId): BlockData {
             cta: { label: "Rules", href: "#" },
           },
         ],
+      };
+    case "TEXT_IMAGE_LEFT":
+      return {
+        heading: "What you will learn",
+        text: "Experience a guided progression from core methods to olympiad problem-solving.\n\nEach module combines theory, timed drills, and mentor feedback.",
+        imageUrl: "",
+        alt: "",
+        caption: "Learning journey snapshots",
+        directorMode: true,
+        frameIntervalMs: 4200,
+        imageFrames: [
+          { name: "Core workshop", assetKey: "", animation: "pan-left" },
+          { name: "Group problem session", assetKey: "", animation: "parallax" },
+          { name: "Mentor review", assetKey: "", animation: "split-reveal" },
+        ],
+        cta: { label: "Explore modules", href: "#program" },
+      };
+    case "TEXT_IMAGE_RIGHT":
+      return {
+        heading: "Outcomes and next steps",
+        text: "Top performers move forward to advanced tracks and national preparation rounds.\n\nAll participants receive structured feedback and practice resources.",
+        imageUrl: "",
+        alt: "",
+        caption: "From training to outcomes",
+        directorMode: true,
+        frameIntervalMs: 4200,
+        imageFrames: [
+          { name: "Mock test phase", assetKey: "", animation: "zoom-in" },
+          { name: "Selection review", assetKey: "", animation: "pan-right" },
+          { name: "Award and recognition", assetKey: "", animation: "split-reveal" },
+        ],
+        cta: { label: "See outcomes", href: "#results" },
       };
     case "RANKS":
       return {
@@ -4368,6 +4406,14 @@ function BlockInspector({
     case "TEXT_IMAGE_LEFT":
     case "TEXT_IMAGE_RIGHT": {
       const imageSideLabel = block.type === "TEXT_IMAGE_LEFT" ? "Image (left column)" : "Image (right column)";
+      const imageFrames = ((data.imageFrames as Record<string, unknown>[]) ?? []).map((frame) => ({
+        name: String(frame.name ?? ""),
+        assetKey: String(frame.assetKey ?? frame.url ?? ""),
+        alt: String(frame.alt ?? ""),
+        href: String(frame.href ?? ""),
+        caption: String(frame.caption ?? ""),
+        animation: String(frame.animation ?? ""),
+      }));
       content = (
         <div className="space-y-4">
           <div className="space-y-2">
@@ -4386,7 +4432,7 @@ function BlockInspector({
             />
           </div>
           <div className="space-y-2">
-            <Label>{imageSideLabel}</Label>
+            <Label>{imageSideLabel} (Fallback)</Label>
             <div className="flex items-center gap-2">
               <Input
                 type="file"
@@ -4438,6 +4484,76 @@ function BlockInspector({
               />
             </div>
           </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-2">
+              <Label>Director Mode</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  size="sm"
+                  variant={(data.directorMode as boolean | undefined) !== false ? "default" : "outline"}
+                  onClick={() => updateField("directorMode", true)}
+                >
+                  On
+                </Button>
+                <Button
+                  size="sm"
+                  variant={(data.directorMode as boolean | undefined) === false ? "default" : "outline"}
+                  onClick={() => updateField("directorMode", false)}
+                >
+                  Off
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Frame Interval (ms)</Label>
+              <Input
+                type="number"
+                min={1800}
+                max={12000}
+                value={(data.frameIntervalMs as number | undefined) ?? ""}
+                onChange={(e) => updateField("frameIntervalMs", parseOptionalBoundedInt(e.target.value, 1800, 12000))}
+                placeholder="4200"
+              />
+            </div>
+          </div>
+          <Separator />
+          <ArrayItemsEditor
+            heading="Image frames slideshow"
+            items={imageFrames}
+            onItemsChange={(items) =>
+              updateField(
+                "imageFrames",
+                items.map((item) => ({
+                  name: item.name,
+                  assetKey: item.assetKey,
+                  alt: item.alt,
+                  href: item.href,
+                  caption: item.caption,
+                  animation: item.animation,
+                })),
+              )
+            }
+            fields={[
+              { key: "name", label: "Frame name" },
+              { key: "assetKey", label: "Frame image", type: "image", placeholder: "Asset key or URL" },
+              { key: "alt", label: "Alt text" },
+              { key: "caption", label: "Caption" },
+              { key: "href", label: "Frame link (optional)" },
+              { key: "animation", label: "Animation (pan-left|pan-right|zoom-in|parallax|split-reveal)" },
+            ]}
+            newItem={{
+              name: "Frame",
+              assetKey: "",
+              alt: "",
+              caption: "",
+              href: "",
+              animation: "zoom-in",
+            }}
+            uploadAsset={uploadAsset}
+            openMediaLibrary={openMediaLibrary}
+            reorderable
+          />
+          <Separator />
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-2">
               <Label>CTA label</Label>

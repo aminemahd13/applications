@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { resolveAssetUrl } from "../asset-url";
 import { BlockSection } from "./block-section";
 import { MarkdownText } from "../markdown-text";
+import { TextImageMediaFrame } from "./text-image-media-frame";
 
 type TextImageLeftData = Extract<Block, { type: "TEXT_IMAGE_LEFT" }>["data"] & {
   heading?: string;
@@ -13,6 +14,17 @@ type TextImageLeftData = Extract<Block, { type: "TEXT_IMAGE_LEFT" }>["data"] & {
   assetKey?: string;
   alt?: string;
   caption?: string;
+  directorMode?: boolean;
+  frameIntervalMs?: number;
+  imageFrames?: Array<{
+    name?: string;
+    assetKey?: string;
+    url?: string;
+    alt?: string;
+    href?: string;
+    caption?: string;
+    animation?: string;
+  }>;
   cta?: {
     label?: string;
     href?: string;
@@ -32,7 +44,15 @@ export function TextImageLeftBlock({ block }: { block: Extract<Block, { type: "T
   const caption = String(data.caption ?? "").trim();
   const ctaLabel = String(data.cta?.label ?? "").trim();
   const ctaHref = String(data.cta?.href ?? "").trim();
-  const hasImage = Boolean(imageSrc);
+  const imageFrames = (data.imageFrames ?? []).map((frame) => ({
+    name: String(frame.name ?? "").trim(),
+    src: resolveAssetUrl(String(frame.assetKey ?? frame.url ?? "").trim()),
+    alt: String(frame.alt ?? "").trim(),
+    href: String(frame.href ?? "").trim(),
+    caption: String(frame.caption ?? "").trim(),
+    animation: String(frame.animation ?? "").trim(),
+  }));
+  const hasImage = Boolean(imageSrc || imageFrames.some((frame) => frame.src));
 
   if (!heading && !text && !hasImage) return null;
 
@@ -47,23 +67,17 @@ export function TextImageLeftBlock({ block }: { block: Extract<Block, { type: "T
         backgroundClass: "bg-transparent",
       }}
     >
-      <div className={cn("grid items-center gap-6 md:gap-10", hasImage ? "lg:grid-cols-2" : "max-w-3xl")}>
+        <div className={cn("grid items-center gap-6 md:gap-10", hasImage ? "lg:grid-cols-2" : "max-w-3xl")}>
         {hasImage && (
-          <figure className="overflow-hidden rounded-[1.6rem] border border-[var(--mm-border)] bg-[var(--mm-surface)] p-3 shadow-[0_20px_50px_rgba(15,23,42,0.14)] md:p-4">
-            <img
-              src={imageSrc}
-              alt={alt || heading || "Section visual"}
-              loading="lazy"
-              className="h-auto w-full rounded-xl object-cover"
-            />
-            {caption && (
-              <MarkdownText
-                content={caption}
-                as="figcaption"
-                className="mt-2.5 text-sm text-[var(--mm-text-muted)]"
-              />
-            )}
-          </figure>
+          <TextImageMediaFrame
+            fallbackSrc={imageSrc}
+            fallbackAlt={alt}
+            fallbackCaption={caption}
+            frames={imageFrames}
+            directorMode={data.directorMode}
+            frameIntervalMs={data.frameIntervalMs}
+            heading={heading}
+          />
         )}
 
         <div className="space-y-4 md:space-y-5">
