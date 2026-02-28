@@ -605,6 +605,23 @@ export const EmbedDocBlockSchema = z.object({
     }),
 });
 
+export const DocumentViewerBlockSchema = z.object({
+    id: z.string(),
+    type: z.literal('DOCUMENT_VIEWER'),
+    data: withSection({
+        title: z.string().optional(),
+        url: z.string().optional(),
+        caption: z.string().optional(),
+        height: z.number().int().min(400).max(1400).default(720),
+        showToolbar: z.boolean().default(true),
+        showPageNav: z.boolean().default(true),
+        showZoom: z.boolean().default(true),
+        showDownload: z.boolean().default(false),
+        showFullscreen: z.boolean().default(true),
+        initialZoom: z.enum(['page-width', 'page-fit', '50', '75', '100', '125', '150']).default('page-width'),
+    }),
+});
+
 export const TextImageRightBlockSchema = z.object({
     id: z.string(),
     type: z.literal('TEXT_IMAGE_RIGHT'),
@@ -749,6 +766,7 @@ export const BlockSchema = z.discriminatedUnion('type', [
     TabsBlockSchema,
     VideoEmbedBlockSchema,
     EmbedDocBlockSchema,
+    DocumentViewerBlockSchema,
     SeparatorBlockSchema,
     TextBlockSchema,
     TextImageLeftBlockSchema,
