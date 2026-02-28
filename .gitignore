@@ -12,7 +12,7 @@ dist/
 out/
 coverage/
 *.tsbuildinfo
-
+ideas.md
 # Caches
 .turbo/
 .eslintcache
