@@ -8,6 +8,7 @@ import {
   Globe,
   Plus,
   Eye,
+  ImageIcon,
   Trash2,
   GripVertical,
   Loader2,
@@ -541,6 +542,22 @@ export default function MicrositePage_() {
           <Button variant="outline" onClick={() => setShowCreatePage(true)}>
             <Plus className="mr-1.5 h-4 w-4" />
             New page
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() =>
+              openMediaLibrary("all", async (assetKey) => {
+                try {
+                  await navigator.clipboard.writeText(assetKey);
+                  toast.success("Asset key copied");
+                } catch {
+                  toast.success("Asset selected");
+                }
+              })
+            }
+          >
+            <ImageIcon className="mr-1.5 h-4 w-4" />
+            Media library
           </Button>
           <div className="flex items-center gap-2 rounded-md border px-3 py-1.5">
             <Label htmlFor="microsite-auto-publish-toggle" className="text-xs text-muted-foreground">
