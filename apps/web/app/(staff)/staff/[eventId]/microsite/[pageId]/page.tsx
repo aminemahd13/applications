@@ -116,6 +116,7 @@ type BlockType =
   | "HERO"
   | "ANNOUNCEMENT"
   | "COUNTDOWN"
+  | "TEXT"
   | "RICH_TEXT"
   | "IMAGE"
   | "GRID"
@@ -186,6 +187,7 @@ const BLOCK_CATALOG: {
   { type: "HERO", label: "Hero", description: "Large heading with CTA", icon: Sparkles, category: "Layout" },
   { type: "ANNOUNCEMENT", label: "Announcement", description: "Urgent updates, badges, and quick actions", icon: Megaphone, category: "Conversion" },
   { type: "COUNTDOWN", label: "Countdown", description: "Live countdown to launch, opening, or deadline", icon: Timer, category: "Conversion" },
+  { type: "TEXT", label: "Text", description: "Heading, paragraph, and optional CTA", icon: Type, category: "Content" },
   { type: "RICH_TEXT", label: "Rich Text", description: "Formatted text content", icon: Type, category: "Content" },
   { type: "IMAGE", label: "Image", description: "Single image with caption", icon: Image, category: "Content" },
   { type: "GRID", label: "Info Grid", description: "Simple grid of text tiles", icon: LayoutGrid, category: "Layout" },
@@ -371,6 +373,12 @@ function getDefaultData(type: BlockType): BlockData {
         ],
         cta: { label: "Start application", href: "#" },
         secondaryCta: { label: "Download program brief", href: "#" },
+      };
+    case "TEXT":
+      return {
+        heading: "About this event",
+        text: "Use this section for plain narrative content without card styling.\n\nAdd a concise explanation of your program, audience, or next steps.",
+        cta: { label: "Learn more", href: "#" },
       };
     case "RICH_TEXT":
       return { content: "<p>Start writing your content here...</p>" };
@@ -2688,6 +2696,48 @@ function BlockInspector({
             rows={12}
             className="font-mono text-xs"
           />
+        </div>
+      );
+      break;
+
+    case "TEXT":
+      content = (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Heading</Label>
+            <Input
+              value={(data.heading as string) ?? ""}
+              onChange={(e) => updateField("heading", e.target.value)}
+              placeholder="Section heading"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Text</Label>
+            <Textarea
+              value={(data.text as string) ?? ""}
+              onChange={(e) => updateField("text", e.target.value)}
+              rows={6}
+              placeholder="Write the section content..."
+            />
+          </div>
+          <Separator />
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Optional CTA</p>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Label</Label>
+              <Input
+                value={(data.cta as { label?: string })?.label ?? ""}
+                onChange={(e) => updateField("cta", { ...(data.cta as object ?? {}), label: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Link</Label>
+              <Input
+                value={(data.cta as { href?: string })?.href ?? ""}
+                onChange={(e) => updateField("cta", { ...(data.cta as object ?? {}), href: e.target.value })}
+              />
+            </div>
+          </div>
         </div>
       );
       break;
