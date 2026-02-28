@@ -145,6 +145,7 @@ type BlockType =
   | "TABS"
   | "VIDEO_EMBED"
   | "EMBED_DOC"
+  | "DOCUMENT_VIEWER"
   | "SEPARATOR"
   | "TEXT_IMAGE_LEFT"
   | "TEXT_IMAGE_RIGHT"
@@ -216,6 +217,7 @@ const BLOCK_CATALOG: {
   { type: "TABS", label: "Tabs", description: "Tabbed content", icon: Columns, category: "Content" },
   { type: "VIDEO_EMBED", label: "Video", description: "Embed YouTube or Vimeo", icon: Video, category: "Media" },
   { type: "EMBED_DOC", label: "Embed Doc", description: "Inline PDF/DOC viewer for brochures and handbooks", icon: FileText, category: "Content" },
+  { type: "DOCUMENT_VIEWER", label: "PDF Viewer", description: "Interactive PDF reader with page nav, zoom, and download", icon: BookOpen, category: "Media" },
   { type: "SEPARATOR", label: "Separator", description: "Visual divider with line, dash, dots, or gradient", icon: Minus, category: "Layout" },
   { type: "TEXT_IMAGE_LEFT", label: "Image Left + Text", description: "Two-column section with image on the left", icon: PanelLeft, category: "Layout" },
   { type: "TEXT_IMAGE_RIGHT", label: "Text + Image Right", description: "Two-column text section with image on the right", icon: PanelRight, category: "Layout" },
@@ -700,6 +702,19 @@ function getDefaultData(type: BlockType): BlockData {
         url: "",
         caption: "Upload a brochure, rulebook, or handbook to preview it inline.",
         height: 720,
+      };
+    case "DOCUMENT_VIEWER":
+      return {
+        title: "Document Viewer",
+        url: "",
+        caption: "",
+        height: 720,
+        showToolbar: true,
+        showPageNav: true,
+        showZoom: true,
+        showDownload: false,
+        showFullscreen: true,
+        initialZoom: "page-width",
       };
     case "SEPARATOR":
       return {
@@ -4358,6 +4373,129 @@ function BlockInspector({
               onChange={(e) => updateField("caption", e.target.value)}
               rows={2}
             />
+          </div>
+        </div>
+      );
+      break;
+
+    case "DOCUMENT_VIEWER":
+      content = (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Section title</Label>
+            <Input
+              value={(data.title as string) ?? ""}
+              onChange={(e) => updateField("title", e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Document URL / Asset key</Label>
+            <Input
+              value={(data.url as string) ?? ""}
+              onChange={(e) => updateField("url", e.target.value)}
+              placeholder="https://... or events/{eventId}/microsite/file.pdf"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Upload PDF</Label>
+            <Input
+              type="file"
+              accept=".pdf,application/pdf"
+              onChange={async (e) => {
+                const input = e.currentTarget;
+                const file = input.files?.[0];
+                if (!file) return;
+                try {
+                  const src = uploadAsset ? await uploadAsset(file) : await fileToDataUrl(file);
+                  const inferredTitle = file.name.replace(/\.[a-zA-Z0-9]+$/, "");
+                  updateFields({
+                    url: src,
+                    title: (data.title as string) || inferredTitle,
+                  });
+                } catch {
+                  toast.error("PDF upload failed");
+                } finally {
+                  input.value = "";
+                }
+              }}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              PDF files only. For Office docs, use the Embed Doc block.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>Viewer height (px)</Label>
+            <Input
+              type="number"
+              min={400}
+              max={1400}
+              value={String(data.height ?? 720)}
+              onChange={(e) => updateField("height", Number(e.target.value || 720))}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Caption</Label>
+            <Textarea
+              value={(data.caption as string) ?? ""}
+              onChange={(e) => updateField("caption", e.target.value)}
+              rows={2}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Initial zoom</Label>
+            <select
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+              value={(data.initialZoom as string) ?? "page-width"}
+              onChange={(e) => updateField("initialZoom", e.target.value)}
+            >
+              <option value="page-width">Fit to width</option>
+              <option value="page-fit">Fit to page</option>
+              <option value="75">75%</option>
+              <option value="100">100%</option>
+              <option value="125">125%</option>
+              <option value="150">150%</option>
+            </select>
+          </div>
+          <Separator />
+          <div className="space-y-3">
+            <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Toolbar options
+            </Label>
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={(data.showToolbar as boolean) !== false}
+                onCheckedChange={(v) => updateField("showToolbar", v)}
+              />
+              <Label className="text-xs">Show toolbar</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={(data.showPageNav as boolean) !== false}
+                onCheckedChange={(v) => updateField("showPageNav", v)}
+              />
+              <Label className="text-xs">Page navigation</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={(data.showZoom as boolean) !== false}
+                onCheckedChange={(v) => updateField("showZoom", v)}
+              />
+              <Label className="text-xs">Zoom controls</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={(data.showDownload as boolean) === true}
+                onCheckedChange={(v) => updateField("showDownload", v)}
+              />
+              <Label className="text-xs">Download button</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={(data.showFullscreen as boolean) !== false}
+                onCheckedChange={(v) => updateField("showFullscreen", v)}
+              />
+              <Label className="text-xs">Fullscreen toggle</Label>
+            </div>
           </div>
         </div>
       );

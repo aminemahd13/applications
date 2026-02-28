@@ -22,6 +22,7 @@ import { ImageBlock } from "./blocks/image-block";
 import { GridBlock } from "./blocks/grid-block";
 import { VideoEmbedBlock } from "./blocks/video-embed-block";
 import { EmbedDocBlock } from "./blocks/embed-doc-block";
+import { DocumentViewerBlock } from "./blocks/document-viewer-block";
 import { SeparatorBlock } from "./blocks/separator-block";
 import { TextBlock } from "./blocks/text-block";
 import { TextImageLeftBlock } from "./blocks/text-image-left-block";
@@ -140,6 +141,8 @@ function SingleBlock({
       return <VideoEmbedBlock block={block} />;
     case "EMBED_DOC":
       return <EmbedDocBlock block={block} />;
+    case "DOCUMENT_VIEWER":
+      return <DocumentViewerBlock block={block as Extract<Block, { type: "DOCUMENT_VIEWER" }>} />;
     case "SEPARATOR":
       return <SeparatorBlock block={block as Extract<Block, { type: "SEPARATOR" }>} />;
     case "TEXT":
