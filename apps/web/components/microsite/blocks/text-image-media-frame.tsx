@@ -175,7 +175,14 @@ export function TextImageMediaFrame({
             />
           );
           return (
-            <div key={`${frame.src}-${index}`} className={cn("mm-hero-slide", isActive ? "is-active" : "")}>
+            <div
+              key={`${frame.src}-${index}`}
+              className={cn(
+                "mm-hero-slide",
+                `mm-hero-card-motion-${frame.animation}`,
+                isActive ? "is-active" : "",
+              )}
+            >
               {frame.href ? (
                 <Link
                   href={frame.href}

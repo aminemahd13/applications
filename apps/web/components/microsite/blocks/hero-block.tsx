@@ -410,7 +410,11 @@ export function HeroBlock({
                       return (
                         <div
                           key={`${frame.src}-${frameIndex}`}
-                          className={cn("mm-hero-slide", isActive ? "is-active" : "")}
+                          className={cn(
+                            "mm-hero-slide",
+                            `mm-hero-card-motion-${frame.animation}`,
+                            isActive ? "is-active" : "",
+                          )}
                         >
                           {frame.href ? (
                             <Link
