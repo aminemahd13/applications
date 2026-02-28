@@ -181,7 +181,7 @@ export function MediaLibraryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[96vw] max-w-[90rem]">
+      <DialogContent className="w-[98vw] max-w-[98vw] sm:max-w-[98vw] xl:max-w-[110rem]">
         <DialogHeader>
           <DialogTitle>Media Library</DialogTitle>
           <DialogDescription>
@@ -189,8 +189,8 @@ export function MediaLibraryDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-          <div className="relative min-w-0 flex-1">
+        <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center">
+          <div className="relative min-w-0 flex-1 lg:min-w-[280px]">
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -198,7 +198,7 @@ export function MediaLibraryDialog({
             />
           </div>
           {kind === "all" && (
-            <div className="flex items-center gap-1 rounded-md border bg-background p-1">
+            <div className="flex shrink-0 items-center gap-1 rounded-md border bg-background p-1">
               {([
                 { value: "all", label: "All" },
                 { value: "image", label: "Images" },
@@ -218,7 +218,7 @@ export function MediaLibraryDialog({
             </div>
           )}
           <Select value={sortMode} onValueChange={(value) => setSortMode(value as SortMode)}>
-            <SelectTrigger className="w-full lg:w-[170px]">
+            <SelectTrigger className="w-full lg:w-[190px] lg:shrink-0">
               <SelectValue placeholder="Sort by" />
             </SelectTrigger>
             <SelectContent>
@@ -260,7 +260,7 @@ export function MediaLibraryDialog({
           {filtered.length} result{filtered.length === 1 ? "" : "s"}
         </p>
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]">
           <ScrollArea className="h-[440px] rounded-lg border">
             {isLoading ? (
               <div className="flex h-full items-center justify-center text-muted-foreground">
