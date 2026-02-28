@@ -222,15 +222,27 @@ export class WorkflowService {
       throw new BadRequestException('Duplicate step IDs in reorder request');
     }
 
-    // Update positions in transaction
-    await this.prisma.$transaction(
-      stepIds.map((id, index) =>
+    // Two-phase reindex avoids unique(event_id, step_index) collisions while swapping.
+    const maxExistingIndex = steps.reduce(
+      (max, step) => Math.max(max, step.step_index),
+      -1,
+    );
+    const tempBase = maxExistingIndex + stepIds.length + 1;
+
+    await this.prisma.$transaction([
+      ...stepIds.map((id, index) =>
+        this.prisma.workflow_steps.update({
+          where: { id },
+          data: { step_index: tempBase + index, updated_at: new Date() },
+        }),
+      ),
+      ...stepIds.map((id, index) =>
         this.prisma.workflow_steps.update({
           where: { id },
           data: { step_index: index, updated_at: new Date() },
         }),
       ),
-    );
+    ]);
 
     return this.getWorkflow(eventId);
   }
