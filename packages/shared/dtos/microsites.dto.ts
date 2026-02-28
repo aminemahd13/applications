@@ -630,6 +630,16 @@ export const TextImageRightBlockSchema = z.object({
     }),
 });
 
+export const TextBlockSchema = z.object({
+    id: z.string(),
+    type: z.literal('TEXT'),
+    data: withSection({
+        heading: z.string().optional(),
+        text: z.string().optional(),
+        cta: CtaLinkSchema.optional(),
+    }),
+});
+
 export const TextImageLeftBlockSchema = z.object({
     id: z.string(),
     type: z.literal('TEXT_IMAGE_LEFT'),
@@ -740,6 +750,7 @@ export const BlockSchema = z.discriminatedUnion('type', [
     VideoEmbedBlockSchema,
     EmbedDocBlockSchema,
     SeparatorBlockSchema,
+    TextBlockSchema,
     TextImageLeftBlockSchema,
     TextImageRightBlockSchema,
     TestimonialsBlockSchema,
