@@ -32,7 +32,7 @@ export function RichTextBlock({ block }: { block: Extract<Block, { type: "RICH_T
         align: "left",
         backgroundClass: "bg-transparent",
       }}
-      containerClassName="microsite-surface p-6 md:p-8 prose prose-zinc prose-lg prose-headings:font-semibold prose-a:text-[var(--mm-accent)] prose-img:rounded-xl"
+      containerClassName="microsite-surface p-6 md:p-8 prose prose-zinc prose-lg prose-headings:font-semibold prose-a:font-medium prose-a:text-[var(--mm-accent)] prose-a:underline prose-a:underline-offset-4 prose-img:rounded-xl"
     >
       <div dangerouslySetInnerHTML={{ __html: htmlContent }} />
     </BlockSection>
