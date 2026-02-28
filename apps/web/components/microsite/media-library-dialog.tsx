@@ -181,7 +181,7 @@ export function MediaLibraryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl">
+      <DialogContent className="w-[96vw] max-w-[90rem]">
         <DialogHeader>
           <DialogTitle>Media Library</DialogTitle>
           <DialogDescription>
@@ -260,7 +260,7 @@ export function MediaLibraryDialog({
           {filtered.length} result{filtered.length === 1 ? "" : "s"}
         </p>
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
           <ScrollArea className="h-[440px] rounded-lg border">
             {isLoading ? (
               <div className="flex h-full items-center justify-center text-muted-foreground">
