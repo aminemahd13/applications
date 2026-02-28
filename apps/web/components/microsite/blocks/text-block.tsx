@@ -2,6 +2,7 @@ import { Block } from "@event-platform/shared";
 import Link from "next/link";
 import { BlockSection } from "./block-section";
 import { MarkdownText } from "../markdown-text";
+import { cn } from "@/lib/utils";
 
 function isExternalHref(href: string): boolean {
   return href.startsWith("http://") || href.startsWith("https://");
@@ -14,11 +15,18 @@ export function TextBlock({
   block: Extract<Block, { type: "TEXT" }>;
   isPreview?: boolean;
 }) {
-  const data = (block.data || {}) as { heading?: string; text?: string; cta?: { label?: string; href?: string } };
+  const data = (block.data || {}) as {
+    heading?: string;
+    text?: string;
+    cta?: { label?: string; href?: string };
+    section?: { align?: "left" | "center" | "right" };
+  };
   const heading = String(data.heading ?? "").trim();
   const text = String(data.text ?? "").trim();
   const ctaLabel = String(data.cta?.label ?? "").trim();
   const ctaHref = String(data.cta?.href ?? "").trim();
+  const align = data.section?.align ?? "left";
+  const wrapperAlignClass = align === "center" ? "mx-auto" : align === "right" ? "ml-auto" : "";
 
   if (!heading && !text && !isPreview) return null;
 
@@ -33,7 +41,7 @@ export function TextBlock({
         backgroundClass: "bg-transparent",
       }}
     >
-      <div className="max-w-3xl space-y-4 md:space-y-5">
+      <div className={cn("max-w-3xl space-y-4 md:space-y-5", wrapperAlignClass)}>
         {(heading || isPreview) && (
           <MarkdownText
             content={heading || "Text block heading"}
