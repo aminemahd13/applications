@@ -11,6 +11,7 @@ import {
 } from '@event-platform/schemas';
 import { cn } from '../../lib/utils';
 import { FileUpload, type FileUploadValue } from './FileUpload';
+import { FormMarkdown } from './form-markdown';
 
 type FormValues = Record<string, unknown>;
 
@@ -57,14 +58,19 @@ export function FormRenderer({
       {normalizedDefinition.sections.map((section) => (
         <div key={section.id} className="space-y-4 border p-4 rounded-lg">
           <h3 className="text-xl font-semibold">{section.title}</h3>
-          {section.description && <p className="text-gray-500">{section.description}</p>}
+          {section.description && (
+            <FormMarkdown
+              content={section.description}
+              className="text-gray-500 [&_p]:my-0"
+            />
+          )}
           
           <div className="grid gap-4">
             {section.fields.map((field) => {
               if (field.type === FieldType.INFO_TEXT) {
                   return (
-                      <div key={field.id} className="prose">
-                          {field.label}
+                      <div key={field.id} className="prose prose-sm max-w-none text-muted-foreground">
+                          <FormMarkdown content={field.ui?.description || field.label} />
                       </div>
                   );
               }
@@ -193,7 +199,12 @@ export function FormRenderer({
                     />
                   )}
 
-                  {field.ui?.description && <p className="text-sm text-gray-500">{field.ui.description}</p>}
+                  {field.ui?.description && (
+                    <FormMarkdown
+                      content={field.ui.description}
+                      className="text-sm text-gray-500 [&_p]:my-0"
+                    />
+                  )}
                   {error && <p className="text-sm text-red-500">{error}</p>}
                 </div>
               );

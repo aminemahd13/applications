@@ -34,6 +34,7 @@ import { ApiError, apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { sanitizeHtml } from "@/lib/sanitize";
 import { FileUpload, type FileUploadValue } from "@/components/forms/FileUpload";
+import { FormMarkdown } from "@/components/forms/form-markdown";
 import {
   ConditionMode,
   ConditionOperator,
@@ -1232,7 +1233,10 @@ export default function StepFormPage() {
           <CardHeader>
             <CardTitle className="text-base">{section.title}</CardTitle>
             {section.description && (
-              <p className="text-sm text-muted-foreground">{section.description}</p>
+              <FormMarkdown
+                content={section.description}
+                className="text-sm text-muted-foreground [&_p]:my-0"
+              />
             )}
           </CardHeader>
           <CardContent className="space-y-5">
@@ -1274,9 +1278,10 @@ export default function StepFormPage() {
                       )}
                     </Label>
                     {field.description && (
-                      <p className="text-xs text-muted-foreground">
-                        {field.description}
-                      </p>
+                      <FormMarkdown
+                        content={field.description}
+                        className="text-xs text-muted-foreground [&_p]:my-0"
+                      />
                     )}
 
                     {/* Field render by type */}
@@ -1453,7 +1458,10 @@ export default function StepFormPage() {
 
                     {field.type === "INFO_TEXT" && (
                       <div className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
-                        {field.description}
+                        <FormMarkdown
+                          content={field.description}
+                          className="text-sm text-muted-foreground [&_p]:my-0"
+                        />
                       </div>
                     )}
 
