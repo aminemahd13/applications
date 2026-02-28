@@ -2,9 +2,10 @@
 
 /* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { MarkdownText } from "../markdown-text";
+import { resolveAdaptiveMediaFit } from "./text-image-media-frame-fit";
 
 type FrameAnimation = "pan-left" | "pan-right" | "zoom-in" | "parallax" | "split-reveal";
 
@@ -61,6 +62,7 @@ export function TextImageMediaFrame({
   frameIntervalMs?: number;
   heading: string;
 }) {
+  const directorFrameRef = useRef<HTMLDivElement | null>(null);
   const { preparedFrames, usesSingleFallback } = useMemo(() => {
     const mapped = frames
       .map((frame, index) => {
@@ -102,6 +104,8 @@ export function TextImageMediaFrame({
   }, [fallbackAlt, fallbackCaption, fallbackSrc, frames, heading]);
 
   const [activeIndex, setActiveIndex] = useState(0);
+  const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
+  const [imageSizes, setImageSizes] = useState<Record<string, { width: number; height: number }>>({});
   const activeFrame = preparedFrames[activeIndex] ?? null;
   const intervalMs = Math.max(1800, Math.min(12000, Number(frameIntervalMs ?? 4200)));
   const autoRotate = (directorMode ?? true) && preparedFrames.length > 1;
@@ -117,6 +121,34 @@ export function TextImageMediaFrame({
     }, intervalMs);
     return () => window.clearInterval(timer);
   }, [autoRotate, intervalMs, preparedFrames.length]);
+
+  useEffect(() => {
+    const element = directorFrameRef.current;
+    if (!element) return;
+
+    const updateFrameSize = () => {
+      const width = element.clientWidth;
+      const height = element.clientHeight;
+      if (width <= 0 || height <= 0) return;
+      setFrameSize((previous) => {
+        if (previous && previous.width === width && previous.height === height) {
+          return previous;
+        }
+        return { width, height };
+      });
+    };
+
+    updateFrameSize();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateFrameSize);
+      return () => window.removeEventListener("resize", updateFrameSize);
+    }
+
+    const observer = new ResizeObserver(updateFrameSize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [preparedFrames.length]);
 
   if (preparedFrames.length === 0) return null;
 
@@ -160,25 +192,42 @@ export function TextImageMediaFrame({
 
   return (
     <figure className="space-y-2.5">
-      <div className="mm-director-frame">
+      <div ref={directorFrameRef} className="mm-director-frame mm-text-image-director">
         {preparedFrames.map((frame, index) => {
           const isActive = index === activeIndex;
+          const sizeKey = `${frame.src}-${index}`;
+          const fitMode = resolveAdaptiveMediaFit(imageSizes[sizeKey], frameSize);
           const frameContent = (
             <img
               src={frame.src}
               alt={frame.alt}
               loading="lazy"
               className={cn(
-                "h-full w-full object-cover",
-                isActive && autoRotate ? `mm-hero-anim-${frame.animation}` : "",
+                "h-full w-full object-center",
+                fitMode === "cover" ? "object-cover" : "object-contain",
               )}
+              onLoad={(event) => {
+                const nextWidth = event.currentTarget.naturalWidth;
+                const nextHeight = event.currentTarget.naturalHeight;
+                if (!nextWidth || !nextHeight) return;
+                setImageSizes((previous) => {
+                  const current = previous[sizeKey];
+                  if (current && current.width === nextWidth && current.height === nextHeight) {
+                    return previous;
+                  }
+                  return {
+                    ...previous,
+                    [sizeKey]: { width: nextWidth, height: nextHeight },
+                  };
+                });
+              }}
             />
           );
           return (
             <div
               key={`${frame.src}-${index}`}
               className={cn(
-                "mm-hero-slide",
+                "mm-hero-slide mm-text-image-slide",
                 `mm-hero-card-motion-${frame.animation}`,
                 isActive ? "is-active" : "",
               )}

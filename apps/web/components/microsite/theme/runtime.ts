@@ -768,6 +768,65 @@ export const MICROSITE_RUNTIME_CSS = `
       linear-gradient(180deg, transparent 0%, color-mix(in oklab, var(--mm-dark) 16%, transparent) 68%, color-mix(in oklab, var(--mm-dark) 30%, transparent) 100%);
   }
 
+  [data-microsite-root="true"] .mm-text-image-director .mm-text-image-slide {
+    --mm-card-shift-y: 1.12rem;
+    --mm-card-scale: 0.92;
+    background:
+      radial-gradient(
+        130% 110% at 12% 0%,
+        color-mix(in oklab, var(--mm-accent) 16%, transparent),
+        transparent 58%
+      ),
+      linear-gradient(
+        165deg,
+        color-mix(in oklab, var(--mm-soft) 84%, var(--mm-surface) 16%) 0%,
+        color-mix(in oklab, var(--mm-surface) 90%, var(--mm-bg) 10%) 100%
+      );
+  }
+
+  [data-microsite-root="true"] .mm-text-image-director .mm-text-image-slide:nth-child(odd) {
+    --mm-card-shift-x: -1.05rem;
+    --mm-card-tilt: -3.1deg;
+  }
+
+  [data-microsite-root="true"] .mm-text-image-director .mm-text-image-slide:nth-child(even) {
+    --mm-card-shift-x: 1.05rem;
+    --mm-card-tilt: 3.1deg;
+  }
+
+  [data-microsite-root="true"] .mm-text-image-director .mm-text-image-slide.mm-hero-card-motion-pan-left {
+    --mm-card-shift-x: 1.25rem;
+    --mm-card-tilt: 3.8deg;
+  }
+
+  [data-microsite-root="true"] .mm-text-image-director .mm-text-image-slide.mm-hero-card-motion-pan-right {
+    --mm-card-shift-x: -1.25rem;
+    --mm-card-tilt: -3.8deg;
+  }
+
+  [data-microsite-root="true"] .mm-text-image-director .mm-text-image-slide.mm-hero-card-motion-zoom-in {
+    --mm-card-shift-y: 1.25rem;
+    --mm-card-scale: 0.89;
+  }
+
+  [data-microsite-root="true"] .mm-text-image-director .mm-text-image-slide.mm-hero-card-motion-parallax {
+    --mm-card-shift-x: 0.62rem;
+    --mm-card-shift-y: 0.96rem;
+    --mm-card-tilt: 1.7deg;
+    --mm-card-scale: 0.92;
+  }
+
+  [data-microsite-root="true"] .mm-text-image-director .mm-text-image-slide.mm-hero-card-motion-split-reveal {
+    --mm-card-shift-y: 1.36rem;
+    --mm-card-scale: 0.9;
+    --mm-card-tilt: 0.85deg;
+  }
+
+  [data-microsite-root="true"] .mm-text-image-director .mm-text-image-slide img {
+    display: block;
+    background: transparent;
+  }
+
   [data-microsite-root="true"] .mm-hero-slide {
     --mm-card-shift-x: 0rem;
     --mm-card-shift-y: 0.95rem;
