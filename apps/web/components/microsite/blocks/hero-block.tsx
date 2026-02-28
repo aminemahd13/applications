@@ -149,7 +149,7 @@ export function HeroBlock({
     [trustLogosInput],
   );
 
-  const frames = useMemo<HeroFrame[]>(() => {
+  const { frames, usesSingleFallback } = useMemo(() => {
     const mappedFrames = (heroFramesInput ?? [])
       .map((frame, index) => {
         const src = resolveAssetUrl(String(frame.assetKey ?? frame.url ?? "").trim());
@@ -167,22 +167,25 @@ export function HeroBlock({
       .filter((frame): frame is HeroFrame => frame !== null);
 
     if (mappedFrames.length > 0) {
-      return mappedFrames;
+      return { frames: mappedFrames, usesSingleFallback: false };
     }
 
     if (heroImageUrl) {
-      return [
-        {
-          name: heading || "Hero image",
-          src: heroImageUrl,
-          alt: heading || "Hero image",
-          href: "",
-          animation: "zoom-in",
-        },
-      ];
+      return {
+        frames: [
+          {
+            name: heading || "Hero image",
+            src: heroImageUrl,
+            alt: heading || "Hero image",
+            href: "",
+            animation: "zoom-in",
+          },
+        ],
+        usesSingleFallback: true,
+      };
     }
 
-    return [];
+    return { frames: [] as HeroFrame[], usesSingleFallback: false };
   }, [heading, heroFramesInput, heroImageUrl]);
 
   const [activeFrameIndex, setActiveFrameIndex] = useState(0);
@@ -211,6 +214,7 @@ export function HeroBlock({
 
   const hasTrustStrip = normalizedFacts.length > 0 || trustLogos.length > 0;
   const hasMediaFrame = frames.length > 0;
+  const usePlainSingleImage = usesSingleFallback && frames.length === 1;
 
   return (
     <BlockSection
@@ -366,65 +370,88 @@ export function HeroBlock({
                   heroLayout === "split" ? "order-last lg:order-none" : "mx-auto max-w-3xl",
                 )}
               >
-                <div className="mm-director-frame">
-                  {frames.map((frame, frameIndex) => {
-                    const isActive = frameIndex === activeFrameIndex;
-                    const frameClass = `mm-hero-anim-${frame.animation}`;
-                    const frameContent = (
+                {usePlainSingleImage && currentFrame ? (
+                  currentFrame.href ? (
+                    <Link
+                      href={currentFrame.href}
+                      target={isExternalHref(currentFrame.href) ? "_blank" : undefined}
+                      rel={isExternalHref(currentFrame.href) ? "noopener noreferrer" : undefined}
+                      className="block w-full"
+                    >
                       <img
-                        src={frame.src}
-                        alt={frame.alt}
-                        className={cn(
-                          "h-full w-full object-cover",
-                          isActive && directorEnabled ? frameClass : "",
-                        )}
+                        src={currentFrame.src}
+                        alt={currentFrame.alt}
+                        className="h-auto w-full object-contain"
                       />
-                    );
-
-                    return (
-                      <div
-                        key={`${frame.src}-${frameIndex}`}
-                        className={cn("mm-hero-slide", isActive ? "is-active" : "")}
-                      >
-                        {frame.href ? (
-                          <Link
-                            href={frame.href}
-                            target={isExternalHref(frame.href) ? "_blank" : undefined}
-                            rel={isExternalHref(frame.href) ? "noopener noreferrer" : undefined}
-                            className="block h-full w-full"
-                          >
-                            {frameContent}
-                          </Link>
-                        ) : (
-                          frameContent
-                        )}
-                      </div>
-                    );
-                  })}
-
-                  {currentFrame?.name && (
-                    <div className="mm-hero-frame-label">
-                      <MarkdownText content={currentFrame.name} mode="inline" as="span" />
-                    </div>
-                  )}
-
-                  {directorEnabled && frames.length > 1 && (
-                    <div className="mm-hero-dots">
-                      {frames.map((frame, frameIndex) => (
-                        <button
-                          key={`${frame.name || "frame"}-${frameIndex}`}
-                          type="button"
+                    </Link>
+                  ) : (
+                    <img
+                      src={currentFrame.src}
+                      alt={currentFrame.alt}
+                      className="h-auto w-full object-contain"
+                    />
+                  )
+                ) : (
+                  <div className="mm-director-frame">
+                    {frames.map((frame, frameIndex) => {
+                      const isActive = frameIndex === activeFrameIndex;
+                      const frameClass = `mm-hero-anim-${frame.animation}`;
+                      const frameContent = (
+                        <img
+                          src={frame.src}
+                          alt={frame.alt}
                           className={cn(
-                            "mm-hero-dot",
-                            frameIndex === activeFrameIndex ? "is-active" : "",
+                            "h-full w-full object-cover",
+                            isActive && directorEnabled ? frameClass : "",
                           )}
-                          aria-label={`Go to frame ${frameIndex + 1}`}
-                          onClick={() => setActiveFrameIndex(frameIndex)}
                         />
-                      ))}
-                    </div>
-                  )}
-                </div>
+                      );
+
+                      return (
+                        <div
+                          key={`${frame.src}-${frameIndex}`}
+                          className={cn("mm-hero-slide", isActive ? "is-active" : "")}
+                        >
+                          {frame.href ? (
+                            <Link
+                              href={frame.href}
+                              target={isExternalHref(frame.href) ? "_blank" : undefined}
+                              rel={isExternalHref(frame.href) ? "noopener noreferrer" : undefined}
+                              className="block h-full w-full"
+                            >
+                              {frameContent}
+                            </Link>
+                          ) : (
+                            frameContent
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {currentFrame?.name && (
+                      <div className="mm-hero-frame-label">
+                        <MarkdownText content={currentFrame.name} mode="inline" as="span" />
+                      </div>
+                    )}
+
+                    {directorEnabled && frames.length > 1 && (
+                      <div className="mm-hero-dots">
+                        {frames.map((frame, frameIndex) => (
+                          <button
+                            key={`${frame.name || "frame"}-${frameIndex}`}
+                            type="button"
+                            className={cn(
+                              "mm-hero-dot",
+                              frameIndex === activeFrameIndex ? "is-active" : "",
+                            )}
+                            aria-label={`Go to frame ${frameIndex + 1}`}
+                            onClick={() => setActiveFrameIndex(frameIndex)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>

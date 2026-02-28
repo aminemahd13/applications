@@ -61,7 +61,7 @@ export function TextImageMediaFrame({
   frameIntervalMs?: number;
   heading: string;
 }) {
-  const preparedFrames = useMemo<Frame[]>(() => {
+  const { preparedFrames, usesSingleFallback } = useMemo(() => {
     const mapped = frames
       .map((frame, index) => {
         const src = String(frame.src ?? "").trim();
@@ -79,23 +79,26 @@ export function TextImageMediaFrame({
       .filter((frame): frame is Frame => frame !== null);
 
     if (mapped.length > 0) {
-      return mapped;
+      return { preparedFrames: mapped, usesSingleFallback: false };
     }
 
     if (!fallbackSrc) {
-      return [];
+      return { preparedFrames: [] as Frame[], usesSingleFallback: false };
     }
 
-    return [
-      {
-        name: heading || "Section image",
-        src: fallbackSrc,
-        alt: fallbackAlt || heading || "Section visual",
-        href: "",
-        caption: fallbackCaption,
-        animation: "zoom-in",
-      },
-    ];
+    return {
+      preparedFrames: [
+        {
+          name: heading || "Section image",
+          src: fallbackSrc,
+          alt: fallbackAlt || heading || "Section visual",
+          href: "",
+          caption: fallbackCaption,
+          animation: "zoom-in",
+        },
+      ],
+      usesSingleFallback: true,
+    };
   }, [fallbackAlt, fallbackCaption, fallbackSrc, frames, heading]);
 
   const [activeIndex, setActiveIndex] = useState(0);
@@ -117,7 +120,43 @@ export function TextImageMediaFrame({
 
   if (preparedFrames.length === 0) return null;
 
+  const usePlainSingleImage = usesSingleFallback && preparedFrames.length === 1;
   const caption = activeFrame?.caption || fallbackCaption;
+
+  if (usePlainSingleImage && activeFrame) {
+    const frameContent = (
+      <img
+        src={activeFrame.src}
+        alt={activeFrame.alt}
+        loading="lazy"
+        className="h-auto w-full object-contain"
+      />
+    );
+
+    return (
+      <figure className="space-y-2.5">
+        {activeFrame.href ? (
+          <Link
+            href={activeFrame.href}
+            target={isExternalHref(activeFrame.href) ? "_blank" : undefined}
+            rel={isExternalHref(activeFrame.href) ? "noopener noreferrer" : undefined}
+            className="block w-full"
+          >
+            {frameContent}
+          </Link>
+        ) : (
+          frameContent
+        )}
+        {caption && (
+          <MarkdownText
+            content={caption}
+            as="figcaption"
+            className="text-sm text-[var(--mm-text-muted)]"
+          />
+        )}
+      </figure>
+    );
+  }
 
   return (
     <figure className="space-y-2.5">
