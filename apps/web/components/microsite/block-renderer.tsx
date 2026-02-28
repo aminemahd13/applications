@@ -143,7 +143,7 @@ function SingleBlock({
     case "SEPARATOR":
       return <SeparatorBlock block={block as Extract<Block, { type: "SEPARATOR" }>} />;
     case "TEXT":
-      return <TextBlock block={block} />;
+      return <TextBlock block={block} isPreview={isPreview} />;
     case "TEXT_IMAGE_LEFT":
       return <TextImageLeftBlock block={block as Extract<Block, { type: "TEXT_IMAGE_LEFT" }>} />;
     case "TEXT_IMAGE_RIGHT":
