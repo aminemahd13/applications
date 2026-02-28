@@ -84,6 +84,7 @@ import { toast } from "sonner";
 import { renderAnswerValue } from "@/lib/render-answer-value";
 import { getRequiredFieldKeySet } from "@/lib/file-answer-utils";
 import { FileUpload, type FileUploadValue } from "@/components/forms/FileUpload";
+import { FormMarkdown } from "@/components/forms/form-markdown";
 import { Permission } from "@event-platform/shared";
 
 interface NoteEntry {
@@ -3010,9 +3011,10 @@ export default function ApplicationDetailPage() {
                     }
                   />
                   {fieldEditTarget?.field?.description && (
-                    <p className="text-xs text-muted-foreground">
-                      {fieldEditTarget.field.description}
-                    </p>
+                    <FormMarkdown
+                      content={fieldEditTarget.field.description}
+                      className="text-xs text-muted-foreground [&_p]:my-0"
+                    />
                   )}
                 </div>
               )}

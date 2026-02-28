@@ -13,6 +13,7 @@ import {
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -875,16 +876,17 @@ export default function FormsPage() {
                           </div>
 
                           <div className="space-y-1">
-                            <Label className="text-[11px]">Help text</Label>
-                            <Input
+                            <Label className="text-[11px]">Help text (Markdown)</Label>
+                            <Textarea
                               value={field.description ?? ""}
                               onChange={(e) =>
                                 updateField(section.id, field.fieldId, {
                                   description: e.target.value,
                                 })
                               }
-                              className="h-7 text-xs"
-                              placeholder="Short help text..."
+                              rows={2}
+                              className="min-h-[58px] text-xs"
+                              placeholder="Supports markdown (links, bold, lists)..."
                             />
                           </div>
 
