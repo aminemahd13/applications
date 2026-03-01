@@ -44,9 +44,11 @@
 - Run seed again, or use a workspace-independent fallback:
   `docker compose -f docker-compose.prod.yml run --rm api sh -lc "./node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma && cd packages/db && npm run seed"`.
 
-**`P2022` missing column during seed (e.g. `events.is_system_site` / `events.requires_email_verification`)**:
+**`P2022` missing column during seed (e.g. `events.is_system_site` / `events.requires_email_verification` / `workflow_steps.hidden`)**:
 - Your database schema is behind the current Prisma schema.
-- Latest builds include migration `20260212191000` to reconcile prior schema drift.
+- Latest builds include drift-reconciliation migrations such as:
+  - `20260212191000_backfill_legacy_event_columns`
+  - `20260301183000_add_hidden_to_workflow_steps`
 - Pull the latest code, then run:
   `docker compose -f docker-compose.prod.yml run --rm api sh -lc "./node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma"`.
 - Retry seed with:
