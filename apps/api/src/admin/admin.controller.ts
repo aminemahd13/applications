@@ -110,6 +110,12 @@ export class AdminController {
     });
   }
 
+  @Delete('audit')
+  @RequirePermission(Permission.ADMIN_AUDIT_VIEW)
+  async clearAuditLog() {
+    return this.adminService.clearAuditLog();
+  }
+
   /* ============ Global Roles ============ */
 
   @Get('roles')

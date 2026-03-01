@@ -138,12 +138,24 @@ export class FormsService {
     // Check if any form version is used by a workflow step
     if (form.form_versions.length > 0) {
       const versionIds = form.form_versions.map((v) => v.id);
-      const usedByStep = await this.prisma.workflow_steps.findFirst({
-        where: { form_version_id: { in: versionIds } },
-      });
-      if (usedByStep) {
+      const [usedByStep, usedByDraft, usedBySubmission] = await Promise.all([
+        this.prisma.workflow_steps.findFirst({
+          where: { form_version_id: { in: versionIds } },
+          select: { id: true },
+        }),
+        this.prisma.step_drafts.findFirst({
+          where: { form_version_id: { in: versionIds } },
+          select: { id: true },
+        }),
+        this.prisma.step_submission_versions.findFirst({
+          where: { form_version_id: { in: versionIds } },
+          select: { id: true },
+        }),
+      ]);
+
+      if (usedByStep || usedByDraft || usedBySubmission) {
         throw new ConflictException(
-          'Cannot delete form: it is used by a workflow step',
+          'Cannot delete form: one or more versions are still referenced by workflow steps or application data',
         );
       }
     }
@@ -154,6 +166,52 @@ export class FormsService {
     });
     await this.prisma.forms.delete({
       where: { id: formId },
+    });
+  }
+
+  /**
+   * Delete one immutable published version if unused
+   */
+  async deleteVersion(
+    eventId: string,
+    formId: string,
+    versionId: string,
+  ): Promise<void> {
+    await this.findById(eventId, formId); // Verify form exists and is scoped
+
+    const version = await this.prisma.form_versions.findFirst({
+      where: { id: versionId, form_id: formId },
+      select: { id: true },
+    });
+    if (!version) throw new NotFoundException('Form version not found');
+
+    const [usedByStep, usedByDraft, usedBySubmission] = await Promise.all([
+      this.prisma.workflow_steps.findFirst({
+        where: { form_version_id: versionId },
+        select: { id: true },
+      }),
+      this.prisma.step_drafts.findFirst({
+        where: { form_version_id: versionId },
+        select: { id: true },
+      }),
+      this.prisma.step_submission_versions.findFirst({
+        where: { form_version_id: versionId },
+        select: { id: true },
+      }),
+    ]);
+
+    if (usedByStep || usedByDraft || usedBySubmission) {
+      const blockers: string[] = [];
+      if (usedByStep) blockers.push('workflow steps');
+      if (usedByDraft) blockers.push('application drafts');
+      if (usedBySubmission) blockers.push('submitted applications');
+      throw new ConflictException(
+        `Cannot delete form version: it is used by ${blockers.join(', ')}`,
+      );
+    }
+
+    await this.prisma.form_versions.delete({
+      where: { id: versionId },
     });
   }
 

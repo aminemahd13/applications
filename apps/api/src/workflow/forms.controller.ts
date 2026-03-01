@@ -137,4 +137,18 @@ export class FormsController {
     );
     return { data: version };
   }
+
+  /**
+   * Delete specific immutable version (only when unused)
+   */
+  @Delete(':formId/versions/:versionId')
+  @RequirePermission(Permission.EVENT_FORMS_MANAGE_DRAFT)
+  async deleteVersion(
+    @Param('eventId') eventId: string,
+    @Param('formId') formId: string,
+    @Param('versionId') versionId: string,
+  ) {
+    await this.formsService.deleteVersion(eventId, formId, versionId);
+    return { success: true };
+  }
 }
