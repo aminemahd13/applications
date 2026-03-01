@@ -51,8 +51,8 @@ function formatDateRange(
   endAt: string | null,
 ): string | null {
   if (!startAt && !endAt) return null;
-  const start = startAt ? new Date(startAt).toLocaleDateString() : "TBD";
-  const end = endAt ? new Date(endAt).toLocaleDateString() : null;
+  const start = startAt ? new Date(startAt).toLocaleDateString("en-GB") : "TBD";
+  const end = endAt ? new Date(endAt).toLocaleDateString("en-GB") : null;
   if (!end || end === start) return start;
   return `${start} - ${end}`;
 }

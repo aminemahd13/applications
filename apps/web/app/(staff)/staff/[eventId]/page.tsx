@@ -257,7 +257,7 @@ export default function StaffOverviewPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm">{activity.description}</p>
                     <p className="text-xs text-muted-foreground">
-                      {new Date(activity.createdAt).toLocaleString()}
+                      {new Date(activity.createdAt).toLocaleString("en-GB")}
                     </p>
                   </div>
                   <Badge variant="secondary" className="text-xs shrink-0">

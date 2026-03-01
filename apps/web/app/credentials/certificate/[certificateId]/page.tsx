@@ -201,7 +201,7 @@ export default function CertificatePage() {
             </div>
             <div className="rounded-lg border p-3 text-sm">
               <p className="text-xs text-muted-foreground">Issued on</p>
-              <p className="font-medium">{new Date(certificate.issuedAt).toLocaleString()}</p>
+              <p className="font-medium">{new Date(certificate.issuedAt).toLocaleString("en-GB")}</p>
             </div>
             {certificate.event.startAt && (
               <div className="rounded-lg border p-3 text-sm">
@@ -210,7 +210,7 @@ export default function CertificatePage() {
                   Event date
                 </p>
                 <p className="font-medium">
-                  {new Date(certificate.event.startAt).toLocaleDateString()}
+                  {new Date(certificate.event.startAt).toLocaleDateString("en-GB")}
                 </p>
               </div>
             )}

@@ -531,7 +531,7 @@ export default function CheckinPage() {
                   const isEligible = entry.status === "CONFIRMED";
                   const statusLabel = isCheckedIn
                     ? entry.checkedInAt
-                      ? `Checked in ${new Date(entry.checkedInAt).toLocaleString()}`
+                      ? `Checked in ${new Date(entry.checkedInAt).toLocaleString("en-GB")}`
                       : "Checked in"
                     : isEligible
                     ? "Eligible for check-in"
@@ -628,7 +628,7 @@ export default function CheckinPage() {
                         {entry.applicantEmail}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        Checked in {new Date(entry.checkedInAt).toLocaleString()}
+                        Checked in {new Date(entry.checkedInAt).toLocaleString("en-GB")}
                         {entry.checkedInBy ? ` - ${entry.checkedInBy}` : ""}
                       </p>
                     </div>

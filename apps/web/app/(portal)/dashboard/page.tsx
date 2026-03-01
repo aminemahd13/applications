@@ -347,7 +347,7 @@ export default function DashboardPage() {
                       {app.eventStartDate && (
                         <span className="flex items-center gap-1">
                           <Calendar className="h-3 w-3" />
-                          {new Date(app.eventStartDate).toLocaleDateString()}
+                          {new Date(app.eventStartDate).toLocaleDateString("en-GB")}
                         </span>
                       )}
                       {app.eventLocation && (

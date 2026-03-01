@@ -1778,7 +1778,7 @@ export default function ApplicationDetailPage() {
       key: "applied",
       label: "Applied",
       icon: Calendar,
-      value: new Date(app.createdAt).toLocaleDateString(),
+      value: new Date(app.createdAt).toLocaleDateString("en-GB"),
     },
   ];
 
@@ -1787,9 +1787,9 @@ export default function ApplicationDetailPage() {
     title: s.title,
     status: s.status,
     subtitle: s.reviewedAt
-      ? `Reviewed by ${s.reviewerName} on ${new Date(s.reviewedAt).toLocaleDateString()}`
+      ? `Reviewed by ${s.reviewerName} on ${new Date(s.reviewedAt).toLocaleDateString("en-GB")}`
       : s.submittedAt
-      ? `Submitted ${new Date(s.submittedAt).toLocaleDateString()}`
+      ? `Submitted ${new Date(s.submittedAt).toLocaleDateString("en-GB")}`
       : undefined,
   }));
 
@@ -1873,7 +1873,7 @@ export default function ApplicationDetailPage() {
                               {label}
                             </p>
                             <p className={`text-sm ${hasValue ? "" : "text-muted-foreground/60"}`}>
-                              {hasValue ? value : "—"}
+                              {hasValue ? value : "â€”"}
                             </p>
                           </div>
                         </div>
@@ -1907,7 +1907,7 @@ export default function ApplicationDetailPage() {
                             })}
                           </div>
                         ) : (
-                          <p className="text-sm text-muted-foreground/60">—</p>
+                          <p className="text-sm text-muted-foreground/60">â€”</p>
                         )}
                       </div>
                     </div>
@@ -1955,7 +1955,7 @@ export default function ApplicationDetailPage() {
                                 {stepTitleById.get(req.stepId) ?? "Step"}
                               </p>
                               <p className="text-xs text-muted-foreground">
-                                Created {new Date(req.createdAt).toLocaleString()}
+                                Created {new Date(req.createdAt).toLocaleString("en-GB")}
                               </p>
                             </div>
                             <Badge variant={req.status === "OPEN" ? "default" : "secondary"}>
@@ -1964,7 +1964,7 @@ export default function ApplicationDetailPage() {
                           </div>
                           {req.deadlineAt && (
                             <p className="text-xs text-muted-foreground mt-1">
-                              Deadline {new Date(req.deadlineAt).toLocaleDateString()}
+                              Deadline {new Date(req.deadlineAt).toLocaleDateString("en-GB")}
                             </p>
                           )}
                           {req.targetFieldIds.length > 0 && (
@@ -2015,7 +2015,7 @@ export default function ApplicationDetailPage() {
                       </div>
                       {step.submittedAt && (
                         <p className="text-xs text-muted-foreground">
-                          Last activity {new Date(step.submittedAt).toLocaleString()}
+                          Last activity {new Date(step.submittedAt).toLocaleString("en-GB")}
                         </p>
                       )}
                     </CardHeader>
@@ -2298,7 +2298,7 @@ export default function ApplicationDetailPage() {
                             </p>
                           </div>
                           <span className="text-xs text-muted-foreground">
-                            {new Date(msg.createdAt).toLocaleString()}
+                            {new Date(msg.createdAt).toLocaleString("en-GB")}
                           </span>
                         </div>
                         <div className="flex flex-wrap gap-2 text-xs">
@@ -2395,7 +2395,7 @@ export default function ApplicationDetailPage() {
                         {filteredAuditEntries.map((entry) => (
                           <TableRow key={entry.id}>
                             <TableCell className="text-xs text-muted-foreground">
-                              {new Date(entry.createdAt).toLocaleString()}
+                              {new Date(entry.createdAt).toLocaleString("en-GB")}
                             </TableCell>
                             <TableCell className="text-xs">
                               <div className="font-medium">
@@ -2546,7 +2546,7 @@ export default function ApplicationDetailPage() {
                         <span className="font-medium">{note.authorName}</span>
                         <div className="flex items-center gap-2">
                           <span className="text-muted-foreground">
-                            {new Date(note.createdAt).toLocaleDateString()}
+                            {new Date(note.createdAt).toLocaleDateString("en-GB")}
                           </span>
                           <button
                             type="button"

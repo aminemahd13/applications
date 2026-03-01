@@ -306,7 +306,7 @@ export default function ApplicationWorkspacePage() {
         </motion.div>
       )}
 
-      {/* Ticket banner — shown when accepted & all steps done */}
+      {/* Ticket banner â€” shown when accepted & all steps done */}
       {showTicketBanner && (
         <motion.div
           initial={{ opacity: 0, y: -8 }}
@@ -354,7 +354,7 @@ export default function ApplicationWorkspacePage() {
                 <div>
                   <p className="text-sm font-semibold">Completion credential issued</p>
                   <p className="text-xs text-muted-foreground">
-                    Issued {new Date(completionCredential.issuedAt).toLocaleDateString()}
+                    Issued {new Date(completionCredential.issuedAt).toLocaleDateString("en-GB")}
                   </p>
                 </div>
               </div>
@@ -403,7 +403,7 @@ export default function ApplicationWorkspacePage() {
                 {nextStep.deadline && (
                   <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                     <Calendar className="h-3 w-3" />
-                    Due {new Date(nextStep.deadline).toLocaleDateString()}
+                    Due {new Date(nextStep.deadline).toLocaleDateString("en-GB")}
                   </p>
                 )}
               </div>
@@ -447,7 +447,7 @@ export default function ApplicationWorkspacePage() {
           </Card>
         </div>
 
-        {/* Sidebar — Submission history */}
+        {/* Sidebar â€” Submission history */}
         <div className="space-y-4">
           <Card>
             <CardHeader>
@@ -517,7 +517,7 @@ export default function ApplicationWorkspacePage() {
                           {sub.stepTitle} (v{sub.versionNumber})
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {new Date(sub.submittedAt).toLocaleDateString()}
+                          {new Date(sub.submittedAt).toLocaleDateString("en-GB")}
                         </p>
                       </div>
                     </div>

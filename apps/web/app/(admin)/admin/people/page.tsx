@@ -147,7 +147,7 @@ function getInitials(name?: string, email?: string) {
 
 function formatDate(value?: string) {
   if (!value) return "N/A";
-  return new Date(value).toLocaleDateString();
+  return new Date(value).toLocaleDateString("en-GB");
 }
 
 function asPercent(value: number, total: number) {

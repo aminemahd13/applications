@@ -470,8 +470,8 @@ export default function EventsPage() {
                         {event.startDate && (
                           <span className="flex items-center gap-1">
                             <Calendar className="h-3 w-3" />
-                            {new Date(event.startDate).toLocaleDateString()}
-                            {event.endDate && ` - ${new Date(event.endDate).toLocaleDateString()}`}
+                            {new Date(event.startDate).toLocaleDateString("en-GB")}
+                            {event.endDate && ` - ${new Date(event.endDate).toLocaleDateString("en-GB")}`}
                           </span>
                         )}
                         {event.location && (
