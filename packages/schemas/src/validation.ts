@@ -188,6 +188,7 @@ function validateFieldValue(
             return;
 
         case FieldType.EMAIL:
+        case FieldType.PHONE:
         case FieldType.TEXT:
         case FieldType.TEXTAREA:
         case FieldType.SELECT:

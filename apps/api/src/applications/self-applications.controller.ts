@@ -41,6 +41,7 @@ export class SelfApplicationsController {
                 title: true,
                 step_index: true,
                 deadline_at: true,
+                hidden: true,
               },
             },
           },
@@ -49,7 +50,9 @@ export class SelfApplicationsController {
     });
 
     const data = applications.map((app) => {
-      const stepStates = app.application_step_states ?? [];
+      const stepStates = (app.application_step_states ?? []).filter(
+        (s) => !s.workflow_steps?.hidden,
+      );
       const stepsTotal = stepStates.length;
       const stepsCompleted = stepStates.filter(
         (s) => s.status === 'APPROVED' || s.status === 'SUBMITTED',

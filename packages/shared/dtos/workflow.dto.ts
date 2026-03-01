@@ -58,6 +58,7 @@ export const CreateWorkflowStepSchema = z.object({
     deadlineAt: z.coerce.date().optional().nullable(),
     formVersionId: z.string().uuid().optional().nullable(),
     sensitivityLevel: z.nativeEnum(SensitivityLevel).default(SensitivityLevel.NORMAL),
+    hidden: z.boolean().default(false),
 });
 
 export type CreateWorkflowStepDto = z.infer<typeof CreateWorkflowStepSchema>;

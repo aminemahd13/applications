@@ -9,6 +9,7 @@ export enum FieldType {
     TEXTAREA = 'textarea',
     NUMBER = 'number',
     EMAIL = 'email',
+    PHONE = 'phone',
     DATE = 'date',
     SELECT = 'select',
     MULTISELECT = 'multiselect',
@@ -179,6 +180,8 @@ function normalizeFieldType(rawType: unknown): FieldType {
             return FieldType.NUMBER;
         case 'email':
             return FieldType.EMAIL;
+        case 'phone':
+            return FieldType.PHONE;
         case 'date':
             return FieldType.DATE;
         case 'select':

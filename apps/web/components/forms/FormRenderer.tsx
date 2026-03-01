@@ -12,6 +12,8 @@ import {
 import { cn } from '../../lib/utils';
 import { FileUpload, type FileUploadValue } from './FileUpload';
 import { FormMarkdown } from './form-markdown';
+import { Combobox } from '../ui/combobox';
+import { PhoneInput } from '../ui/phone-input';
 
 type FormValues = Record<string, unknown>;
 
@@ -96,12 +98,33 @@ export function FormRenderer({
                       className={cn("border p-2 rounded", error && "border-red-500")}
                     />
                   ) : field.type === FieldType.SELECT ? (
-                    <select {...register(fieldKey)} id={fieldKey} disabled={readOnly} className={cn("border p-2 rounded", error && "border-red-500")}>
-                        <option value="">Select...</option>
-                        {field.ui?.options?.map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                    </select>
+                    <Controller
+                      control={control}
+                      name={fieldKey}
+                      render={({ field: controllerField }) => (
+                        <Combobox
+                          options={field.ui?.options ?? []}
+                          value={(controllerField.value as string) ?? ""}
+                          onValueChange={controllerField.onChange}
+                          disabled={readOnly}
+                          placeholder={field.ui?.placeholder || "Select..."}
+                          searchPlaceholder="Search options..."
+                        />
+                      )}
+                    />
+                  ) : field.type === FieldType.PHONE ? (
+                    <Controller
+                      control={control}
+                      name={fieldKey}
+                      render={({ field: controllerField }) => (
+                        <PhoneInput
+                          value={(controllerField.value as string) ?? ""}
+                          onChange={controllerField.onChange}
+                          disabled={readOnly}
+                          placeholder={field.ui?.placeholder || "Phone number"}
+                        />
+                      )}
+                    />
                   ) : field.type === FieldType.MULTISELECT ? (
                     <Controller
                       control={control}

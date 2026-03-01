@@ -28,6 +28,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Combobox } from "@/components/ui/combobox";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ConfirmDialog, PageHeader, FormSkeleton, StatusBadge } from "@/components/shared";
 import { ApiError, apiClient } from "@/lib/api";
@@ -102,6 +104,7 @@ const schemaTypeToUiType: Record<string, string> = {
   textarea: "TEXTAREA",
   number: "NUMBER",
   email: "EMAIL",
+  phone: "PHONE",
   date: "DATE",
   select: "SELECT",
   multiselect: "MULTISELECT",
@@ -250,6 +253,8 @@ function toSchemaFieldType(fieldType: string): FieldType {
       return FieldType.NUMBER;
     case "EMAIL":
       return FieldType.EMAIL;
+    case "PHONE":
+      return FieldType.PHONE;
     case "DATE":
       return FieldType.DATE;
     case "SELECT":
@@ -792,6 +797,7 @@ export default function StepFormPage() {
   const [resolvedEventId, setResolvedEventId] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [hasTriedSubmit, setHasTriedSubmit] = useState(false);
+  const [isStepUnavailable, setIsStepUnavailable] = useState(false);
 
   const form = useForm({ defaultValues: {} as Record<string, unknown> });
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -886,6 +892,7 @@ export default function StepFormPage() {
   useEffect(() => {
     (async () => {
       try {
+        setIsStepUnavailable(false);
         // Resolve eventId from the applications list
         const listRes = await apiClient<
           | {
@@ -944,6 +951,12 @@ export default function StepFormPage() {
           (candidate) =>
             typeof candidate.stepId === "string" && candidate.stepId === stepId,
         );
+        if (!stepState) {
+          setStep(null);
+          setIsStepUnavailable(true);
+          form.reset({});
+          return;
+        }
         const draftAnswers =
           draft && isRecord(draft.answers) ? draft.answers : draft ?? undefined;
         const submissionAnswers =
@@ -992,7 +1005,7 @@ export default function StepFormPage() {
   // Autosave (3s debounce)
   const saveDraft = useCallback(
     async (values: Record<string, unknown>) => {
-      if (isReadOnly || isLocked || !resolvedEventId) return;
+      if (isReadOnly || isLocked || isStepUnavailable || !resolvedEventId) return;
       setIsSaving(true);
       try {
         await apiClient(`/events/${resolvedEventId}/applications/me/steps/${stepId}/draft`, {
@@ -1007,7 +1020,7 @@ export default function StepFormPage() {
         setIsSaving(false);
       }
     },
-    [resolvedEventId, stepId, csrfToken, isReadOnly, isLocked]
+    [resolvedEventId, stepId, csrfToken, isReadOnly, isLocked, isStepUnavailable]
   );
 
   useEffect(() => {
@@ -1033,7 +1046,7 @@ export default function StepFormPage() {
   }
 
   async function handleSubmit() {
-    if (isReadOnly || isLocked || !resolvedEventId) return;
+    if (isReadOnly || isLocked || isStepUnavailable || !resolvedEventId) return;
 
     const values = form.getValues() as Record<string, unknown>;
     const issues = collectValidationIssues(step?.formDefinition, values, {
@@ -1066,6 +1079,24 @@ export default function StepFormPage() {
   }
 
   if (isLoading) return <FormSkeleton />;
+  if (isStepUnavailable) {
+    return (
+      <div className="text-center py-16 space-y-4">
+        <AlertTriangle className="h-12 w-12 text-muted-foreground mx-auto" />
+        <h2 className="text-xl font-bold">Step unavailable</h2>
+        <p className="text-muted-foreground">
+          This step is not available for your application.
+        </p>
+        <Button
+          variant="default"
+          onClick={() => router.push(`/applications/${applicationId}`)}
+        >
+          <ArrowLeft className="mr-1.5 h-4 w-4" />
+          Back to application
+        </Button>
+      </div>
+    );
+  }
   if (!step) return null;
   if (isLocked) {
     return (
@@ -1296,6 +1327,26 @@ export default function StepFormPage() {
                       />
                     )}
 
+                    {field.type === "PHONE" && (
+                      <Controller
+                        control={form.control}
+                        name={field.fieldId}
+                        render={({ field: controllerField }) => (
+                          <PhoneInput
+                            value={(controllerField.value as string) ?? ""}
+                            onChange={(next) =>
+                              form.setValue(field.fieldId, next, {
+                                shouldDirty: true,
+                                shouldTouch: true,
+                              })
+                            }
+                            disabled={fieldReadOnly}
+                            placeholder={field.placeholder ?? "Phone number"}
+                          />
+                        )}
+                      />
+                    )}
+
                     {field.type === "TEXTAREA" && (
                       <Textarea
                         id={field.fieldId}
@@ -1308,8 +1359,8 @@ export default function StepFormPage() {
                     )}
 
                     {field.type === "SELECT" && (
-                      <Select
-                        disabled={fieldReadOnly}
+                      <Combobox
+                        options={field.options ?? []}
                         value={(form.watch(field.fieldId) as string) ?? ""}
                         onValueChange={(v) =>
                           form.setValue(field.fieldId, v, {
@@ -1317,18 +1368,11 @@ export default function StepFormPage() {
                             shouldTouch: true,
                           })
                         }
-                      >
-                        <SelectTrigger className={showFieldIssue ? "border-destructive" : undefined}>
-                          <SelectValue placeholder={field.placeholder ?? "Select..."} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {field.options?.map((opt) => (
-                            <SelectItem key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                        disabled={fieldReadOnly}
+                        placeholder={field.placeholder ?? "Select..."}
+                        searchPlaceholder="Search options..."
+                        className={showFieldIssue ? "border-destructive" : undefined}
+                      />
                     )}
 
                     {field.type === "MULTISELECT" && (

@@ -67,6 +67,7 @@ interface WorkflowStep {
   deadlineAt?: string;
   formVersionId?: string | null;
   sensitivityLevel: SensitivityLevel;
+  hidden: boolean;
 }
 
 interface FormVersionOption {
@@ -167,6 +168,7 @@ function normalizeStep(raw: any): WorkflowStep {
     deadlineAt: toLocalDateTimeInput(raw?.deadlineAt),
     formVersionId: raw?.formVersionId ?? null,
     sensitivityLevel: normalizeSensitivityLevel(raw?.sensitivityLevel),
+    hidden: Boolean(raw?.hidden),
   };
 }
 
@@ -183,6 +185,7 @@ function toApiPayload(step: WorkflowStep) {
     deadlineAt: toNullableIsoDateTime(step.deadlineAt),
     formVersionId: step.formVersionId || null,
     sensitivityLevel: step.sensitivityLevel,
+    hidden: step.hidden,
   };
 }
 
@@ -315,6 +318,7 @@ export default function WorkflowBuilderPage() {
       instructions: "",
       formVersionId: null,
       sensitivityLevel: "NORMAL",
+      hidden: false,
     };
     setSteps([...steps, newStep]);
   }
@@ -660,6 +664,19 @@ export default function WorkflowBuilderPage() {
                                 }
                               />
                             </div>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <SettingHelpLabel
+                              label="Hidden from applicants"
+                              helpText="When enabled, this step is completely invisible to applicants. They won't know it exists until you make it visible. Staff can always see all steps."
+                            />
+                            <Switch
+                              checked={step.hidden}
+                              onCheckedChange={(v) =>
+                                updateStep(step.id, { hidden: v })
+                              }
+                            />
                           </div>
 
                           <div className="grid grid-cols-2 gap-4">

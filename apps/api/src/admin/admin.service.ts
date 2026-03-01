@@ -10,6 +10,16 @@ import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
 
 /* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+function getDisplayName(profile: any): string {
+  const first = profile?.first_name?.trim?.() ?? '';
+  const last = profile?.last_name?.trim?.() ?? '';
+  return [first, last].filter(Boolean).join(' ') || profile?.full_name?.trim?.() || '';
+}
+
+/* ------------------------------------------------------------------ */
 /*  Interfaces                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -346,6 +356,8 @@ export class AdminService {
           users: nonStaffUserWhere,
         },
         select: {
+          first_name: true,
+          last_name: true,
           full_name: true,
           phone: true,
           education_level: true,
@@ -389,7 +401,7 @@ export class AdminService {
     let profilesWithLinks = 0;
 
     for (const profile of profiles) {
-      const fullName = normalizeOptionalText(profile.full_name);
+      const fullName = normalizeOptionalText(getDisplayName(profile));
       const phone = normalizeOptionalText(profile.phone);
       const educationLevel = normalizeOptionalText(profile.education_level);
       const institution = normalizeOptionalText(profile.institution);
@@ -493,7 +505,12 @@ export class AdminService {
           { email: { contains: search, mode: 'insensitive' } },
           {
             applicant_profiles: {
-              is: { full_name: { contains: search, mode: 'insensitive' } },
+              is: { first_name: { contains: search, mode: 'insensitive' } },
+            },
+          },
+          {
+            applicant_profiles: {
+              is: { last_name: { contains: search, mode: 'insensitive' } },
             },
           },
           {
@@ -556,6 +573,8 @@ export class AdminService {
           created_at: true,
           applicant_profiles: {
             select: {
+              first_name: true,
+              last_name: true,
               full_name: true,
               phone: true,
               education_level: true,
@@ -611,7 +630,7 @@ export class AdminService {
     const data: AdminUserSummary[] = users.map((user) => {
       const applicationInfo = applicationMap.get(user.id);
       const fullName = normalizeOptionalText(
-        user.applicant_profiles?.full_name,
+        getDisplayName(user.applicant_profiles),
       );
       const city = normalizeOptionalText(user.applicant_profiles?.city);
       const country = normalizeOptionalText(user.applicant_profiles?.country);
@@ -675,7 +694,12 @@ export class AdminService {
           { email: { contains: search, mode: 'insensitive' } },
           {
             applicant_profiles: {
-              is: { full_name: { contains: search, mode: 'insensitive' } },
+              is: { first_name: { contains: search, mode: 'insensitive' } },
+            },
+          },
+          {
+            applicant_profiles: {
+              is: { last_name: { contains: search, mode: 'insensitive' } },
             },
           },
           {
@@ -963,7 +987,7 @@ export class AdminService {
     const rows: unknown[][] = [];
     for (const user of users) {
       const profile = user.applicant_profiles;
-      const fullName = normalizeOptionalText(profile?.full_name);
+      const fullName = normalizeOptionalText(getDisplayName(profile));
       const phone = normalizeOptionalText(profile?.phone);
       const educationLevel = normalizeOptionalText(profile?.education_level);
       const institution = normalizeOptionalText(profile?.institution);
@@ -1327,7 +1351,7 @@ export class AdminService {
           users: {
             select: {
               email: true,
-              applicant_profiles: { select: { full_name: true } },
+              applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
             },
           },
         },
@@ -1370,7 +1394,7 @@ export class AdminService {
         action: log.action,
         category: logCategory,
         actorEmail: log.users?.email ?? 'system',
-        actorName: log.users?.applicant_profiles?.full_name ?? undefined,
+        actorName: getDisplayName(log.users?.applicant_profiles) || undefined,
         targetType: log.entity_type,
         targetId: log.entity_id,
         details,
@@ -1400,7 +1424,7 @@ export class AdminService {
             select: {
               id: true,
               email: true,
-              applicant_profiles: { select: { full_name: true } },
+              applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
             },
           },
           events: { select: { id: true, title: true } },
@@ -1412,7 +1436,7 @@ export class AdminService {
           id: true,
           email: true,
           created_at: true,
-          applicant_profiles: { select: { full_name: true } },
+          applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
         },
       }),
     ]);
@@ -1424,7 +1448,7 @@ export class AdminService {
       members.push({
         id: `global-admin-${admin.id}`,
         email: admin.email,
-        fullName: admin.applicant_profiles?.full_name ?? undefined,
+        fullName: getDisplayName(admin.applicant_profiles) || undefined,
         role: 'global_admin',
         eventName: undefined,
         eventId: undefined,
@@ -1441,7 +1465,7 @@ export class AdminService {
       members.push({
         id: a.id,
         email: a.users?.email ?? 'unknown',
-        fullName: a.users?.applicant_profiles?.full_name ?? undefined,
+        fullName: getDisplayName(a.users?.applicant_profiles) || undefined,
         role: a.role.toLowerCase(),
         eventName: a.events?.title ?? undefined,
         eventId: a.events?.id ?? undefined,
@@ -1554,7 +1578,7 @@ export class AdminService {
     let createdUser = false;
     let user = await this.prisma.users.findFirst({
       where: { email: normalizedEmail },
-      include: { applicant_profiles: { select: { full_name: true } } },
+      include: { applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } } },
     });
     let hadStaffAccessBefore = false;
     const now = new Date();
@@ -1571,7 +1595,7 @@ export class AdminService {
           password_hash: passwordHash,
           applicant_profiles: { create: {} },
         },
-        include: { applicant_profiles: { select: { full_name: true } } },
+        include: { applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } } },
       });
     } else {
       const existingStaffAssignment =
@@ -1606,7 +1630,7 @@ export class AdminService {
         await this.passwordResetService.sendPasswordSetupInvite({
           userId: user.id,
           email: user.email,
-          userName: user.applicant_profiles?.full_name ?? undefined,
+          userName: getDisplayName(user.applicant_profiles) || undefined,
           role: normalizedRole,
           eventName: event?.title,
         });
@@ -1638,7 +1662,7 @@ export class AdminService {
     }): StaffMember => ({
       id: assignment.id,
       email: user.email,
-      fullName: user.applicant_profiles?.full_name ?? undefined,
+      fullName: getDisplayName(user.applicant_profiles) || undefined,
       role: normalizedRole,
       eventName: event?.title,
       eventId: event?.id,
@@ -1678,7 +1702,7 @@ export class AdminService {
       return {
         id: `global-admin-${user.id}`,
         email: user.email,
-        fullName: user.applicant_profiles?.full_name ?? undefined,
+        fullName: getDisplayName(user.applicant_profiles) || undefined,
         role: 'global_admin',
         assignedAt: new Date().toISOString(),
         accessStartAt: null,
@@ -1824,7 +1848,7 @@ export class AdminService {
         users: {
           select: {
             email: true,
-            applicant_profiles: { select: { full_name: true } },
+            applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
           },
         },
         events: {
@@ -1845,7 +1869,7 @@ export class AdminService {
     return {
       id: updated.id,
       email: assignment.users?.email ?? 'unknown',
-      fullName: assignment.users?.applicant_profiles?.full_name ?? undefined,
+      fullName: getDisplayName(assignment.users?.applicant_profiles) || undefined,
       role: updated.role.toLowerCase(),
       eventName: assignment.events?.title ?? undefined,
       eventId: assignment.events?.id ?? undefined,
@@ -1879,7 +1903,7 @@ export class AdminService {
       const userId = id.replace('global-admin-', '');
       const user = await this.prisma.users.findUnique({
         where: { id: userId },
-        include: { applicant_profiles: { select: { full_name: true } } },
+        include: { applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } } },
       });
       if (!user) throw new NotFoundException('User not found');
 
@@ -1887,14 +1911,14 @@ export class AdminService {
         await this.passwordResetService.sendPasswordSetupInvite({
           userId: user.id,
           email: user.email,
-          userName: user.applicant_profiles?.full_name ?? undefined,
+          userName: getDisplayName(user.applicant_profiles) || undefined,
           role: 'global_admin',
         });
       const attemptedAt = new Date();
       return {
         id: `global-admin-${user.id}`,
         email: user.email,
-        fullName: user.applicant_profiles?.full_name ?? undefined,
+        fullName: getDisplayName(user.applicant_profiles) || undefined,
         role: 'global_admin',
         assignedAt: user.created_at.toISOString(),
         accessStartAt: null,
@@ -1925,7 +1949,7 @@ export class AdminService {
           select: {
             id: true,
             email: true,
-            applicant_profiles: { select: { full_name: true } },
+            applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
           },
         },
         events: { select: { id: true, title: true } },
@@ -1939,7 +1963,7 @@ export class AdminService {
     const inviteResult = await this.passwordResetService.sendPasswordSetupInvite({
       userId: assignment.user_id,
       email: assignment.users.email,
-      userName: assignment.users?.applicant_profiles?.full_name ?? undefined,
+      userName: getDisplayName(assignment.users?.applicant_profiles) || undefined,
       role: assignment.role,
       eventName: assignment.events?.title ?? undefined,
     });
@@ -1965,7 +1989,7 @@ export class AdminService {
     return {
       id: updated.id,
       email: assignment.users?.email ?? 'unknown',
-      fullName: assignment.users?.applicant_profiles?.full_name ?? undefined,
+      fullName: getDisplayName(assignment.users?.applicant_profiles) || undefined,
       role: updated.role.toLowerCase(),
       eventName: assignment.events?.title ?? undefined,
       eventId: assignment.events?.id ?? undefined,

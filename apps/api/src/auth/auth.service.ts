@@ -16,11 +16,14 @@ import * as crypto from 'crypto';
 
 interface UpdateProfileDto {
   fullName?: string;
+  firstName?: string;
+  lastName?: string;
   phone?: string;
   education?: string;
   institution?: string;
   city?: string;
   country?: string;
+  dateOfBirth?: string;
   links?: string[];
 }
 
@@ -271,11 +274,14 @@ export class AuthService {
         applicant_profiles: {
           select: {
             full_name: true,
+            first_name: true,
+            last_name: true,
             phone: true,
             education_level: true,
             institution: true,
             city: true,
             country: true,
+            date_of_birth: true,
             links: true,
           },
         },
@@ -289,14 +295,29 @@ export class AuthService {
       ? rawLinks.filter((v): v is string => typeof v === 'string')
       : [];
 
+    const dob = user.applicant_profiles?.date_of_birth;
+    const dateOfBirth = dob instanceof Date
+      ? dob.toISOString().split('T')[0]
+      : typeof dob === 'string'
+        ? dob.split('T')[0]
+        : '';
+
+    const profile = user.applicant_profiles;
+    const firstName = profile?.first_name ?? '';
+    const lastName = profile?.last_name ?? '';
+    const fullName = [firstName, lastName].filter(Boolean).join(' ') || profile?.full_name || '';
+
     return {
       email: user.email,
-      fullName: user.applicant_profiles?.full_name ?? '',
-      phone: user.applicant_profiles?.phone ?? '',
-      education: user.applicant_profiles?.education_level ?? '',
-      institution: user.applicant_profiles?.institution ?? '',
-      city: user.applicant_profiles?.city ?? '',
-      country: user.applicant_profiles?.country ?? '',
+      firstName,
+      lastName,
+      fullName,
+      phone: profile?.phone ?? '',
+      education: profile?.education_level ?? '',
+      institution: profile?.institution ?? '',
+      city: profile?.city ?? '',
+      country: profile?.country ?? '',
+      dateOfBirth,
       links,
     };
   }
@@ -309,25 +330,39 @@ export class AuthService {
           .slice(0, 10)
       : [];
 
+    const parsedDob = dto.dateOfBirth ? new Date(dto.dateOfBirth) : undefined;
+    const dateOfBirth = parsedDob && !Number.isNaN(parsedDob.getTime()) ? parsedDob : undefined;
+
+    // Compute full_name from firstName/lastName for backward compatibility
+    const computedFullName = dto.firstName !== undefined || dto.lastName !== undefined
+      ? [dto.firstName, dto.lastName].filter(Boolean).join(' ') || null
+      : dto.fullName;
+
     await this.prisma.applicant_profiles.upsert({
       where: { user_id: userId },
       update: {
-        full_name: dto.fullName,
+        full_name: computedFullName,
+        first_name: dto.firstName,
+        last_name: dto.lastName,
         phone: dto.phone,
         education_level: dto.education,
         institution: dto.institution,
         city: dto.city,
         country: dto.country,
+        date_of_birth: dateOfBirth,
         links: cleanLinks,
       },
       create: {
         user_id: userId,
-        full_name: dto.fullName ?? null,
+        full_name: computedFullName ?? null,
+        first_name: dto.firstName ?? null,
+        last_name: dto.lastName ?? null,
         phone: dto.phone ?? null,
         education_level: dto.education ?? null,
         institution: dto.institution ?? null,
         city: dto.city ?? null,
         country: dto.country ?? null,
+        date_of_birth: dateOfBirth ?? null,
         links: cleanLinks,
       },
     });

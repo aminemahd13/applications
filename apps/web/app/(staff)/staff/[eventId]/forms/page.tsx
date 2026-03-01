@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { Reorder } from "framer-motion";
 import {
   Plus,
   FileEdit,
+  GripVertical,
   Trash2,
   Loader2,
   CheckCircle2,
@@ -24,7 +26,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 import {
   PageHeader,
@@ -116,6 +124,7 @@ const fieldTypes = [
   { value: "TEXT", label: "Short text" },
   { value: "TEXTAREA", label: "Long text" },
   { value: "EMAIL", label: "Email" },
+  { value: "PHONE", label: "Phone number" },
   { value: "NUMBER", label: "Number" },
   { value: "SELECT", label: "Dropdown" },
   { value: "MULTISELECT", label: "Multi-select" },
@@ -129,6 +138,7 @@ const schemaToUiFieldType: Record<string, string> = {
   text: "TEXT",
   textarea: "TEXTAREA",
   email: "EMAIL",
+  phone: "PHONE",
   number: "NUMBER",
   select: "SELECT",
   multiselect: "MULTISELECT",
@@ -143,6 +153,7 @@ const uiToSchemaFieldType: Record<string, string> = {
   TEXT: "text",
   TEXTAREA: "textarea",
   EMAIL: "email",
+  PHONE: "phone",
   NUMBER: "number",
   SELECT: "select",
   MULTISELECT: "multiselect",
@@ -476,6 +487,8 @@ export default function FormsPage() {
   const [isPublishing, setIsPublishing] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
+  const [bulkOptionsTarget, setBulkOptionsTarget] = useState<{ sectionId: string; fieldId: string } | null>(null);
+  const [bulkOptionsText, setBulkOptionsText] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -769,11 +782,20 @@ export default function FormsPage() {
             onAction={addSection}
           />
         ) : (
-          <div className="space-y-4">
+          <Reorder.Group
+            axis="y"
+            values={editingForm.sections}
+            onReorder={(newOrder) =>
+              setEditingForm({ ...editingForm, sections: newOrder })
+            }
+            className="space-y-4"
+          >
             {editingForm.sections.map((section) => (
-              <Card key={section.id}>
+              <Reorder.Item key={section.id} value={section} className="list-none">
+              <Card>
                 <CardHeader>
                   <div className="flex items-center gap-3">
+                    <GripVertical className="h-5 w-5 text-muted-foreground cursor-grab shrink-0" />
                     <Input
                       value={section.title}
                       onChange={(e) =>
@@ -799,6 +821,20 @@ export default function FormsPage() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">
+                  <Reorder.Group
+                    axis="y"
+                    values={section.fields}
+                    onReorder={(newOrder) => {
+                      if (!editingForm) return;
+                      setEditingForm({
+                        ...editingForm,
+                        sections: editingForm.sections.map((s) =>
+                          s.id === section.id ? { ...s, fields: newOrder } : s
+                        ),
+                      });
+                    }}
+                    className="space-y-3"
+                  >
                   {section.fields.map((field) => {
                     const isOptionField =
                       field.type === "SELECT" || field.type === "MULTISELECT";
@@ -809,10 +845,11 @@ export default function FormsPage() {
                     const options = field.options ?? [];
 
                     return (
+                      <Reorder.Item key={field.fieldId} value={field} className="list-none">
                       <div
-                        key={field.fieldId}
                         className="flex items-start gap-3 p-3 rounded-lg border bg-muted/20"
                       >
+                        <GripVertical className="h-5 w-5 text-muted-foreground cursor-grab mt-1 shrink-0" />
                         <div className="flex-1 space-y-3">
                           <div className="flex gap-2">
                             <Input
@@ -1198,25 +1235,38 @@ export default function FormsPage() {
                                   </Button>
                                 </div>
                               ))}
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="w-full border-dashed"
-                                onClick={() =>
-                                  updateField(section.id, field.fieldId, {
-                                    options: [
-                                      ...options,
-                                      {
-                                        label: `Option ${options.length + 1}`,
-                                        value: `option_${options.length + 1}`,
-                                      },
-                                    ],
-                                  })
-                                }
-                              >
-                                <Plus className="mr-1.5 h-3.5 w-3.5" />
-                                Add option
-                              </Button>
+                              <div className="flex gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="flex-1 border-dashed"
+                                  onClick={() =>
+                                    updateField(section.id, field.fieldId, {
+                                      options: [
+                                        ...options,
+                                        {
+                                          label: `Option ${options.length + 1}`,
+                                          value: `option_${options.length + 1}`,
+                                        },
+                                      ],
+                                    })
+                                  }
+                                >
+                                  <Plus className="mr-1.5 h-3.5 w-3.5" />
+                                  Add option
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="flex-1 border-dashed"
+                                  onClick={() => {
+                                    setBulkOptionsTarget({ sectionId: section.id, fieldId: field.fieldId });
+                                    setBulkOptionsText("");
+                                  }}
+                                >
+                                  Bulk add
+                                </Button>
+                              </div>
                             </div>
                           )}
 
@@ -1396,8 +1446,10 @@ export default function FormsPage() {
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
+                      </Reorder.Item>
                     );
                   })}
+                  </Reorder.Group>
                   <Button
                     variant="outline"
                     size="sm"
@@ -1409,8 +1461,9 @@ export default function FormsPage() {
                   </Button>
                 </CardContent>
               </Card>
+              </Reorder.Item>
             ))}
-          </div>
+          </Reorder.Group>
         )}
 
         <Button
@@ -1430,6 +1483,57 @@ export default function FormsPage() {
           confirmLabel="Publish"
           onConfirm={publishForm}
         />
+
+        <Dialog
+          open={!!bulkOptionsTarget}
+          onOpenChange={(open) => !open && setBulkOptionsTarget(null)}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Bulk add options</DialogTitle>
+              <DialogDescription>
+                Paste one option per line. Each line becomes both the label and
+                value.
+              </DialogDescription>
+            </DialogHeader>
+            <Textarea
+              value={bulkOptionsText}
+              onChange={(e) => setBulkOptionsText(e.target.value)}
+              rows={10}
+              placeholder={"Option A\nOption B\nOption C"}
+            />
+            <Button
+              onClick={() => {
+                if (!bulkOptionsTarget || !editingForm) return;
+                const lines = bulkOptionsText
+                  .split("\n")
+                  .map((l) => l.trim())
+                  .filter((l) => l.length > 0);
+                if (lines.length === 0) {
+                  setBulkOptionsTarget(null);
+                  return;
+                }
+                const newOptions = lines.map((line) => ({
+                  label: line,
+                  value: line
+                    .toLowerCase()
+                    .replace(/\s+/g, "_")
+                    .replace(/[^a-z0-9_-]/g, ""),
+                }));
+                const { sectionId, fieldId } = bulkOptionsTarget;
+                const section = editingForm.sections.find((s) => s.id === sectionId);
+                const field = section?.fields.find((f) => f.fieldId === fieldId);
+                const existing = field?.options ?? [];
+                updateField(sectionId, fieldId, {
+                  options: [...existing, ...newOptions],
+                });
+                setBulkOptionsTarget(null);
+              }}
+            >
+              Add {bulkOptionsText.split("\n").filter((l) => l.trim()).length} options
+            </Button>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }
