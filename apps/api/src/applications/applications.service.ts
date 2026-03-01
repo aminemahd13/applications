@@ -568,6 +568,7 @@ export class ApplicationsService {
               select: {
                 title: true,
                 step_index: true,
+                category: true,
                 deadline_at: true,
                 instructions_rich: true,
                 form_versions: { select: { schema: true } },
@@ -616,6 +617,7 @@ export class ApplicationsService {
                 select: {
                   title: true,
                   step_index: true,
+                  category: true,
                   deadline_at: true,
                   instructions_rich: true,
                   form_versions: { select: { schema: true } },
@@ -855,6 +857,7 @@ export class ApplicationsService {
               select: {
                 title: true,
                 step_index: true,
+                category: true,
                 deadline_at: true,
                 instructions_rich: true,
                 hidden: true,
@@ -916,6 +919,7 @@ export class ApplicationsService {
                 select: {
                   title: true,
                   step_index: true,
+                  category: true,
                   deadline_at: true,
                   instructions_rich: true,
                   hidden: true,
@@ -2046,9 +2050,9 @@ export class ApplicationsService {
     const user = app.users_applications_applicant_user_idTousers;
     const applicantProfile = this.toApplicantProfile(user);
     const allStepStates = app.application_step_states || [];
-    // Hide steps marked as hidden from applicant-facing views
+    // Keep hidden steps invisible until they are unlocked.
     const stepStates = options?.maskDecisionIfUnpublished
-      ? allStepStates.filter((ss: any) => !ss.workflow_steps?.hidden)
+      ? allStepStates.filter((ss: any) => this.isApplicantStepVisible(ss))
       : allStepStates;
     const answersByStepId = options?.answersByStepId ?? {};
 
@@ -2067,6 +2071,7 @@ export class ApplicationsService {
         stepId: ss.step_id,
         stepTitle: ss.workflow_steps?.title || 'Unknown Step',
         stepIndex: ss.workflow_steps?.step_index ?? 0,
+        category: ss.workflow_steps?.category,
         status: ss.status as StepStatus,
         deadlineAt: ss.workflow_steps?.deadline_at ?? null,
         instructions:
@@ -2084,6 +2089,41 @@ export class ApplicationsService {
         lastActivityAt: ss.last_activity_at,
       })),
     };
+  }
+
+  private isApplicantStepVisible(stepState: any): boolean {
+    if (!stepState?.workflow_steps?.hidden) return true;
+    return String(stepState.status ?? '') !== String(StepStatus.LOCKED);
+  }
+
+  private async ensureConfirmationApprovedBeforeTicket(
+    eventId: string,
+    applicationId: string,
+  ): Promise<void> {
+    const confirmationSteps = await this.prisma.application_step_states.findMany({
+      where: {
+        application_id: applicationId,
+        workflow_steps: {
+          event_id: eventId,
+          category: 'CONFIRMATION',
+        },
+      },
+      select: {
+        status: true,
+      },
+    });
+
+    // Backward compatibility: keep existing behavior when no confirmation step exists.
+    if (confirmationSteps.length === 0) return;
+
+    const hasPendingConfirmation = confirmationSteps.some(
+      (step) => step.status !== StepStatus.APPROVED,
+    );
+    if (hasPendingConfirmation) {
+      throw new ForbiddenException(
+        'Ticket is available only after confirmation step approval',
+      );
+    }
   }
 
   private async getEffectiveAnswersByStepId(
@@ -3112,6 +3152,8 @@ export class ApplicationsService {
       throw new ForbiddenException('Application not accepted');
     }
 
+    await this.ensureConfirmationApprovedBeforeTicket(eventId, applicationId);
+
     const now = new Date();
     // Generate JTI if not exists
     let jti = app.attendance_records?.qr_token_hash;
@@ -3163,6 +3205,8 @@ export class ApplicationsService {
     eventId: string,
     applicationId: string,
   ): Promise<{ qrToken: string }> {
+    await this.ensureConfirmationApprovedBeforeTicket(eventId, applicationId);
+
     const record = await this.prisma.attendance_records.findUnique({
       where: { application_id: applicationId },
     });

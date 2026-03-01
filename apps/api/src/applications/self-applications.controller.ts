@@ -5,6 +5,11 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 
+function isApplicantVisibleStepState(stepState: any): boolean {
+  if (!stepState?.workflow_steps?.hidden) return true;
+  return String(stepState.status ?? '') !== 'LOCKED';
+}
+
 @Controller('applications')
 @UseGuards(PermissionsGuard)
 export class SelfApplicationsController {
@@ -51,7 +56,7 @@ export class SelfApplicationsController {
 
     const data = applications.map((app) => {
       const stepStates = (app.application_step_states ?? []).filter(
-        (s) => !s.workflow_steps?.hidden,
+        (s) => isApplicantVisibleStepState(s),
       );
       const stepsTotal = stepStates.length;
       const stepsCompleted = stepStates.filter(

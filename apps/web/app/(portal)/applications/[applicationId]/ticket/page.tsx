@@ -72,13 +72,15 @@ export default function TicketPage() {
         const res = await apiClient<Record<string, unknown> | { data: Record<string, unknown> }>(
           `/events/${eventId}/applications/${applicationId}/ticket`
         ).catch(async () => {
-          // Ticket not found — attempt to auto-confirm (creates attendance record)
+          // If no ticket exists yet, try creating/reissuing it.
           try {
             return await apiClient<Record<string, unknown> | { data: Record<string, unknown> }>(
               `/events/${eventId}/applications/${applicationId}/confirm`,
               { method: "POST", csrfToken: csrfToken ?? undefined }
             );
-          } catch { return null; }
+          } catch {
+            return null;
+          }
         });
         const raw: any = res && typeof res === "object" && "data" in res ? (res as any).data : res;
         if (raw) {
@@ -154,7 +156,7 @@ export default function TicketPage() {
         <QrCode className="h-12 w-12 text-muted-foreground mx-auto" />
         <h2 className="text-xl font-bold">No ticket available</h2>
         <p className="text-muted-foreground">
-          Your ticket will appear here once your application is accepted.
+          Your ticket will appear here after your confirmation step is approved.
         </p>
       </div>
     );

@@ -53,7 +53,7 @@ describe('SelfApplicationsController', () => {
     });
   });
 
-  it('hides hidden steps from applicant progress and next action', async () => {
+  it('shows hidden steps after unlock and keeps locked hidden steps invisible', async () => {
     const cls = {
       get: jest.fn((key: string) => (key === 'actorId' ? 'user-1' : undefined)),
     };
@@ -83,10 +83,19 @@ describe('SelfApplicationsController', () => {
                 },
               },
               {
+                status: 'LOCKED',
+                workflow_steps: {
+                  title: 'Hidden future step',
+                  step_index: 1,
+                  deadline_at: null,
+                  hidden: true,
+                },
+              },
+              {
                 status: 'UNLOCKED',
                 workflow_steps: {
                   title: 'Visible form',
-                  step_index: 1,
+                  step_index: 2,
                   deadline_at: null,
                   hidden: false,
                 },
@@ -106,9 +115,9 @@ describe('SelfApplicationsController', () => {
 
     expect(result.applications[0]).toEqual(
       expect.objectContaining({
-        stepsTotal: 1,
+        stepsTotal: 2,
         stepsCompleted: 0,
-        nextAction: 'Complete: Visible form',
+        nextAction: 'Complete: Hidden review',
       }),
     );
   });

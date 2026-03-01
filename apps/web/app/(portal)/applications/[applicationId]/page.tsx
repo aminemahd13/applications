@@ -219,8 +219,14 @@ export default function ApplicationWorkspacePage() {
     (s) => s.status === "SUBMITTED" || s.status === "APPROVED"
   ).length;
 
-  const allStepsComplete = completedSteps === app.stepStates.length && app.stepStates.length > 0;
-  const showTicketBanner = app.decisionStatus === "ACCEPTED" && allStepsComplete;
+  const confirmationSteps = app.stepStates.filter(
+    (s) => s.category === "CONFIRMATION"
+  );
+  const allConfirmationStepsApproved =
+    confirmationSteps.length > 0 &&
+    confirmationSteps.every((s) => s.status === "APPROVED");
+  const showTicketBanner =
+    app.decisionStatus === "ACCEPTED" && allConfirmationStepsApproved;
   const completionCredential =
     app.completionCredential?.status === "ISSUED"
       ? app.completionCredential
@@ -288,7 +294,7 @@ export default function ApplicationWorkspacePage() {
               Decision: {app.decisionStatus.charAt(0) + app.decisionStatus.slice(1).toLowerCase()}
             </AlertTitle>
             <AlertDescription className="text-sm">
-              {app.decisionStatus === "ACCEPTED" && allStepsComplete
+              {app.decisionStatus === "ACCEPTED" && showTicketBanner
                 ? "Congratulations! You're confirmed. View your ticket below."
                 : app.decisionStatus === "ACCEPTED"
                   ? "Congratulations! You've been accepted. Please complete the confirmation step."
