@@ -296,11 +296,7 @@ export class AuthService {
       : [];
 
     const dob = user.applicant_profiles?.date_of_birth;
-    const dateOfBirth = dob instanceof Date
-      ? dob.toISOString().split('T')[0]
-      : typeof dob === 'string'
-        ? dob.split('T')[0]
-        : '';
+    const dateOfBirth = dob instanceof Date ? dob.toISOString().split('T')[0] : '';
 
     const profile = user.applicant_profiles;
     const firstName = profile?.first_name ?? '';
