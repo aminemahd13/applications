@@ -178,6 +178,8 @@ export interface ApplicationSummary {
 }
 
 export interface ApplicantProfile {
+    firstName?: string;
+    lastName?: string;
     fullName?: string;
     phone?: string;
     education?: string;
