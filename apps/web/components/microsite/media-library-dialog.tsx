@@ -36,7 +36,7 @@ function formatFileSize(sizeBytes: number): string {
 function formatCreatedAt(createdAt: string): string {
   const parsed = new Date(createdAt);
   if (Number.isNaN(parsed.getTime())) return createdAt;
-  return parsed.toLocaleString();
+  return parsed.toLocaleString("en-GB");
 }
 
 export function MediaLibraryDialog({

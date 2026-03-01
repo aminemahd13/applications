@@ -745,10 +745,10 @@ function collectValidationIssues(
 }
 
 function formatDeadline(deadline: Date): string {
-  return deadline.toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
+  return `${deadline.toLocaleDateString("en-GB")} ${deadline.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
 }
 
 function getFriendlySubmitError(error: unknown, deadlineAt?: string): string {
@@ -1179,7 +1179,7 @@ export default function StepFormPage() {
             <strong>Revision requested:</strong> {ni.message}
             {ni.deadlineAt && (
               <span className="text-xs text-muted-foreground ml-2">
-                (due {new Date(ni.deadlineAt).toLocaleDateString()})
+                (due {new Date(ni.deadlineAt).toLocaleDateString("en-GB")})
               </span>
             )}
           </AlertDescription>

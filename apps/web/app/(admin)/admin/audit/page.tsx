@@ -170,7 +170,7 @@ export default function AuditLogPage() {
     if (diffHr < 24) return `${diffHr}h ago`;
     const diffDay = Math.floor(diffHr / 24);
     if (diffDay < 7) return `${diffDay}d ago`;
-    return date.toLocaleDateString();
+    return date.toLocaleDateString("en-GB");
   }
 
   return (
@@ -184,7 +184,7 @@ export default function AuditLogPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1 max-w-sm">
           <Input
-            placeholder="Search actions or users…"
+            placeholder="Search actions or usersâ€¦"
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -311,7 +311,7 @@ export default function AuditLogPage() {
                                 </span>
                               </TooltipTrigger>
                               <TooltipContent>
-                                {new Date(entry.createdAt).toLocaleString()}
+                                {new Date(entry.createdAt).toLocaleString("en-GB")}
                               </TooltipContent>
                             </Tooltip>
                           </div>
@@ -338,7 +338,7 @@ export default function AuditLogPage() {
                                   <div>
                                     <span className="text-muted-foreground">Time: </span>
                                     <span className="font-medium">
-                                      {new Date(entry.createdAt).toLocaleString()}
+                                      {new Date(entry.createdAt).toLocaleString("en-GB")}
                                     </span>
                                   </div>
                                   {entry.ip && (
@@ -381,7 +381,7 @@ export default function AuditLogPage() {
           </CardContent>
           <CardFooter className="flex items-center justify-between border-t p-4">
             <p className="text-sm text-muted-foreground">
-              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total} entries
+              Showing {(page - 1) * PAGE_SIZE + 1}â€“{Math.min(page * PAGE_SIZE, total)} of {total} entries
             </p>
             <div className="flex items-center gap-2">
               <Button

@@ -97,7 +97,7 @@ function relativeTime(dateStr: string): string {
   if (diffMin < 60) return `${diffMin}m ago`;
   if (diffHr < 24) return `${diffHr}h ago`;
   if (diffDay < 7) return `${diffDay}d ago`;
-  return new Date(dateStr).toLocaleDateString();
+  return new Date(dateStr).toLocaleDateString("en-GB");
 }
 
 const typeConfig: Record<string, { icon: React.ReactNode; label: string }> = {
@@ -302,7 +302,7 @@ export default function InboxPage() {
                           {msg.eventName && <span>{msg.eventName}</span>}
                           {msg.senderName && (
                             <>
-                              <span>·</span>
+                              <span>-</span>
                               <span>{msg.senderName}</span>
                             </>
                           )}

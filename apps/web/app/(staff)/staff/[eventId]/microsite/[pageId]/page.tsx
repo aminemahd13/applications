@@ -3028,8 +3028,8 @@ function BlockInspector({
             scrollable={false}
             fields={[
               { key: "title", label: "Event title" },
-              { key: "date", label: "Start date (YYYY-MM-DD)" },
-              { key: "endDate", label: "End date (optional)" },
+              { key: "date", label: "Start date (DD/MM/YYYY)" },
+              { key: "endDate", label: "End date (optional, DD/MM/YYYY)" },
               { key: "startTime", label: "Start time" },
               { key: "endTime", label: "End time" },
               { key: "location", label: "Location" },

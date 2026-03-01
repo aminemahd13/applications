@@ -604,7 +604,7 @@ export default function ReviewsPage() {
                     </div>
                     <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
                       <span>
-                        Submitted {new Date(current.submittedAt).toLocaleDateString()}
+                        Submitted {new Date(current.submittedAt).toLocaleDateString("en-GB")}
                       </span>
                       {(current.tags ?? []).slice(0, 4).map((tag) => (
                         <Badge

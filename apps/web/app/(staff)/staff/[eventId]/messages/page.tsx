@@ -452,7 +452,7 @@ function MessageCard({
           <div>
             <p className="font-medium text-sm">{message.subject}</p>
             <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-              <span>{new Date(message.sentAt).toLocaleString()}</span>
+              <span>{new Date(message.sentAt).toLocaleString("en-GB")}</span>
               <span>|</span>
               <span className="flex items-center gap-1">
                 <Users className="h-3 w-3" />

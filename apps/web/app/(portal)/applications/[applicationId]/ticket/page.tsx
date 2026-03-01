@@ -184,7 +184,7 @@ export default function TicketPage() {
               {ticket.eventDate && (
                 <span className="flex items-center gap-1">
                   <Calendar className="h-3.5 w-3.5" />
-                  {new Date(ticket.eventDate).toLocaleDateString()}
+                  {new Date(ticket.eventDate).toLocaleDateString("en-GB")}
                 </span>
               )}
               {ticket.eventLocation && (
@@ -237,7 +237,7 @@ export default function TicketPage() {
               {ticket.checkedInAt ? (
                 <Badge variant="outline" className="text-success border-success/30">
                   <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
-                  Checked in {new Date(ticket.checkedInAt).toLocaleString()}
+                  Checked in {new Date(ticket.checkedInAt).toLocaleString("en-GB")}
                 </Badge>
               ) : (
                 <Badge variant="secondary">Not yet checked in</Badge>

@@ -1578,7 +1578,7 @@ export default function MicrositePage_() {
                 </div>
                 <div className="flex items-center justify-between mt-3">
                   <span className="text-xs text-muted-foreground">
-                    v{page.version} - {new Date(page.updatedAt).toLocaleDateString()}
+                    v{page.version} - {new Date(page.updatedAt).toLocaleDateString("en-GB")}
                   </span>
                   <div className="flex gap-1">
                     <Button variant="ghost" size="icon" className="h-7 w-7" asChild>

@@ -138,7 +138,7 @@ export function StepTimeline({
               </div>
               {step.deadline && (
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Due {new Date(step.deadline).toLocaleDateString()}
+                  Due {new Date(step.deadline).toLocaleDateString("en-GB")}
                 </p>
               )}
             </div>

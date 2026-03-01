@@ -154,7 +154,7 @@ function matchesStatusFilter(status: string, filter: StatusFilterValue): boolean
   }
 }
 
-/** Normalise an API ApplicationSummary → frontend Application */
+/** Normalise an API ApplicationSummary â†’ frontend Application */
 function normalizeApplication(raw: Record<string, unknown>): Application {
   const ss = raw.stepsSummary as { total?: number; completed?: number } | undefined;
   return {
@@ -704,7 +704,7 @@ export default function ApplicationsListPage() {
           row.original.decision ? (
             <StatusBadge status={row.original.decision} />
           ) : (
-            <span className="text-xs text-muted-foreground">—</span>
+            <span className="text-xs text-muted-foreground">â€”</span>
           ),
       },
       {
@@ -736,10 +736,10 @@ export default function ApplicationsListPage() {
         cell: ({ row }) =>
           row.original.submittedAt ? (
             <span className="text-sm text-muted-foreground">
-              {new Date(row.original.submittedAt).toLocaleDateString()}
+              {new Date(row.original.submittedAt).toLocaleDateString("en-GB")}
             </span>
           ) : (
-            <span className="text-xs text-muted-foreground">—</span>
+            <span className="text-xs text-muted-foreground">â€”</span>
           ),
       },
       {
@@ -1230,7 +1230,7 @@ export default function ApplicationsListPage() {
                         <div>
                           <p className="text-sm font-medium">{template.name}</p>
                           <p className="text-[11px] text-muted-foreground">
-                            {template.status} • {template.isActive ? "Active" : "Inactive"}
+                            {template.status} â€¢ {template.isActive ? "Active" : "Inactive"}
                           </p>
                         </div>
                         <div className="flex items-center gap-1">

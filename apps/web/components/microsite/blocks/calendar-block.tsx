@@ -19,17 +19,37 @@ function isExternalHref(href: string): boolean {
 function parseDate(value?: string): Date | null {
   if (!value) return null;
   const raw = value.trim();
+  const localDate = (year: number, month: number, day: number): Date | null => {
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+    const parsedLocal = new Date(year, month - 1, day);
+    if (Number.isNaN(parsedLocal.getTime())) return null;
+    if (
+      parsedLocal.getFullYear() !== year ||
+      parsedLocal.getMonth() !== month - 1 ||
+      parsedLocal.getDate() !== day
+    ) {
+      return null;
+    }
+    return parsedLocal;
+  };
+
+  const dayFirstMatch = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (dayFirstMatch) {
+    const day = Number(dayFirstMatch[1]);
+    const month = Number(dayFirstMatch[2]);
+    const year = Number(dayFirstMatch[3]);
+    return localDate(year, month, day);
+  }
+
   const plainDateMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (plainDateMatch) {
     const year = Number(plainDateMatch[1]);
     const month = Number(plainDateMatch[2]);
     const day = Number(plainDateMatch[3]);
-    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
-    const parsedLocal = new Date(year, month - 1, day);
-    if (Number.isNaN(parsedLocal.getTime())) return null;
-    return parsedLocal;
+    return localDate(year, month, day);
   }
-  const parsed = Date.parse(value);
+
+  const parsed = Date.parse(raw);
   return Number.isFinite(parsed) ? new Date(parsed) : null;
 }
 
@@ -91,13 +111,9 @@ function resolveTimeRange(item: CalendarItem): string {
 }
 
 function formatDayHeader(key: string): string {
-  const parsed = parseDate(`${key}T00:00:00`);
+  const parsed = parseDate(key);
   if (!parsed) return key;
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  }).format(parsed);
+  return parsed.toLocaleDateString("en-GB");
 }
 
 function expandDayRange(startKey: string, endKey?: string): string[] {

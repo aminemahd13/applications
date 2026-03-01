@@ -926,7 +926,7 @@ export default function FormsPage() {
                       Version {version.versionNumber}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      Published {new Date(version.publishedAt).toLocaleString()}
+                      Published {new Date(version.publishedAt).toLocaleString("en-GB")}
                     </p>
                   </div>
                   <Button
@@ -1846,7 +1846,7 @@ export default function FormsPage() {
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate text-xs text-muted-foreground">
-                    Updated {new Date(form.updatedAt).toLocaleDateString()}
+                    Updated {new Date(form.updatedAt).toLocaleDateString("en-GB")}
                   </span>
                   <div className="flex gap-1">
                     <Button

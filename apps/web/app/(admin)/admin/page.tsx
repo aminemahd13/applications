@@ -193,8 +193,8 @@ export default function AdminOverviewPage() {
                 <div>
                   <p className="font-medium">{event.name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {event.applicationCount} applications · Created{" "}
-                    {new Date(event.createdAt).toLocaleDateString()}
+                    {event.applicationCount} applications - Created{" "}
+                    {new Date(event.createdAt).toLocaleDateString("en-GB")}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">

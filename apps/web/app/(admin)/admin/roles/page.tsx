@@ -166,7 +166,7 @@ function formatDateShort(value?: string | null): string {
   if (!value) return "None";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "None";
-  return parsed.toLocaleString();
+  return parsed.toLocaleString("en-GB");
 }
 
 function getAccessState(member: StaffMember): "ACTIVE" | "SCHEDULED" | "EXPIRED" {
@@ -730,7 +730,7 @@ export default function RolesPage() {
                                   <span className="text-xs text-muted-foreground">
                                     {new Date(
                                       assignment.assignedAt,
-                                    ).toLocaleDateString()}
+                                    ).toLocaleDateString("en-GB")}
                                   </span>
                                   <Button
                                     variant="ghost"
@@ -796,7 +796,7 @@ export default function RolesPage() {
                             key={assignment.id}
                             className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${ROLE_COLORS[assignment.role] ?? "bg-muted text-muted-foreground"}`}
                           >
-                            {assignment.role.replace(/_/g, " ")} ·{" "}
+                            {assignment.role.replace(/_/g, " ")} -{" "}
                             {assignment.eventName ?? "Global"}
                           </span>
                         ))}

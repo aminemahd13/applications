@@ -149,7 +149,7 @@ export default function VerifyCredentialPage() {
                 <Calendar className="h-3.5 w-3.5" />
                 Issued at
               </p>
-              <p className="font-medium">{new Date(payload.issuedAt).toLocaleString()}</p>
+              <p className="font-medium">{new Date(payload.issuedAt).toLocaleString("en-GB")}</p>
             </div>
             <div className="rounded-lg border p-3">
               <p className="text-xs text-muted-foreground">Certificate ID</p>
