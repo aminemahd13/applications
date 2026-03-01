@@ -177,6 +177,206 @@ describe('ApplicationsService applicant visibility', () => {
       }),
     );
   });
+
+  it('shows hidden steps once they are unlocked for applicant view', async () => {
+    const now = new Date('2026-02-20T10:00:00.000Z');
+    const mockPrisma = {
+      applications: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'app-1',
+          event_id: 'event-1',
+          applicant_user_id: 'user-1',
+          decision_status: 'NONE',
+          decision_published_at: null,
+          decision_draft: null,
+          tags: [],
+          internal_notes: null,
+          assigned_reviewer_id: null,
+          created_at: now,
+          updated_at: now,
+          users_applications_applicant_user_idTousers: {
+            id: 'user-1',
+            email: 'user@example.com',
+            applicant_profiles: null,
+          },
+          application_step_states: [
+            {
+              application_id: 'app-1',
+              step_id: 'hidden-locked',
+              status: 'LOCKED',
+              current_draft_id: null,
+              latest_submission_version_id: null,
+              revision_cycle_count: 0,
+              unlocked_at: null,
+              last_activity_at: now,
+              workflow_steps: {
+                title: 'Hidden locked',
+                step_index: 0,
+                category: 'APPLICATION',
+                deadline_at: null,
+                instructions_rich: null,
+                hidden: true,
+                form_versions: null,
+              },
+            },
+            {
+              application_id: 'app-1',
+              step_id: 'hidden-unlocked',
+              status: 'UNLOCKED',
+              current_draft_id: null,
+              latest_submission_version_id: null,
+              revision_cycle_count: 0,
+              unlocked_at: now,
+              last_activity_at: now,
+              workflow_steps: {
+                title: 'Hidden unlocked',
+                step_index: 1,
+                category: 'APPLICATION',
+                deadline_at: null,
+                instructions_rich: null,
+                hidden: true,
+                form_versions: null,
+              },
+            },
+            {
+              application_id: 'app-1',
+              step_id: 'visible',
+              status: 'UNLOCKED',
+              current_draft_id: null,
+              latest_submission_version_id: null,
+              revision_cycle_count: 0,
+              unlocked_at: now,
+              last_activity_at: now,
+              workflow_steps: {
+                title: 'Visible step',
+                step_index: 2,
+                category: 'APPLICATION',
+                deadline_at: null,
+                instructions_rich: null,
+                hidden: false,
+                form_versions: null,
+              },
+            },
+          ],
+          attendance_records: null,
+          completion_credentials: null,
+        }),
+      },
+    };
+    const mockCls = {
+      get: jest.fn((key: string) => (key === 'actorId' ? 'user-1' : undefined)),
+    };
+    const stepStateService = {
+      ensureStepStates: jest.fn().mockResolvedValue(false),
+    };
+
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      mockCls as any,
+      stepStateService as any,
+    );
+
+    const result = await service.findMyApplication('event-1');
+
+    expect(result?.stepStates.map((step) => step.stepId)).toEqual([
+      'hidden-unlocked',
+      'visible',
+    ]);
+  });
+});
+
+describe('ApplicationsService ticket confirmation gating', () => {
+  let service: ApplicationsService;
+  let mockPrisma: any;
+  let mockCls: any;
+
+  beforeEach(() => {
+    process.env.JWT_SECRET = 'test-secret';
+    mockCls = {
+      get: jest.fn((key: string) =>
+        key === 'actorId' ? 'reviewer-1' : undefined,
+      ),
+    };
+    mockPrisma = {
+      events: {
+        findUnique: jest.fn().mockResolvedValue({
+          checkin_config: {
+            enabled: true,
+            allowSelfCheckin: true,
+          },
+        }),
+      },
+      applications: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'app-1',
+          event_id: 'event-1',
+          applicant_user_id: 'user-1',
+          decision_status: 'ACCEPTED',
+          decision_published_at: new Date('2026-02-20T10:00:00.000Z'),
+          attendance_records: null,
+        }),
+      },
+      application_step_states: {
+        findMany: jest.fn(),
+      },
+      attendance_records: {
+        upsert: jest.fn(),
+        update: jest.fn(),
+        findUnique: jest.fn(),
+      },
+    };
+
+    service = new ApplicationsService(
+      mockPrisma as any,
+      mockCls as any,
+      {} as any,
+    );
+  });
+
+  afterEach(() => {
+    delete process.env.JWT_SECRET;
+  });
+
+  it('blocks ticket generation before confirmation approval', async () => {
+    mockPrisma.application_step_states.findMany.mockResolvedValue([
+      { status: 'SUBMITTED' },
+    ]);
+
+    await expect(
+      service.confirmAttendance('event-1', 'app-1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(mockPrisma.attendance_records.upsert).not.toHaveBeenCalled();
+  });
+
+  it('generates ticket after confirmation approval', async () => {
+    mockPrisma.application_step_states.findMany.mockResolvedValue([
+      { status: 'APPROVED' },
+    ]);
+    mockPrisma.attendance_records.upsert.mockResolvedValue({
+      application_id: 'app-1',
+      qr_token_hash: 'jti-1',
+    });
+
+    const result = await service.confirmAttendance('event-1', 'app-1');
+
+    expect(typeof result.qrToken).toBe('string');
+    expect(result.qrToken.length).toBeGreaterThan(10);
+    expect(mockPrisma.attendance_records.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks ticket retrieval before confirmation approval', async () => {
+    mockPrisma.application_step_states.findMany.mockResolvedValue([
+      { status: 'SUBMITTED' },
+    ]);
+    mockPrisma.attendance_records.findUnique.mockResolvedValue({
+      application_id: 'app-1',
+      qr_token_hash: 'existing-jti',
+    });
+
+    await expect(service.getTicket('event-1', 'app-1')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
 });
 
 describe('ApplicationsService create profile requirements', () => {

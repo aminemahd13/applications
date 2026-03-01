@@ -212,6 +212,7 @@ export interface StepStateResponse {
     stepId: string;
     stepTitle: string;
     stepIndex: number;
+    category?: string;
     status: StepStatus;
     deadlineAt?: Date | null;
     instructions?: string;

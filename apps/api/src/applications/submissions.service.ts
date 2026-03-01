@@ -341,33 +341,6 @@ export class SubmissionsService {
     // Recompute downstream steps after transaction (can be async)
     await this.stepStateService.recomputeAllStepStates(applicationId);
 
-    // If this is a CONFIRMATION step and application is accepted, auto-create attendance record
-    if (step.category === 'CONFIRMATION') {
-      try {
-        const app = await this.prisma.applications.findFirst({
-          where: { id: applicationId, event_id: eventId },
-          select: { decision_status: true, decision_published_at: true },
-        });
-        if (app?.decision_status === 'ACCEPTED' && app.decision_published_at) {
-          const existing = await this.prisma.attendance_records.findUnique({
-            where: { application_id: applicationId },
-          });
-          if (!existing) {
-            await this.prisma.attendance_records.create({
-              data: {
-                application_id: applicationId,
-                confirmed_at: new Date(),
-                qr_token_hash: crypto.randomUUID(),
-                status: 'CONFIRMED',
-              },
-            });
-          }
-        }
-      } catch {
-        // Non-fatal: attendance record creation is best-effort here
-      }
-    }
-
     // Resolve any open needs-info requests for this step on resubmit
     await this.prisma.needs_info_requests.updateMany({
       where: {
