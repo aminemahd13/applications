@@ -198,12 +198,15 @@ describe('ApplicationsService create profile requirements', () => {
       },
       applicant_profiles: {
         findUnique: jest.fn().mockResolvedValue({
-          full_name: ' ',
+          full_name: null,
+          first_name: ' ',
+          last_name: null,
           phone: null,
           education_level: 'Undergraduate',
           institution: 'Example University',
           city: 'Rabat',
           country: 'Morocco',
+          date_of_birth: null,
         }),
       },
     };
@@ -235,7 +238,12 @@ describe('ApplicationsService create profile requirements', () => {
     const response = thrown.getResponse() as Record<string, unknown>;
     expect(response.code).toBe('PROFILE_INCOMPLETE');
     expect(response.missingFields).toEqual(
-      expect.arrayContaining(['Full name', 'Phone']),
+      expect.arrayContaining([
+        'First name',
+        'Last name',
+        'Phone',
+        'Date of birth',
+      ]),
     );
     expect(mockPrisma.applications.create).not.toHaveBeenCalled();
     expect(stepStateService.initializeStepStates).not.toHaveBeenCalled();

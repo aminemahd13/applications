@@ -28,6 +28,7 @@ export interface WorkflowStepResponse {
   rejectBehavior: string;
   strictGating: boolean;
   sensitivityLevel: string;
+  hidden: boolean;
   deadlineAt: Date | null;
   formVersionId: string | null;
   createdAt: Date;
@@ -55,6 +56,7 @@ export class WorkflowService {
       rejectBehavior: step.reject_behavior,
       strictGating: step.strict_gating,
       sensitivityLevel: step.sensitivity_level,
+      hidden: Boolean(step.hidden),
       deadlineAt: step.deadline_at,
       formVersionId: step.form_version_id,
       createdAt: step.created_at,
@@ -127,6 +129,7 @@ export class WorkflowService {
         reject_behavior: dto.rejectBehavior || 'reject_resubmit_allowed',
         strict_gating: dto.strictGating ?? true,
         sensitivity_level: dto.sensitivityLevel || 'NORMAL',
+        hidden: dto.hidden ?? false,
         deadline_at: dto.deadlineAt,
         form_version_id: dto.formVersionId,
       },
@@ -159,6 +162,7 @@ export class WorkflowService {
     if (dto.strictGating !== undefined) data.strict_gating = dto.strictGating;
     if (dto.sensitivityLevel !== undefined)
       data.sensitivity_level = dto.sensitivityLevel;
+    if (dto.hidden !== undefined) data.hidden = dto.hidden;
     if (dto.deadlineAt !== undefined) data.deadline_at = dto.deadlineAt;
     if (dto.formVersionId !== undefined && dto.formVersionId !== null) {
       await this.assertFormVersionInEvent(eventId, dto.formVersionId);

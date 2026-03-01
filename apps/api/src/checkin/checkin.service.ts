@@ -132,7 +132,7 @@ export class CheckinService {
             users_applications_applicant_user_idTousers: {
               select: {
                 email: true,
-                applicant_profiles: { select: { full_name: true } },
+                applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
               },
             },
           },
@@ -146,8 +146,7 @@ export class CheckinService {
       data: records.map((r) => ({
         id: r.id,
         applicantName:
-          r.applications?.users_applications_applicant_user_idTousers
-            ?.applicant_profiles?.full_name ?? 'Unknown',
+          ApplicationsService.getDisplayName(r.applications?.users_applications_applicant_user_idTousers?.applicant_profiles) || 'Unknown',
         applicantEmail:
           r.applications?.users_applications_applicant_user_idTousers?.email ??
           '',
@@ -211,7 +210,7 @@ export class CheckinService {
         users_applications_applicant_user_idTousers: {
           select: {
             email: true,
-            applicant_profiles: { select: { full_name: true } },
+            applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
           },
         },
       },
@@ -220,8 +219,7 @@ export class CheckinService {
     return records.map((app) => ({
       applicationId: app.id,
       applicantName:
-        app.users_applications_applicant_user_idTousers.applicant_profiles
-          ?.full_name ?? 'Unknown',
+        ApplicationsService.getDisplayName(app.users_applications_applicant_user_idTousers.applicant_profiles) || 'Unknown',
       applicantEmail:
         app.users_applications_applicant_user_idTousers.email ?? '',
       status: app.attendance_records?.status ?? 'NONE',
@@ -387,8 +385,7 @@ export class CheckinService {
     }
 
     const applicantName =
-      app.users_applications_applicant_user_idTousers.applicant_profiles
-        ?.full_name || 'Unknown';
+      ApplicationsService.getDisplayName(app.users_applications_applicant_user_idTousers.applicant_profiles) || 'Unknown';
     const applicantEmail =
       app.users_applications_applicant_user_idTousers.email;
 
@@ -505,8 +502,7 @@ export class CheckinService {
     }
 
     const applicantName =
-      app.users_applications_applicant_user_idTousers.applicant_profiles
-        ?.full_name || 'Unknown';
+      ApplicationsService.getDisplayName(app.users_applications_applicant_user_idTousers.applicant_profiles) || 'Unknown';
     const applicantEmail =
       app.users_applications_applicant_user_idTousers.email;
 

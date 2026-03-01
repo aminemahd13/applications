@@ -482,6 +482,18 @@ export class ApplicationsController {
     }
   }
 
+  private assertApplicantStepAccessible(
+    app: { stepStates?: Array<{ stepId?: string | null }> },
+    stepId: string,
+  ): void {
+    const hasStep = (app.stepStates ?? []).some(
+      (step) => step.stepId === stepId,
+    );
+    if (!hasStep) {
+      throw new NotFoundException('Step not found');
+    }
+  }
+
   // ============================================================
   // APPLICANT ENDPOINTS (my application)
   // ============================================================
@@ -508,6 +520,7 @@ export class ApplicationsController {
   ) {
     const myApp = await this.applicationsService.findMyApplication(eventId);
     if (!myApp) throw new NotFoundException('Application not found');
+    this.assertApplicantStepAccessible(myApp, stepId);
 
     const dto = SaveDraftSchema.parse(body);
     const result = await this.submissionsService.saveDraft(
@@ -529,6 +542,7 @@ export class ApplicationsController {
   ) {
     const myApp = await this.applicationsService.findMyApplication(eventId);
     if (!myApp) throw new NotFoundException('Application not found');
+    this.assertApplicantStepAccessible(myApp, stepId);
 
     const draft = await this.submissionsService.getDraft(myApp.id, stepId);
     return { data: draft };
@@ -546,6 +560,7 @@ export class ApplicationsController {
   ) {
     const myApp = await this.applicationsService.findMyApplication(eventId);
     if (!myApp) throw new NotFoundException('Application not found');
+    this.assertApplicantStepAccessible(myApp, stepId);
 
     const dto = SubmitStepSchema.parse(body);
     const submission = await this.submissionsService.submit(

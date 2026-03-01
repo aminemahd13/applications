@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import {
   ArrowRight,
   AlertCircle,
@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PageHeader, FormSkeleton } from "@/components/shared";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { getProfileCompletionStatus } from "@/lib/profile-completion";
@@ -39,12 +40,15 @@ import { toast } from "sonner";
 
 interface Profile {
   email: string;
+  firstName?: string;
+  lastName?: string;
   fullName?: string;
   phone?: string;
   education?: string;
   institution?: string;
   city?: string;
   country?: string;
+  dateOfBirth?: string;
   links?: string[];
 }
 
@@ -92,12 +96,14 @@ export default function ProfilePage() {
       try {
         const data = await apiClient<Profile>("/auth/me/profile");
         profileForm.reset({
-          fullName: data.fullName ?? "",
+          firstName: data.firstName ?? "",
+          lastName: data.lastName ?? "",
           phone: data.phone ?? "",
           education: data.education ?? "",
           institution: data.institution ?? "",
           city: data.city ?? "",
           country: data.country ?? "",
+          dateOfBirth: data.dateOfBirth ?? "",
         });
         setLinks(data.links?.length ? data.links : [""]);
       } catch {
@@ -117,13 +123,11 @@ export default function ProfilePage() {
   const continueUrl = isSafeReturnUrl(continueReturnUrl) ? continueReturnUrl : null;
 
   // Get initials for avatar
-  const fullName = profileValues.fullName ?? "";
-  const initials = fullName
-    .split(" ")
-    .map((n) => n[0])
+  const firstName = profileValues.firstName ?? "";
+  const lastName = profileValues.lastName ?? "";
+  const initials = [firstName?.[0], lastName?.[0]]
     .filter(Boolean)
     .join("")
-    .slice(0, 2)
     .toUpperCase() || user?.email?.[0]?.toUpperCase() || "?";
 
   async function onSaveProfile() {
@@ -236,7 +240,7 @@ export default function ProfilePage() {
               {initials}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-lg font-semibold truncate">{fullName || user?.email}</p>
+              <p className="text-lg font-semibold truncate">{[firstName, lastName].filter(Boolean).join(" ") || user?.email}</p>
               <p className="text-sm text-muted-foreground truncate">{user?.email}</p>
               <div className="mt-3 space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
@@ -276,20 +280,44 @@ export default function ProfilePage() {
             <Input value={user?.email ?? ""} disabled className="bg-muted/50" />
             <p className="text-xs text-muted-foreground">Email cannot be changed.</p>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="fullName" className="text-sm">Full name</Label>
-            <Input
-              id="fullName"
-              placeholder="Your full name"
-              {...profileForm.register("fullName")}
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="firstName" className="text-sm">First name</Label>
+              <Input
+                id="firstName"
+                placeholder="First name"
+                {...profileForm.register("firstName")}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="lastName" className="text-sm">Last name</Label>
+              <Input
+                id="lastName"
+                placeholder="Last name"
+                {...profileForm.register("lastName")}
+              />
+            </div>
           </div>
           <div className="space-y-2">
             <Label htmlFor="phone" className="text-sm">Phone</Label>
+            <Controller
+              control={profileForm.control}
+              name="phone"
+              render={({ field }) => (
+                <PhoneInput
+                  value={field.value ?? ""}
+                  onChange={field.onChange}
+                  placeholder="Phone number"
+                />
+              )}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="dateOfBirth" className="text-sm">Date of birth</Label>
             <Input
-              id="phone"
-              placeholder="+212 612345678"
-              {...profileForm.register("phone")}
+              id="dateOfBirth"
+              type="date"
+              {...profileForm.register("dateOfBirth")}
             />
           </div>
         </CardContent>

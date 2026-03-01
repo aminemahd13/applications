@@ -48,13 +48,22 @@ export class ApplicationsService {
     },
   } as const;
   private static readonly REQUIRED_PROFILE_FIELDS = [
-    { key: 'full_name', label: 'Full name' },
+    { key: 'first_name', label: 'First name' },
+    { key: 'last_name', label: 'Last name' },
     { key: 'phone', label: 'Phone' },
     { key: 'education_level', label: 'Education level' },
     { key: 'institution', label: 'Institution' },
     { key: 'city', label: 'City' },
     { key: 'country', label: 'Country' },
+    { key: 'date_of_birth', label: 'Date of birth' },
   ] as const;
+
+  /** Compute display name from profile name fields */
+  static getDisplayName(profile: any): string {
+    const first = profile?.first_name?.trim?.() ?? '';
+    const last = profile?.last_name?.trim?.() ?? '';
+    return [first, last].filter(Boolean).join(' ') || profile?.full_name?.trim?.() || '';
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -103,7 +112,18 @@ export class ApplicationsService {
             is: {
               applicant_profiles: {
                 is: {
-                  full_name: { contains: query, mode: 'insensitive' },
+                  first_name: { contains: query, mode: 'insensitive' },
+                },
+              },
+            },
+          },
+        },
+        {
+          users_applications_applicant_user_idTousers: {
+            is: {
+              applicant_profiles: {
+                is: {
+                  last_name: { contains: query, mode: 'insensitive' },
                 },
               },
             },
@@ -134,6 +154,8 @@ export class ApplicationsService {
             applicant_profiles: {
               select: {
                 full_name: true,
+                first_name: true,
+                last_name: true,
                 phone: true,
                 education_level: true,
                 institution: true,
@@ -191,6 +213,8 @@ export class ApplicationsService {
             applicant_profiles: {
               select: {
                 full_name: true,
+                first_name: true,
+                last_name: true,
                 phone: true,
                 education_level: true,
                 institution: true,
@@ -526,6 +550,8 @@ export class ApplicationsService {
             applicant_profiles: {
               select: {
                 full_name: true,
+                first_name: true,
+                last_name: true,
                 phone: true,
                 education_level: true,
                 institution: true,
@@ -572,6 +598,8 @@ export class ApplicationsService {
               applicant_profiles: {
                 select: {
                   full_name: true,
+                  first_name: true,
+                  last_name: true,
                   phone: true,
                   education_level: true,
                   institution: true,
@@ -621,6 +649,8 @@ export class ApplicationsService {
       where: { user_id: detail.applicantUserId },
       select: {
         full_name: true,
+        first_name: true,
+        last_name: true,
         phone: true,
         education_level: true,
         institution: true,
@@ -631,8 +661,9 @@ export class ApplicationsService {
     });
     if (profile) {
       detail.applicantProfile = this.mapApplicantProfile(profile) ?? undefined;
-      if (!detail.applicantName && profile.full_name) {
-        detail.applicantName = profile.full_name;
+      const displayName = ApplicationsService.getDisplayName(profile);
+      if (!detail.applicantName && displayName) {
+        detail.applicantName = displayName;
       }
     }
 
@@ -734,6 +765,9 @@ export class ApplicationsService {
   }
 
   private hasTextValue(value: unknown): boolean {
+    if (value instanceof Date) {
+      return !Number.isNaN(value.getTime());
+    }
     return typeof value === 'string' && value.trim().length > 0;
   }
 
@@ -741,11 +775,14 @@ export class ApplicationsService {
     profile:
       | {
           full_name: string | null;
+          first_name: string | null;
+          last_name: string | null;
           phone: string | null;
           education_level: string | null;
           institution: string | null;
           city: string | null;
           country: string | null;
+          date_of_birth: Date | string | null;
         }
       | null,
   ): string[] {
@@ -760,11 +797,14 @@ export class ApplicationsService {
       where: { user_id: userId },
       select: {
         full_name: true,
+        first_name: true,
+        last_name: true,
         phone: true,
         education_level: true,
         institution: true,
         city: true,
         country: true,
+        date_of_birth: true,
       },
     });
     const missingFields = this.getMissingRequiredProfileFields(profile);
@@ -797,6 +837,8 @@ export class ApplicationsService {
             applicant_profiles: {
               select: {
                 full_name: true,
+                first_name: true,
+                last_name: true,
                 phone: true,
                 education_level: true,
                 institution: true,
@@ -815,6 +857,7 @@ export class ApplicationsService {
                 step_index: true,
                 deadline_at: true,
                 instructions_rich: true,
+                hidden: true,
                 form_versions: { select: { schema: true } },
               },
             },
@@ -855,6 +898,8 @@ export class ApplicationsService {
               applicant_profiles: {
                 select: {
                   full_name: true,
+                  first_name: true,
+                  last_name: true,
                   phone: true,
                   education_level: true,
                   institution: true,
@@ -873,6 +918,7 @@ export class ApplicationsService {
                   step_index: true,
                   deadline_at: true,
                   instructions_rich: true,
+                  hidden: true,
                   form_versions: { select: { schema: true } },
                 },
               },
@@ -927,7 +973,7 @@ export class ApplicationsService {
         users_applications_applicant_user_idTousers: {
           select: {
             email: true,
-            applicant_profiles: { select: { full_name: true } },
+            applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
           },
         },
       },
@@ -967,9 +1013,10 @@ export class ApplicationsService {
             applicantEmail:
               app.users_applications_applicant_user_idTousers?.email ?? '',
             applicantName:
-              app.users_applications_applicant_user_idTousers?.applicant_profiles
-                ?.full_name ??
-              app.users_applications_applicant_user_idTousers?.email ??
+              ApplicationsService.getDisplayName(
+                app.users_applications_applicant_user_idTousers?.applicant_profiles,
+              ) ||
+              app.users_applications_applicant_user_idTousers?.email ||
               'Applicant',
           },
           {
@@ -1122,7 +1169,7 @@ export class ApplicationsService {
         users_applications_applicant_user_idTousers: {
           select: {
             email: true,
-            applicant_profiles: { select: { full_name: true } },
+            applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
           },
         },
       },
@@ -1173,9 +1220,12 @@ export class ApplicationsService {
                 application.users_applications_applicant_user_idTousers?.email ??
                 '',
               applicantName:
+                ApplicationsService.getDisplayName(
+                  application.users_applications_applicant_user_idTousers
+                    ?.applicant_profiles,
+                ) ||
                 application.users_applications_applicant_user_idTousers
-                  ?.applicant_profiles?.full_name ??
-                application.users_applications_applicant_user_idTousers?.email ??
+                  ?.email ||
                 'Applicant',
             },
             event,
@@ -1456,7 +1506,7 @@ export class ApplicationsService {
             users: {
               select: {
                 email: true,
-                applicant_profiles: { select: { full_name: true } },
+                applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
               },
             },
           },
@@ -1477,8 +1527,8 @@ export class ApplicationsService {
       readAt: r.read_at,
       senderEmail: r.messages.users?.email ?? null,
       senderName:
-        r.messages.users?.applicant_profiles?.full_name ??
-        r.messages.users?.email ??
+        ApplicationsService.getDisplayName(r.messages.users?.applicant_profiles) ||
+        r.messages.users?.email ||
         'Staff',
     }));
   }
@@ -1579,7 +1629,7 @@ export class ApplicationsService {
         users: {
           select: {
             email: true,
-            applicant_profiles: { select: { full_name: true } },
+            applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
           },
         },
       },
@@ -1630,7 +1680,7 @@ export class ApplicationsService {
         entityType: log.entity_type,
         entityId: log.entity_id,
         actorEmail: log.users?.email ?? 'system',
-        actorName: log.users?.applicant_profiles?.full_name ?? undefined,
+        actorName: ApplicationsService.getDisplayName(log.users?.applicant_profiles) || undefined,
         details,
         createdAt: log.created_at,
         redactionApplied: log.redaction_applied,
@@ -1857,7 +1907,7 @@ export class ApplicationsService {
       eventId: app.event_id,
       applicantUserId: app.applicant_user_id,
       applicantEmail: user?.email,
-      applicantName: user?.applicant_profiles?.full_name,
+      applicantName: ApplicationsService.getDisplayName(user?.applicant_profiles) || undefined,
       decisionStatus,
       decisionPublishedAt: decisionPublished ? app.decision_published_at : null,
       decisionDraft,
@@ -1893,7 +1943,9 @@ export class ApplicationsService {
       : [];
 
     return {
-      fullName: profile.full_name ?? undefined,
+      firstName: profile.first_name ?? undefined,
+      lastName: profile.last_name ?? undefined,
+      fullName: ApplicationsService.getDisplayName(profile) || undefined,
       phone: profile.phone ?? undefined,
       education: profile.education_level ?? undefined,
       institution: profile.institution ?? undefined,
@@ -1993,7 +2045,11 @@ export class ApplicationsService {
     });
     const user = app.users_applications_applicant_user_idTousers;
     const applicantProfile = this.toApplicantProfile(user);
-    const stepStates = app.application_step_states || [];
+    const allStepStates = app.application_step_states || [];
+    // Hide steps marked as hidden from applicant-facing views
+    const stepStates = options?.maskDecisionIfUnpublished
+      ? allStepStates.filter((ss: any) => !ss.workflow_steps?.hidden)
+      : allStepStates;
     const answersByStepId = options?.answersByStepId ?? {};
 
     return {
@@ -2872,7 +2928,7 @@ export class ApplicationsService {
             },
             users_applications_applicant_user_idTousers: {
               select: {
-                applicant_profiles: { select: { full_name: true } },
+                applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
               },
             },
           },
@@ -2883,8 +2939,7 @@ export class ApplicationsService {
     if (!record) throw new NotFoundException('Certificate not found');
 
     const attendeeName =
-      record.applications.users_applications_applicant_user_idTousers
-        ?.applicant_profiles?.full_name?.trim() || 'Attendee';
+      ApplicationsService.getDisplayName(record.applications.users_applications_applicant_user_idTousers?.applicant_profiles) || 'Attendee';
     const checkedInAt =
       record.applications.attendance_records?.checked_in_at ?? record.issued_at;
     const links = this.getCompletionCredentialLinks(
@@ -2951,7 +3006,7 @@ export class ApplicationsService {
             },
             users_applications_applicant_user_idTousers: {
               select: {
-                applicant_profiles: { select: { full_name: true } },
+                applicant_profiles: { select: { first_name: true, last_name: true, full_name: true } },
               },
             },
           },
@@ -3003,8 +3058,7 @@ export class ApplicationsService {
         },
         recipient: {
           name:
-            record.applications.users_applications_applicant_user_idTousers
-              ?.applicant_profiles?.full_name ?? 'Attendee',
+            ApplicationsService.getDisplayName(record.applications.users_applications_applicant_user_idTousers?.applicant_profiles) || 'Attendee',
         },
         checkedInAt,
       },

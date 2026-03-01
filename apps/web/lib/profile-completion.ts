@@ -1,19 +1,24 @@
 export interface ApplicantProfileCompletionInput {
+  firstName?: string | null;
+  lastName?: string | null;
   fullName?: string | null;
   phone?: string | null;
   education?: string | null;
   institution?: string | null;
   city?: string | null;
   country?: string | null;
+  dateOfBirth?: string | null;
 }
 
 const REQUIRED_PROFILE_FIELDS = [
-  { key: "fullName", label: "Full name" },
+  { key: "firstName", label: "First name" },
+  { key: "lastName", label: "Last name" },
   { key: "phone", label: "Phone" },
   { key: "education", label: "Education level" },
   { key: "institution", label: "Institution" },
   { key: "city", label: "City" },
   { key: "country", label: "Country" },
+  { key: "dateOfBirth", label: "Date of birth" },
 ] as const;
 
 type RequiredProfileKey = (typeof REQUIRED_PROFILE_FIELDS)[number]["key"];
