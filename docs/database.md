@@ -54,6 +54,7 @@ Use Prisma Migrate as the single source of truth.
 - Databases created from that old flow already have app tables (`users`, `events`, `file_objects`, etc.) before Prisma migration `20260205173053_add_expires_at_to_files`.
 - The API startup script now auto-detects that shape and resolves that Prisma migration as applied so `prisma migrate deploy` can continue safely.
 - Do not run `infra/migrations` for new environments; use Prisma migrations in `packages/db/prisma/migrations`.
+- If a legacy `infra/migrations` SQL change is introduced for compatibility, add an equivalent idempotent Prisma migration so `prisma migrate deploy` remains complete on all environments.
 
 ## Seeding
 
