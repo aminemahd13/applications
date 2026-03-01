@@ -115,9 +115,10 @@ export function PhoneInput({
         disabled={disabled}
         placeholder="Code"
         searchPlaceholder="Search country or code..."
-        className="w-[46%] min-w-[14rem]"
+        className="w-[42%] min-w-[7.5rem] sm:w-[46%] sm:min-w-[14rem]"
       />
       <Input
+        className="flex-1"
         value={localNumber}
         onChange={(event) => {
           const nextLocalNumber = event.target.value;
