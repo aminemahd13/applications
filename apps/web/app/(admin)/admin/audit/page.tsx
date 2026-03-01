@@ -15,6 +15,8 @@ import {
   FileText,
   Shield,
   Settings,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,8 +35,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { PageHeader, EmptyState, TableSkeleton } from "@/components/shared";
+import { PageHeader, EmptyState, TableSkeleton, ConfirmDialog } from "@/components/shared";
 import { apiClient } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
+import { toast } from "sonner";
 
 const ACTION_ICONS: Record<string, typeof User> = {
   auth: Shield,
@@ -82,10 +86,13 @@ interface AuditResponse {
 const PAGE_SIZE = 25;
 
 export default function AuditLogPage() {
+  const { csrfToken } = useAuth();
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
+  const [isClearingAudit, setIsClearingAudit] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -115,6 +122,28 @@ export default function AuditLogPage() {
   useEffect(() => {
     fetchAudit();
   }, [fetchAudit]);
+
+  async function clearAuditLog() {
+    setIsClearingAudit(true);
+    try {
+      const result = await apiClient<{ deletedCount?: number }>("/admin/audit", {
+        method: "DELETE",
+        csrfToken: csrfToken ?? undefined,
+      });
+      const deletedCount =
+        typeof result?.deletedCount === "number" ? result.deletedCount : 0;
+      toast.success(`Deleted ${deletedCount} audit entries`);
+      setEntries([]);
+      setTotal(0);
+      setPage(1);
+      setExpandedId(null);
+    } catch {
+      /* handled */
+    } finally {
+      setIsClearingAudit(false);
+      setShowClearConfirm(false);
+    }
+  }
 
   function getActionColor(action: string) {
     const key = Object.keys(ACTION_COLORS).find((k) =>
@@ -188,6 +217,19 @@ export default function AuditLogPage() {
         </Select>
         <Button variant="outline" size="icon" onClick={fetchAudit} className="sm:ml-auto">
           <RefreshCw className="h-4 w-4" />
+        </Button>
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={() => setShowClearConfirm(true)}
+          disabled={isClearingAudit || total === 0}
+        >
+          {isClearingAudit ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+          )}
+          Delete all logs
         </Button>
       </div>
 
@@ -367,6 +409,16 @@ export default function AuditLogPage() {
           </CardFooter>
         </Card>
       )}
+
+      <ConfirmDialog
+        open={showClearConfirm}
+        onOpenChange={setShowClearConfirm}
+        title="Delete all audit logs?"
+        description="This permanently removes all audit entries and cannot be undone."
+        confirmLabel="Delete all"
+        onConfirm={clearAuditLog}
+        variant="destructive"
+      />
     </div>
   );
 }

@@ -11,6 +11,8 @@ import {
   Loader2,
   CheckCircle2,
   AlertCircle,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -118,6 +120,13 @@ interface FormDetail {
   title: string;
   status: "DRAFT" | "PUBLISHED";
   sections: FormSection[];
+}
+
+interface FormVersion {
+  id: string;
+  versionNumber: number;
+  publishedAt: string;
+  publishedBy?: string;
 }
 
 const fieldTypes = [
@@ -473,6 +482,20 @@ function toFormDetail(raw: any): FormDetail {
   };
 }
 
+function toFormVersion(raw: any): FormVersion {
+  return {
+    id: String(raw?.id ?? ""),
+    versionNumber: Number(raw?.versionNumber ?? raw?.version_number ?? 0),
+    publishedAt: String(raw?.publishedAt ?? raw?.published_at ?? new Date().toISOString()),
+    publishedBy:
+      typeof raw?.publishedBy === "string"
+        ? raw.publishedBy
+        : typeof raw?.published_by === "string"
+          ? raw.published_by
+          : undefined,
+  };
+}
+
 export default function FormsPage() {
   const params = useParams();
   const eventId = params.eventId as string;
@@ -483,12 +506,18 @@ export default function FormsPage() {
 
   // Editor state
   const [editingForm, setEditingForm] = useState<FormDetail | null>(null);
+  const [formVersions, setFormVersions] = useState<FormVersion[]>([]);
+  const [isLoadingVersions, setIsLoadingVersions] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [versionDeleteTarget, setVersionDeleteTarget] = useState<FormVersion | null>(null);
+  const [deletingVersionId, setDeletingVersionId] = useState<string | null>(null);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [bulkOptionsTarget, setBulkOptionsTarget] = useState<{ sectionId: string; fieldId: string } | null>(null);
   const [bulkOptionsText, setBulkOptionsText] = useState("");
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const [collapsedFields, setCollapsedFields] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     (async () => {
@@ -509,14 +538,26 @@ export default function FormsPage() {
   }, [eventId]);
 
   async function openForm(formId: string) {
+    setIsLoadingVersions(true);
     try {
-      const res = await apiClient<any>(
-        `/events/${eventId}/forms/${formId}`
-      );
-      const formRaw = res?.data ?? res;
+      const [formRes, versionRes] = await Promise.all([
+        apiClient<any>(`/events/${eventId}/forms/${formId}`),
+        apiClient<any>(`/events/${eventId}/forms/${formId}/versions`),
+      ]);
+      const formRaw = formRes?.data ?? formRes;
+      const rawVersions: any[] = Array.isArray(versionRes?.data)
+        ? versionRes.data
+        : Array.isArray(versionRes)
+          ? versionRes
+          : [];
       setEditingForm(toFormDetail(formRaw));
+      setFormVersions(rawVersions.map(toFormVersion));
+      setCollapsedSections({});
+      setCollapsedFields({});
     } catch {
       /* handled */
+    } finally {
+      setIsLoadingVersions(false);
     }
   }
 
@@ -529,6 +570,9 @@ export default function FormsPage() {
       });
       const data = toFormDetail(res?.data ?? res);
       setEditingForm(data);
+      setFormVersions([]);
+      setCollapsedSections({});
+      setCollapsedFields({});
       setForms((prev) => [...prev, toFormDef(res?.data ?? res)]);
     } catch {
       /* handled */
@@ -577,10 +621,15 @@ export default function FormsPage() {
     if (!editingForm) return;
     setIsPublishing(true);
     try {
-      await apiClient(`/events/${eventId}/forms/${editingForm.id}/publish`, {
+      const res = await apiClient<any>(`/events/${eventId}/forms/${editingForm.id}/publish`, {
         method: "POST",
         csrfToken: csrfToken ?? undefined,
       });
+      const publishedVersion = toFormVersion(res?.data ?? res);
+      setFormVersions((prev) => [
+        publishedVersion,
+        ...prev.filter((version) => version.id !== publishedVersion.id),
+      ]);
       toast.success("Form published!");
       setEditingForm((prev) => (prev ? { ...prev, status: "PUBLISHED" } : prev));
       setForms((prev) =>
@@ -603,12 +652,44 @@ export default function FormsPage() {
         csrfToken: csrfToken ?? undefined,
       });
       setForms((prev) => prev.filter((f) => f.id !== id));
-      if (editingForm?.id === id) setEditingForm(null);
+      if (editingForm?.id === id) {
+        setEditingForm(null);
+        setFormVersions([]);
+        setCollapsedSections({});
+        setCollapsedFields({});
+      }
       toast.success("Form deleted");
     } catch {
       /* handled */
     } finally {
       setDeleteTarget(null);
+    }
+  }
+
+  async function deleteVersion(version: FormVersion) {
+    if (!editingForm) return;
+    setDeletingVersionId(version.id);
+    try {
+      await apiClient(`/events/${eventId}/forms/${editingForm.id}/versions/${version.id}`, {
+        method: "DELETE",
+        csrfToken: csrfToken ?? undefined,
+      });
+      const remainingVersions = formVersions.filter((item) => item.id !== version.id);
+      const nextStatus: "DRAFT" | "PUBLISHED" =
+        remainingVersions.length > 0 ? "PUBLISHED" : "DRAFT";
+      setFormVersions(remainingVersions);
+      setEditingForm((prev) => (prev ? { ...prev, status: nextStatus } : prev));
+      setForms((prev) =>
+        prev.map((form) =>
+          form.id === editingForm.id ? { ...form, status: nextStatus } : form
+        )
+      );
+      toast.success(`Version ${version.versionNumber} deleted`);
+    } catch {
+      /* handled */
+    } finally {
+      setDeletingVersionId(null);
+      setVersionDeleteTarget(null);
     }
   }
 
@@ -684,6 +765,11 @@ export default function FormsPage() {
           : s
       ),
     });
+    setCollapsedFields((prev) => {
+      const next = { ...prev };
+      delete next[fieldId];
+      return next;
+    });
   }
 
   function removeSection(sectionId: string) {
@@ -692,6 +778,43 @@ export default function FormsPage() {
       ...editingForm,
       sections: editingForm.sections.filter((s) => s.id !== sectionId),
     });
+    setCollapsedSections((prev) => {
+      const next = { ...prev };
+      delete next[sectionId];
+      return next;
+    });
+  }
+
+  function toggleSectionCollapse(sectionId: string) {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [sectionId]: !prev[sectionId],
+    }));
+  }
+
+  function toggleFieldCollapse(fieldId: string) {
+    setCollapsedFields((prev) => ({
+      ...prev,
+      [fieldId]: !prev[fieldId],
+    }));
+  }
+
+  function setAllSectionCollapse(collapsed: boolean) {
+    if (!editingForm) return;
+    const nextState = Object.fromEntries(
+      editingForm.sections.map((section) => [section.id, collapsed])
+    );
+    setCollapsedSections(nextState);
+  }
+
+  function setAllFieldCollapse(collapsed: boolean) {
+    if (!editingForm) return;
+    const nextState = Object.fromEntries(
+      editingForm.sections.flatMap((section) =>
+        section.fields.map((field) => [field.fieldId, collapsed] as const)
+      )
+    );
+    setCollapsedFields(nextState);
   }
 
   function updateConditionGroup(
@@ -728,13 +851,18 @@ export default function FormsPage() {
   // If editing a form, show the editor
   if (editingForm) {
     return (
-      <div className="space-y-6 max-w-3xl">
-        <div className="flex items-center justify-between">
-          <div>
+      <div className="max-w-5xl space-y-6">
+        <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-start">
+          <div className="min-w-0">
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setEditingForm(null)}
+              onClick={() => {
+                setEditingForm(null);
+                setFormVersions([]);
+                setCollapsedSections({});
+                setCollapsedFields({});
+              }}
               className="mb-2"
             >
               Back to forms
@@ -744,10 +872,10 @@ export default function FormsPage() {
               onChange={(e) =>
                 setEditingForm({ ...editingForm, title: e.target.value })
               }
-              className="text-lg font-bold border-none px-0 focus-visible:ring-0"
+              className="text-lg font-bold border-none px-0 focus-visible:ring-0 min-w-0"
             />
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
             <Badge variant={editingForm.status === "PUBLISHED" ? "default" : "secondary"}>
               {editingForm.status}
             </Badge>
@@ -773,6 +901,73 @@ export default function FormsPage() {
           </div>
         </div>
 
+        <Card className="overflow-hidden">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold">Published versions</p>
+              <Badge variant="secondary">{formVersions.length}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {isLoadingVersions ? (
+              <p className="text-sm text-muted-foreground">Loading versions...</p>
+            ) : formVersions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No published versions yet.
+              </p>
+            ) : (
+              formVersions.map((version) => (
+                <div
+                  key={version.id}
+                  className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">
+                      Version {version.versionNumber}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Published {new Date(version.publishedAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive"
+                    onClick={() => setVersionDeleteTarget(version)}
+                    disabled={deletingVersionId === version.id}
+                  >
+                    {deletingVersionId === version.id ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Delete version
+                  </Button>
+                </div>
+              ))
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              Only versions not referenced by workflow steps or applications can be
+              deleted.
+            </p>
+          </CardContent>
+        </Card>
+
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => setAllSectionCollapse(true)}>
+            Collapse sections
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setAllSectionCollapse(false)}>
+            Expand sections
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setAllFieldCollapse(true)}>
+            Collapse questions
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setAllFieldCollapse(false)}>
+            Expand questions
+          </Button>
+        </div>
+
         {editingForm.sections.length === 0 ? (
           <EmptyState
             icon={FileEdit}
@@ -792,10 +987,22 @@ export default function FormsPage() {
           >
             {editingForm.sections.map((section) => (
               <Reorder.Item key={section.id} value={section} className="list-none">
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center gap-3">
+              <Card className="overflow-hidden">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-2 min-w-0">
                     <GripVertical className="h-5 w-5 text-muted-foreground cursor-grab shrink-0" />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 shrink-0"
+                      onClick={() => toggleSectionCollapse(section.id)}
+                    >
+                      {collapsedSections[section.id] ? (
+                        <ChevronRight className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
+                    </Button>
                     <Input
                       value={section.title}
                       onChange={(e) =>
@@ -808,18 +1015,22 @@ export default function FormsPage() {
                           ),
                         })
                       }
-                      className="font-medium flex-1 border-none px-0 focus-visible:ring-0"
+                      className="font-medium flex-1 border-none px-0 focus-visible:ring-0 min-w-0"
                     />
+                    <Badge variant="secondary" className="shrink-0">
+                      {section.fields.length} questions
+                    </Badge>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="text-destructive"
+                      className="text-destructive shrink-0"
                       onClick={() => removeSection(section.id)}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
                 </CardHeader>
+                {!collapsedSections[section.id] && (
                 <CardContent className="space-y-3">
                   <Reorder.Group
                     axis="y"
@@ -847,11 +1058,49 @@ export default function FormsPage() {
                     return (
                       <Reorder.Item key={field.fieldId} value={field} className="list-none">
                       <div
-                        className="flex items-start gap-3 p-3 rounded-lg border bg-muted/20"
+                        className="rounded-lg border bg-muted/20 p-3 overflow-hidden"
                       >
-                        <GripVertical className="h-5 w-5 text-muted-foreground cursor-grab mt-1 shrink-0" />
-                        <div className="flex-1 space-y-3">
-                          <div className="flex gap-2">
+                        <div className="flex items-start gap-3">
+                          <GripVertical className="mt-1 h-5 w-5 shrink-0 cursor-grab text-muted-foreground" />
+                          <div className="min-w-0 flex-1">
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-1.5 text-left"
+                              onClick={() => toggleFieldCollapse(field.fieldId)}
+                            >
+                              {collapsedFields[field.fieldId] ? (
+                                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                              )}
+                              <span className="truncate text-sm font-medium">
+                                {field.label || "Untitled question"}
+                              </span>
+                              <Badge variant="secondary" className="shrink-0">
+                                {fieldTypes.find((item) => item.value === field.type)?.label ?? field.type}
+                              </Badge>
+                              {field.required ? (
+                                <Badge variant="outline" className="shrink-0">
+                                  Required
+                                </Badge>
+                              ) : null}
+                            </button>
+                            <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                              Key: {field.key || field.fieldId}
+                            </p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0 text-destructive"
+                            onClick={() => removeField(section.id, field.fieldId)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                        {!collapsedFields[field.fieldId] && (
+                        <div className="mt-3 space-y-3 border-t pt-3">
+                          <div className="flex flex-col gap-2 sm:flex-row">
                             <Input
                               value={field.label}
                               onChange={(e) =>
@@ -859,7 +1108,7 @@ export default function FormsPage() {
                                   label: e.target.value,
                                 })
                               }
-                              className="h-8 text-sm"
+                              className="h-8 text-sm min-w-0"
                               placeholder="Field label"
                             />
                             <Select
@@ -870,7 +1119,7 @@ export default function FormsPage() {
                                 })
                               }
                             >
-                              <SelectTrigger className="h-8 w-40">
+                              <SelectTrigger className="h-8 w-full sm:w-40">
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
@@ -883,7 +1132,7 @@ export default function FormsPage() {
                             </Select>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2">
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                             <div className="space-y-1">
                               <Label className="text-[11px]">Field key</Label>
                               <Input
@@ -1192,7 +1441,7 @@ export default function FormsPage() {
                               {options.map((opt, idx) => (
                                 <div
                                   key={`${field.fieldId}_opt_${idx}`}
-                                  className="flex gap-2"
+                                  className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]"
                                 >
                                   <Input
                                     value={opt.label}
@@ -1235,7 +1484,7 @@ export default function FormsPage() {
                                   </Button>
                                 </div>
                               ))}
-                              <div className="flex gap-2">
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -1273,7 +1522,7 @@ export default function FormsPage() {
                           {isTextField && (
                             <div className="space-y-2">
                               <Label className="text-xs">Validation</Label>
-                              <div className="grid grid-cols-3 gap-2">
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                                 <div className="space-y-1">
                                   <Label className="text-[11px]">Min length</Label>
                                   <Input
@@ -1331,7 +1580,7 @@ export default function FormsPage() {
                           {isNumberField && (
                             <div className="space-y-2">
                               <Label className="text-xs">Validation</Label>
-                              <div className="grid grid-cols-2 gap-2">
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                 <div className="space-y-1">
                                   <Label className="text-[11px]">Min value</Label>
                                   <Input
@@ -1371,7 +1620,7 @@ export default function FormsPage() {
                           {isFileField && (
                             <div className="space-y-2">
                               <Label className="text-xs">File constraints</Label>
-                              <div className="grid grid-cols-2 gap-2">
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                 <div className="space-y-1">
                                   <Label className="text-[11px]">Allowed MIME types</Label>
                                   <Input
@@ -1415,7 +1664,7 @@ export default function FormsPage() {
                                   />
                                 </div>
                               </div>
-                              <div className="grid grid-cols-2 gap-2">
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                 <div className="space-y-1">
                                   <Label className="text-[11px]">Max files</Label>
                                   <Input
@@ -1437,14 +1686,7 @@ export default function FormsPage() {
                             </div>
                           )}
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="text-destructive h-8 w-8"
-                          onClick={() => removeField(section.id, field.fieldId)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        )}
                       </div>
                       </Reorder.Item>
                     );
@@ -1460,6 +1702,7 @@ export default function FormsPage() {
                     Add field
                   </Button>
                 </CardContent>
+                )}
               </Card>
               </Reorder.Item>
             ))}
@@ -1482,6 +1725,20 @@ export default function FormsPage() {
           description="Publishing creates a new immutable version. You can still edit the draft afterward."
           confirmLabel="Publish"
           onConfirm={publishForm}
+        />
+
+        <ConfirmDialog
+          open={!!versionDeleteTarget}
+          onOpenChange={(open) => !open && setVersionDeleteTarget(null)}
+          title={
+            versionDeleteTarget
+              ? `Delete version ${versionDeleteTarget.versionNumber}?`
+              : "Delete version?"
+          }
+          description="This only works when the version is not referenced by any workflow step, draft, or submitted application."
+          confirmLabel="Delete version"
+          onConfirm={() => versionDeleteTarget && deleteVersion(versionDeleteTarget)}
+          variant="destructive"
         />
 
         <Dialog
@@ -1564,11 +1821,11 @@ export default function FormsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {forms.map((form) => (
-            <Card key={form.id} className="cursor-pointer hover:shadow-soft transition-shadow" onClick={() => openForm(form.id)}>
-              <CardContent className="p-4">
-                <div className="flex items-start justify-between mb-3">
-                  <div>
-                    <p className="font-medium text-sm">{form.title}</p>
+            <Card key={form.id} className="cursor-pointer overflow-hidden transition-shadow hover:shadow-soft" onClick={() => openForm(form.id)}>
+              <CardContent className="p-4 min-w-0">
+                <div className="mb-3 flex items-start justify-between gap-2 min-w-0">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{form.title}</p>
                     <p className="text-xs text-muted-foreground mt-1">
                       {form.sectionCount} sections - {form.fieldCount} fields
                     </p>
@@ -1577,6 +1834,7 @@ export default function FormsPage() {
                     variant={
                       form.status === "PUBLISHED" ? "default" : "secondary"
                     }
+                    className="shrink-0"
                   >
                     {form.status === "PUBLISHED" ? (
                       <CheckCircle2 className="mr-1 h-3 w-3" />
@@ -1586,8 +1844,8 @@ export default function FormsPage() {
                     {form.status}
                   </Badge>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-xs text-muted-foreground">
                     Updated {new Date(form.updatedAt).toLocaleDateString()}
                   </span>
                   <div className="flex gap-1">
@@ -1614,7 +1872,7 @@ export default function FormsPage() {
         open={!!deleteTarget}
         onOpenChange={(v) => !v && setDeleteTarget(null)}
         title="Delete form?"
-        description="This action cannot be undone. Workflow steps using this form will need to be reassigned."
+        description="This action cannot be undone. Forms with versions linked to workflow steps or any application data cannot be deleted."
         confirmLabel="Delete"
         onConfirm={() => deleteTarget && deleteForm(deleteTarget)}
         variant="destructive"

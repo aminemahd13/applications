@@ -1410,6 +1410,11 @@ export class AdminService {
     return { data, total, page, pageSize };
   }
 
+  async clearAuditLog(): Promise<{ deletedCount: number }> {
+    const result = await this.prisma.audit_logs.deleteMany({});
+    return { deletedCount: result.count };
+  }
+
   /* ================================================================ */
   /*  Global Roles                                                     */
   /* ================================================================ */
