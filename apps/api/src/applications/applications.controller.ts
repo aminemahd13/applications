@@ -43,6 +43,17 @@ const UpdateApplicationNotesSchema = z.object({
   internalNotes: z.string().max(20000).nullable(),
 });
 
+const ExportApplicationIdsCsvSchema = z
+  .string()
+  .transform((value) =>
+    value
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0),
+  )
+  .pipe(z.array(z.string().uuid()).max(500))
+  .transform((ids) => Array.from(new Set(ids)));
+
 /**
  * Applications Controller
  * Routes split between admin/reviewer and applicant views
@@ -83,10 +94,33 @@ export class ApplicationsController {
     @Res() res: Response,
   ) {
     const parsedIds = applicationIds
-      ? applicationIds.split(',').map((id) => id.trim()).filter(Boolean)
+      ? ExportApplicationIdsCsvSchema.parse(applicationIds)
       : undefined;
     const result =
       await this.applicationsService.exportEventApplicationsCsv(eventId, parsedIds);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${result.filename}"`,
+    );
+    res.send(result.csv);
+  }
+
+  /**
+   * Export selected applications as CSV (POST body avoids URL length limits)
+   */
+  @Post('export')
+  @RequirePermission(Permission.EVENT_APPLICATION_EXPORT)
+  async exportSelectedCsv(
+    @Param('eventId') eventId: string,
+    @Body() body: any,
+    @Res() res: Response,
+  ) {
+    const dto = BulkApplicationIdsSchema.parse(body);
+    const result = await this.applicationsService.exportEventApplicationsCsv(
+      eventId,
+      dto.applicationIds,
+    );
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',
@@ -289,12 +323,28 @@ export class ApplicationsController {
    * Bulk step action (unlock, approve, needs revision, lock)
    */
   @Post('bulk/step-action')
-  @RequirePermission(Permission.EVENT_STEP_OVERRIDE_UNLOCK)
+  @RequirePermission(
+    Permission.EVENT_STEP_OVERRIDE_UNLOCK,
+    Permission.EVENT_STEP_REVIEW,
+  )
   async bulkStepAction(
     @Param('eventId') eventId: string,
     @Body() body: any,
   ) {
     const dto = BulkStepActionSchema.parse(body);
+    const permissions = new Set<Permission>(
+      ((this.cls.get('permissions') ?? []) as Permission[]).filter(
+        (permission): permission is Permission =>
+          Object.values(Permission).includes(permission),
+      ),
+    );
+    const requiredPermission =
+      dto.action === 'APPROVE' || dto.action === 'NEEDS_REVISION'
+        ? Permission.EVENT_STEP_REVIEW
+        : Permission.EVENT_STEP_OVERRIDE_UNLOCK;
+    if (!permissions.has(requiredPermission)) {
+      throw new ForbiddenException('Insufficient permissions');
+    }
     const result = await this.applicationsService.bulkStepAction(
       eventId,
       dto,

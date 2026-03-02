@@ -39,7 +39,16 @@ export const RecipientFilterSchema = z.object({
     country: z.array(z.string()).optional(),
     city: z.array(z.string()).optional(),
     educationLevel: z.array(z.string()).optional(),
-});
+}).refine(
+    (value) =>
+        value.ageMin === undefined ||
+        value.ageMax === undefined ||
+        value.ageMin <= value.ageMax,
+    {
+        message: 'ageMin must be less than or equal to ageMax',
+        path: ['ageMax'],
+    }
+);
 
 export type RecipientFilter = z.infer<typeof RecipientFilterSchema>;
 
@@ -120,7 +129,16 @@ export const SystemAnnouncementFilterSchema = z.object({
     ageMin: z.coerce.number().int().min(0).max(150).optional(),
     ageMax: z.coerce.number().int().min(0).max(150).optional(),
     excludeUserIds: z.array(z.string().uuid()).optional(),
-});
+}).refine(
+    (value) =>
+        value.ageMin === undefined ||
+        value.ageMax === undefined ||
+        value.ageMin <= value.ageMax,
+    {
+        message: 'ageMin must be less than or equal to ageMax',
+        path: ['ageMax'],
+    }
+);
 
 export type SystemAnnouncementFilter = z.infer<typeof SystemAnnouncementFilterSchema>;
 

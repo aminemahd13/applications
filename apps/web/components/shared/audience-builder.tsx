@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -186,7 +186,10 @@ export function AudienceBuilder({
     [filter.stepStatus, update],
   );
 
-  const sortedSteps = workflowSteps.sort((a, b) => a.stepIndex - b.stepIndex);
+  const sortedSteps = useMemo(
+    () => [...workflowSteps].sort((a, b) => a.stepIndex - b.stepIndex),
+    [workflowSteps],
+  );
 
   return (
     <div className="space-y-2">

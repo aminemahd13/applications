@@ -1,4 +1,4 @@
-import { DecisionStatus } from '@event-platform/shared';
+import { DecisionStatus, MessageType } from '@event-platform/shared';
 import { MessagesService } from './messages.service';
 import { NotFoundException } from '@nestjs/common';
 
@@ -17,11 +17,13 @@ describe('MessagesService', () => {
       },
       messages: {
         deleteMany: jest.fn(),
+        findMany: jest.fn(),
       },
       message_recipients: {
         findMany: jest.fn(),
         updateMany: jest.fn(),
         update: jest.fn(),
+        groupBy: jest.fn(),
       },
     };
     mockEmailService = {
@@ -78,6 +80,94 @@ describe('MessagesService', () => {
 
       expect(recipients).toEqual(['segmented-user', 'manual-user']);
     });
+
+    it('builds demographic filters with explicit relation wrappers and DOB bounds', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-03-02T12:00:00.000Z'));
+      mockPrisma.applications.findMany.mockResolvedValue([]);
+
+      await service.evaluateFilter('event-1', {
+        ageMin: 18,
+        ageMax: 30,
+        country: ['MA'],
+        city: ['Rabat'],
+        educationLevel: ['Bachelor'],
+      } as any);
+
+      const where = mockPrisma.applications.findMany.mock.calls[0][0].where;
+      expect(where.event_id).toBe('event-1');
+      expect(where.AND).toEqual(
+        expect.arrayContaining([
+          {
+            users_applications_applicant_user_idTousers: {
+              is: {
+                applicant_profiles: {
+                  is: { country: { in: ['MA'] } },
+                },
+              },
+            },
+          },
+          {
+            users_applications_applicant_user_idTousers: {
+              is: {
+                applicant_profiles: {
+                  is: { education_level: { in: ['Bachelor'] } },
+                },
+              },
+            },
+          },
+        ]),
+      );
+
+      const dobFilter = where.AND.find(
+        (condition: any) =>
+          condition?.users_applications_applicant_user_idTousers?.is
+            ?.applicant_profiles?.is?.date_of_birth,
+      );
+      expect(
+        dobFilter.users_applications_applicant_user_idTousers.is
+          .applicant_profiles.is.date_of_birth,
+      ).toEqual({
+        gte: new Date('1995-03-03T00:00:00.000Z'),
+        lte: new Date('2008-03-02T00:00:00.000Z'),
+      });
+
+      jest.useRealTimers();
+    });
+  });
+
+  describe('evaluateSystemFilter', () => {
+    it('uses explicit applicant profile relation wrappers', async () => {
+      mockPrisma.users.findMany.mockResolvedValue([]);
+
+      await service.evaluateSystemFilter({
+        country: ['MA'],
+        city: ['Rabat'],
+        educationLevel: ['Bachelor'],
+      } as any);
+
+      const where = mockPrisma.users.findMany.mock.calls[0][0].where;
+      expect(where.AND).toEqual(
+        expect.arrayContaining([
+          {
+            applicant_profiles: {
+              is: { country: { in: ['MA'] } },
+            },
+          },
+          {
+            applicant_profiles: {
+              is: {
+                city: { in: ['Rabat'], mode: 'insensitive' },
+              },
+            },
+          },
+          {
+            applicant_profiles: {
+              is: { education_level: { in: ['Bachelor'] } },
+            },
+          },
+        ]),
+      );
+    });
   });
 
   describe('processQueuedEmails', () => {
@@ -130,6 +220,36 @@ describe('MessagesService', () => {
       await expect(
         service.deleteMessage('event-1', 'missing-message'),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('system announcements scoping', () => {
+    it('lists only null-event announcement messages', async () => {
+      mockPrisma.messages.findMany.mockResolvedValue([]);
+
+      await service.listSystemAnnouncements({ limit: 10 } as any);
+
+      expect(mockPrisma.messages.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { event_id: null, type: MessageType.ANNOUNCEMENT },
+        }),
+      );
+    });
+
+    it('deletes only null-event announcement messages', async () => {
+      mockPrisma.messages.deleteMany.mockResolvedValue({ count: 1 });
+
+      await expect(
+        service.deleteSystemAnnouncement('message-1'),
+      ).resolves.toBeUndefined();
+
+      expect(mockPrisma.messages.deleteMany).toHaveBeenCalledWith({
+        where: {
+          id: 'message-1',
+          event_id: null,
+          type: MessageType.ANNOUNCEMENT,
+        },
+      });
     });
   });
 });

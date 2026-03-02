@@ -209,6 +209,8 @@ export default function ApplicationsListPage() {
   const canPublishDecisions = hasPermission(Permission.EVENT_DECISION_PUBLISH);
   const canExport = hasPermission(Permission.EVENT_APPLICATION_EXPORT);
   const canStepOverride = hasPermission(Permission.EVENT_STEP_OVERRIDE_UNLOCK);
+  const canStepReview = hasPermission(Permission.EVENT_STEP_REVIEW);
+  const canUseBulkStepActions = canStepOverride || canStepReview;
 
   const [applications, setApplications] = useState<Application[]>([]);
   const [reviewers, setReviewers] = useState<ReviewerOption[]>([]);
@@ -343,6 +345,24 @@ export default function ApplicationsListPage() {
       ),
     [bulkDecisionStatus, decisionTemplates],
   );
+  const sortedWorkflowSteps = useMemo(
+    () => [...workflowSteps].sort((a, b) => a.stepIndex - b.stepIndex),
+    [workflowSteps],
+  );
+
+  useEffect(() => {
+    const allowedActions: Array<"UNLOCK" | "APPROVE" | "NEEDS_REVISION" | "LOCK"> = [];
+    if (canStepOverride) {
+      allowedActions.push("UNLOCK", "LOCK");
+    }
+    if (canStepReview) {
+      allowedActions.push("APPROVE", "NEEDS_REVISION");
+    }
+    if (allowedActions.length === 0) return;
+    if (!allowedActions.includes(bulkStepAction)) {
+      setBulkStepAction(allowedActions[0]);
+    }
+  }, [bulkStepAction, canStepOverride, canStepReview]);
 
   function parseTagInput(input: string): string[] {
     return Array.from(
@@ -614,10 +634,20 @@ export default function ApplicationsListPage() {
     if (selectedApplicationIds.length === 0) return;
     setIsExporting(true);
     try {
-      const idsParam = selectedApplicationIds.join(",");
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (csrfToken) {
+        headers["X-CSRF-Token"] = csrfToken;
+      }
       const res = await fetch(
-        `${PUBLIC_API_URL}/events/${eventId}/applications/export?applicationIds=${encodeURIComponent(idsParam)}`,
-        { credentials: "include" },
+        `${PUBLIC_API_URL}/events/${eventId}/applications/export`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers,
+          body: JSON.stringify({ applicationIds: selectedApplicationIds }),
+        },
       );
       if (!res.ok) throw new Error("Export failed");
       const blob = await res.blob();
@@ -1063,7 +1093,7 @@ export default function ApplicationsListPage() {
                 {isExporting ? "Exporting..." : "Export selected"}
               </Button>
             )}
-            {canStepOverride && (
+            {canUseBulkStepActions && (
               <Button
                 size="sm"
                 variant="outline"
@@ -1541,13 +1571,11 @@ export default function ApplicationsListPage() {
                   <SelectValue placeholder="Select step..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {workflowSteps
-                    .sort((a, b) => a.stepIndex - b.stepIndex)
-                    .map((step) => (
-                      <SelectItem key={step.id} value={step.id}>
-                        {step.stepIndex + 1}. {step.title}
-                      </SelectItem>
-                    ))}
+                  {sortedWorkflowSteps.map((step) => (
+                    <SelectItem key={step.id} value={step.id}>
+                      {step.stepIndex + 1}. {step.title}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -1558,10 +1586,18 @@ export default function ApplicationsListPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="UNLOCK">Unlock</SelectItem>
-                  <SelectItem value="APPROVE">Approve</SelectItem>
-                  <SelectItem value="NEEDS_REVISION">Request revision</SelectItem>
-                  <SelectItem value="LOCK">Lock</SelectItem>
+                  {canStepOverride && (
+                    <SelectItem value="UNLOCK">Unlock</SelectItem>
+                  )}
+                  {canStepReview && (
+                    <SelectItem value="APPROVE">Approve</SelectItem>
+                  )}
+                  {canStepReview && (
+                    <SelectItem value="NEEDS_REVISION">Request revision</SelectItem>
+                  )}
+                  {canStepOverride && (
+                    <SelectItem value="LOCK">Lock</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             </div>

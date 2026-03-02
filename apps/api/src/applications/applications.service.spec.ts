@@ -449,3 +449,105 @@ describe('ApplicationsService create profile requirements', () => {
     expect(stepStateService.initializeStepStates).not.toHaveBeenCalled();
   });
 });
+
+describe('ApplicationsService bulk step action', () => {
+  it('adds approve side effects and tolerates non-fatal confirmation failures', async () => {
+    const mockPrisma = {
+      workflow_steps: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'step-1',
+          category: 'CONFIRMATION',
+        }),
+      },
+      applications: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'app-1' }]),
+      },
+      application_step_states: {
+        findMany: jest.fn().mockResolvedValue([{ application_id: 'app-1' }]),
+        updateMany: jest.fn(),
+      },
+      needs_info_requests: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const stepStateService = {
+      manualUnlock: jest.fn(),
+      markApproved: jest.fn().mockResolvedValue(undefined),
+      markNeedsRevision: jest.fn(),
+    };
+
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      stepStateService as any,
+    );
+    jest
+      .spyOn(service, 'confirmAttendance')
+      .mockRejectedValue(new Error('non-fatal'));
+
+    const result = await service.bulkStepAction('event-1', {
+      applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
+      stepId: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
+      action: 'APPROVE',
+    });
+
+    expect(stepStateService.markApproved).toHaveBeenCalledWith(
+      'app-1',
+      'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
+    );
+    expect(mockPrisma.needs_info_requests.updateMany).toHaveBeenCalledWith({
+      where: {
+        application_id: 'app-1',
+        step_id: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
+        status: 'OPEN',
+      },
+      data: {
+        status: 'CANCELED',
+        resolved_at: expect.any(Date),
+      },
+    });
+    expect(service.confirmAttendance).toHaveBeenCalledWith('event-1', 'app-1');
+    expect(result).toEqual({ updated: 1, skipped: 0 });
+  });
+
+  it('skips LOCK when no step state exists for an application', async () => {
+    const mockPrisma = {
+      workflow_steps: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'step-1',
+          category: 'APPLICATION',
+        }),
+      },
+      applications: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'app-1' }]),
+      },
+      application_step_states: {
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn(),
+      },
+      needs_info_requests: {
+        updateMany: jest.fn(),
+      },
+    };
+    const stepStateService = {
+      manualUnlock: jest.fn(),
+      markApproved: jest.fn(),
+      markNeedsRevision: jest.fn(),
+    };
+
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      stepStateService as any,
+    );
+
+    const result = await service.bulkStepAction('event-1', {
+      applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
+      stepId: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
+      action: 'LOCK',
+    });
+
+    expect(mockPrisma.application_step_states.updateMany).not.toHaveBeenCalled();
+    expect(result).toEqual({ updated: 0, skipped: 1 });
+  });
+});
