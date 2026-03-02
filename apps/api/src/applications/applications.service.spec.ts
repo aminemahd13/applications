@@ -1,5 +1,5 @@
 import { ApplicationsService } from './applications.service';
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 
 describe('ApplicationsService completion credentials', () => {
   let service: ApplicationsService;
@@ -549,5 +549,164 @@ describe('ApplicationsService bulk step action', () => {
 
     expect(mockPrisma.application_step_states.updateMany).not.toHaveBeenCalled();
     expect(result).toEqual({ updated: 0, skipped: 1 });
+  });
+});
+
+describe('ApplicationsService CSV export', () => {
+  const now = new Date('2026-03-02T12:00:00.000Z');
+
+  function createService() {
+    const mockPrisma = {
+      events: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'event-1',
+          slug: 'math-maroc-2026',
+          title: 'Math & Maroc 2026',
+        }),
+      },
+      applications: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'app-1',
+            event_id: 'event-1',
+            applicant_user_id: 'user-1',
+            decision_status: 'ACCEPTED',
+            decision_published_at: new Date('2026-03-01T09:00:00.000Z'),
+            decision_draft: null,
+            tags: ['vip', 'intl'],
+            created_at: new Date('2026-02-20T10:00:00.000Z'),
+            updated_at: new Date('2026-03-01T09:00:00.000Z'),
+            users_applications_applicant_user_idTousers: {
+              id: 'user-1',
+              email: 'user@example.com',
+              applicant_profiles: {
+                full_name: 'Ada Lovelace',
+                first_name: 'Ada',
+                last_name: 'Lovelace',
+                date_of_birth: new Date('2000-01-02T00:00:00.000Z'),
+                phone: '+212600000000',
+                education_level: 'Bachelor',
+                institution: 'UM5',
+                city: 'Rabat',
+                country: 'MA',
+                links: ['https://portfolio.example.com'],
+              },
+            },
+            application_step_states: [
+              {
+                step_id: 'step-1',
+                status: 'APPROVED',
+                latest_submission_version_id: null,
+                workflow_steps: {
+                  title: 'Profile',
+                  step_index: 0,
+                },
+              },
+            ],
+            attendance_records: {
+              status: 'CONFIRMED',
+            },
+          },
+        ]),
+      },
+      completion_credentials: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      file_objects: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      step_submission_versions: {
+        findMany: jest.fn(),
+      },
+      admin_change_patches: {
+        findMany: jest.fn(),
+      },
+      $transaction: jest.fn(),
+    };
+
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+
+    return { service, mockPrisma };
+  }
+
+  beforeEach(() => {
+    jest.useFakeTimers().setSystemTime(now);
+    process.env.APP_BASE_URL = 'https://platform.example.com';
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    delete process.env.APP_BASE_URL;
+  });
+
+  it('exports CSV including profile and application fields', async () => {
+    const { service } = createService();
+
+    const result = await service.exportEventApplicationsCsv('event-1');
+
+    expect(result.filename).toBe('applications-math-maroc-2026.csv');
+    const lines = result.csv.split('\n');
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+
+    const header = lines[0];
+    const row = lines[1];
+
+    expect(header).toContain('"applicationId"');
+    expect(header).toContain('"decisionStatus"');
+    expect(header).toContain('"applicationCreatedAt"');
+
+    expect(header).toContain('"applicantName"');
+    expect(header).toContain('"applicantFirstName"');
+    expect(header).toContain('"applicantLastName"');
+    expect(header).toContain('"applicantDateOfBirth"');
+    expect(header).toContain('"phone"');
+    expect(header).toContain('"education"');
+    expect(header).toContain('"institution"');
+    expect(header).toContain('"city"');
+    expect(header).toContain('"country"');
+    expect(header).toContain('"profileLinks"');
+
+    expect(row).toContain('"app-1"');
+    expect(row).toContain('"user@example.com"');
+    expect(row).toContain('"Ada Lovelace"');
+    expect(row).toContain('"Ada"');
+    expect(row).toContain('"Lovelace"');
+    expect(row).toContain('"2000-01-02T00:00:00.000Z"');
+    expect(row).toContain('"+212600000000"');
+    expect(row).toContain('"Bachelor"');
+    expect(row).toContain('"UM5"');
+    expect(row).toContain('"Rabat"');
+    expect(row).toContain('"MA"');
+    expect(row).toContain('"https://portfolio.example.com"');
+    expect(row).toContain('"ACCEPTED"');
+    expect(row).toContain('"vip | intl"');
+  });
+
+  it('applies selected application IDs filter for export', async () => {
+    const { service, mockPrisma } = createService();
+
+    await service.exportEventApplicationsCsv('event-1', ['app-1']);
+
+    expect(mockPrisma.applications.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          event_id: 'event-1',
+          id: { in: ['app-1'] },
+        },
+      }),
+    );
+  });
+
+  it('fails when event does not exist', async () => {
+    const { service, mockPrisma } = createService();
+    mockPrisma.events.findUnique.mockResolvedValueOnce(null);
+
+    await expect(
+      service.exportEventApplicationsCsv('missing-event'),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });
