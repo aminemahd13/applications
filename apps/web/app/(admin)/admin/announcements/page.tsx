@@ -264,7 +264,7 @@ export default function AdminAnnouncementsPage() {
       const payload = await fetchAnnouncements(nextCursor);
       setAnnouncements((current) => {
         const seen = new Set(current.map((a) => a.id));
-        return [...current, ...payload.items.filter((a) => !seen.has(a.id))];
+        return [...current, ...payload.items.filter((a: SentAnnouncement) => !seen.has(a.id))];
       });
       setNextCursor(payload.nextCursor);
     } catch {
