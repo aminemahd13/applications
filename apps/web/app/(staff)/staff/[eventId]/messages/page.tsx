@@ -40,10 +40,13 @@ import {
   PageHeader,
   EmptyState,
   CardSkeleton,
+  AudienceBuilder,
 } from "@/components/shared";
 import { apiClient } from "@/lib/api";
 import { useAuth, usePermissions } from "@/lib/auth-context";
 import { Permission } from "@event-platform/shared";
+import type { RecipientFilter } from "@event-platform/shared";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 
 interface SentMessage {
@@ -104,7 +107,10 @@ export default function MessagesPage() {
   const [composeSubject, setComposeSubject] = useState("");
   const [composeBody, setComposeBody] = useState("");
   const [composeRecipient, setComposeRecipient] = useState("");
-  const [composeFilter, setComposeFilter] = useState("all");
+  const [composeSendEmail, setComposeSendEmail] = useState(false);
+  const [recipientFilter, setRecipientFilter] = useState<RecipientFilter>({});
+  const [previewCount, setPreviewCount] = useState<number | null>(null);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isSending, setIsSending] = useState(false);
 
   const fetchMessages = useCallback(async (
@@ -129,6 +135,33 @@ export default function MessagesPage() {
     })();
   }, [fetchMessages]);
 
+  // Debounced recipient preview for announcements
+  useEffect(() => {
+    if (!showCompose || composeType !== "ANNOUNCEMENT") {
+      setPreviewCount(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setIsLoadingPreview(true);
+      try {
+        const res = await apiClient<{ data: { count: number } }>(
+          `/events/${eventId}/messages/preview-recipients`,
+          {
+            method: "POST",
+            body: { recipientFilter },
+            csrfToken: csrfToken ?? undefined,
+          },
+        );
+        setPreviewCount(res.data?.count ?? 0);
+      } catch {
+        setPreviewCount(null);
+      } finally {
+        setIsLoadingPreview(false);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [recipientFilter, showCompose, composeType, eventId, csrfToken]);
+
   async function handleSend() {
     if (!composeSubject.trim() || !composeBody.trim()) {
       toast.error("Subject and body are required");
@@ -144,20 +177,15 @@ export default function MessagesPage() {
         title: composeSubject,
         bodyRich: composeBody,
         bodyText: composeBody,
-        sendEmail: false,
+        sendEmail: composeSendEmail,
       };
       if (composeType === "DIRECT" && composeRecipient) {
         payload.recipientFilter = {
           emails: [composeRecipient.trim().toLowerCase()],
         };
       } else {
-        if (composeFilter === "all") {
-          payload.recipientFilter = {};
-        } else {
-          payload.recipientFilter = {
-            decisionStatus: [composeFilter.toUpperCase()],
-          };
-        }
+        // Use the full audience builder filter for announcements
+        payload.recipientFilter = recipientFilter;
       }
       await apiClient(`/events/${eventId}/messages`, {
         method: "POST",
@@ -169,6 +197,8 @@ export default function MessagesPage() {
       setComposeSubject("");
       setComposeBody("");
       setComposeRecipient("");
+      setRecipientFilter({});
+      setComposeSendEmail(false);
       // Refresh
       const refreshed = await fetchMessages();
       setMessages(refreshed.items);
@@ -328,7 +358,7 @@ export default function MessagesPage() {
 
       {/* Compose dialog */}
       <Dialog open={showCompose} onOpenChange={setShowCompose}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Compose message</DialogTitle>
             <DialogDescription>
@@ -350,7 +380,7 @@ export default function MessagesPage() {
                   <SelectItem value="ANNOUNCEMENT">
                     <span className="flex items-center gap-2">
                       <Users className="h-3.5 w-3.5" />
-                      Announcement (all applicants)
+                      Announcement
                     </span>
                   </SelectItem>
                   <SelectItem value="DIRECT">
@@ -364,20 +394,13 @@ export default function MessagesPage() {
             </div>
 
             {composeType === "ANNOUNCEMENT" && (
-              <div className="space-y-2">
-                <Label className="text-sm">Filter recipients</Label>
-                <Select value={composeFilter} onValueChange={setComposeFilter}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All applicants</SelectItem>
-                    <SelectItem value="accepted">Accepted only</SelectItem>
-                    <SelectItem value="waitlisted">Waitlisted only</SelectItem>
-                    <SelectItem value="rejected">Rejected only</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              <AudienceBuilder
+                eventId={eventId}
+                filter={recipientFilter}
+                onChange={setRecipientFilter}
+                previewCount={previewCount}
+                isLoadingPreview={isLoadingPreview}
+              />
             )}
 
             {composeType === "DIRECT" && (
@@ -407,8 +430,19 @@ export default function MessagesPage() {
                 value={composeBody}
                 onChange={(e) => setComposeBody(e.target.value)}
                 placeholder="Write your message..."
-                rows={8}
+                rows={6}
               />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={composeSendEmail}
+                onCheckedChange={setComposeSendEmail}
+                id="compose-send-email"
+              />
+              <Label htmlFor="compose-send-email" className="text-sm">
+                Also send via email
+              </Label>
             </div>
           </div>
 

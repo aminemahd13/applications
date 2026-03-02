@@ -32,6 +32,13 @@ export const RecipientFilterSchema = z.object({
 
     // Exclusions
     excludeUserIds: z.array(z.string().uuid()).optional(),
+
+    // Demographic filters
+    ageMin: z.coerce.number().int().min(0).max(150).optional(),
+    ageMax: z.coerce.number().int().min(0).max(150).optional(),
+    country: z.array(z.string()).optional(),
+    city: z.array(z.string()).optional(),
+    educationLevel: z.array(z.string()).optional(),
 });
 
 export type RecipientFilter = z.infer<typeof RecipientFilterSchema>;
@@ -101,6 +108,32 @@ export const InboxQuerySchema = z.object({
 });
 
 export type InboxQueryDto = z.infer<typeof InboxQuerySchema>;
+
+// System-wide announcement filter (admin, no event context)
+export const SystemAnnouncementFilterSchema = z.object({
+    eventsAttended: z.array(z.string().uuid()).optional(),
+    registeredAfter: z.coerce.date().optional(),
+    registeredBefore: z.coerce.date().optional(),
+    country: z.array(z.string()).optional(),
+    city: z.array(z.string()).optional(),
+    educationLevel: z.array(z.string()).optional(),
+    ageMin: z.coerce.number().int().min(0).max(150).optional(),
+    ageMax: z.coerce.number().int().min(0).max(150).optional(),
+    excludeUserIds: z.array(z.string().uuid()).optional(),
+});
+
+export type SystemAnnouncementFilter = z.infer<typeof SystemAnnouncementFilterSchema>;
+
+export const CreateSystemAnnouncementSchema = z.object({
+    title: z.string().min(1).max(200),
+    bodyRich: z.any(),
+    bodyText: z.string().optional(),
+    actionButtons: z.array(ActionButtonSchema).max(3).optional(),
+    recipientFilter: SystemAnnouncementFilterSchema.optional(),
+    sendEmail: z.boolean().default(false),
+});
+
+export type CreateSystemAnnouncementDto = z.infer<typeof CreateSystemAnnouncementSchema>;
 
 // Message types
 export enum MessageType {

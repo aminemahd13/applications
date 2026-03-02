@@ -7,3 +7,4 @@ export { ConfirmDialog } from "./confirm-dialog";
 export { PageHeader } from "./page-header";
 export { StepTimeline } from "./step-timeline";
 export { QrScanner } from "./qr-scanner";
+export { AudienceBuilder } from "./audience-builder";

@@ -8,6 +8,7 @@ import {
   Shield,
   ScrollText,
   Settings,
+  Megaphone,
   Loader2,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
@@ -40,6 +41,7 @@ function AdminLayoutInner({ children }: { children: React.ReactNode }) {
         { label: "Events", href: "/admin/events", icon: Calendar },
         { label: "People & Stats", href: "/admin/people", icon: Users },
         { label: "Roles & Users", href: "/admin/roles", icon: Shield },
+        { label: "Announcements", href: "/admin/announcements", icon: Megaphone },
         { label: "Audit Log", href: "/admin/audit", icon: ScrollText },
         { label: "Settings", href: "/admin/settings", icon: Settings },
       ],

@@ -15,6 +15,8 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import {
   Permission,
   CreateMessageSchema,
+  CreateSystemAnnouncementSchema,
+  SystemAnnouncementFilterSchema,
   PreviewRecipientsSchema,
   MessageListQuerySchema,
   MessageRecipientsQuerySchema,
@@ -226,6 +228,61 @@ export class InboxController {
   async markAllRead() {
     const userId = this.cls.get('actorId');
     await this.messagesService.markAllAsRead(userId);
+    return { success: true };
+  }
+}
+
+/**
+ * Admin Announcements Controller (system-wide, no event context)
+ */
+@Controller('admin/announcements')
+@UseGuards(PermissionsGuard)
+export class AdminAnnouncementsController {
+  constructor(
+    private readonly messagesService: MessagesService,
+    private readonly cls: ClsService,
+  ) {}
+
+  /**
+   * Preview recipients for system-wide announcement
+   */
+  @Post('preview-recipients')
+  @RequirePermission(Permission.ADMIN_EVENTS_MANAGE)
+  async previewRecipients(@Body() body: any) {
+    const filter = SystemAnnouncementFilterSchema.parse(body?.recipientFilter ?? {});
+    const result = await this.messagesService.previewSystemRecipients(filter);
+    return { data: result };
+  }
+
+  /**
+   * Send a system-wide announcement
+   */
+  @Post()
+  @RequirePermission(Permission.ADMIN_EVENTS_MANAGE)
+  async createAnnouncement(@Body() body: any) {
+    const dto = CreateSystemAnnouncementSchema.parse(body);
+    const message = await this.messagesService.createSystemAnnouncement(dto);
+    return { data: message };
+  }
+
+  /**
+   * List system-wide announcements
+   */
+  @Get()
+  @RequirePermission(Permission.ADMIN_EVENTS_MANAGE)
+  async listAnnouncements(@Query() query: any) {
+    const dto = MessageListQuerySchema.parse(query);
+    const result = await this.messagesService.listSystemAnnouncements(dto);
+    return { data: result.items, nextCursor: result.nextCursor };
+  }
+
+  /**
+   * Delete a system announcement
+   */
+  @Delete(':messageId')
+  @RequirePermission(Permission.ADMIN_EVENTS_MANAGE)
+  async deleteAnnouncement(@Param('messageId') messageId: string) {
+    await this.messagesService.deleteMessage(null, messageId);
     return { success: true };
   }
 }
