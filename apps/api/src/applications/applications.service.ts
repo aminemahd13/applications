@@ -1534,6 +1534,7 @@ export class ApplicationsService {
   ): Promise<{ updated: number; skipped: number }> {
     const step = await this.prisma.workflow_steps.findFirst({
       where: { id: dto.stepId, event_id: eventId },
+      select: { id: true, category: true },
     });
     if (!step) throw new NotFoundException('Step not found in this event');
 
@@ -1543,8 +1544,23 @@ export class ApplicationsService {
     });
     if (apps.length === 0) return { updated: 0, skipped: 0 };
 
+    const stepStates = await this.prisma.application_step_states.findMany({
+      where: {
+        application_id: { in: apps.map((app) => app.id) },
+        step_id: dto.stepId,
+      },
+      select: { application_id: true },
+    });
+    const appIdsWithStepState = new Set(
+      stepStates.map((state) => state.application_id),
+    );
+
     let updated = 0;
     for (const app of apps) {
+      if (!appIdsWithStepState.has(app.id)) {
+        continue;
+      }
+
       try {
         switch (dto.action) {
           case 'UNLOCK':
@@ -1552,16 +1568,40 @@ export class ApplicationsService {
             break;
           case 'APPROVE':
             await this.stepStateService.markApproved(app.id, dto.stepId);
+            await this.prisma.needs_info_requests.updateMany({
+              where: {
+                application_id: app.id,
+                step_id: dto.stepId,
+                status: 'OPEN',
+              },
+              data: {
+                status: 'CANCELED',
+                resolved_at: new Date(),
+              },
+            });
+            if (step.category === 'CONFIRMATION') {
+              try {
+                await this.confirmAttendance(eventId, app.id);
+              } catch {
+                // Non-fatal in bulk mode.
+              }
+            }
             break;
           case 'NEEDS_REVISION':
             await this.stepStateService.markNeedsRevision(app.id, dto.stepId);
             break;
-          case 'LOCK':
-            await this.prisma.application_step_states.updateMany({
-              where: { application_id: app.id, step_id: dto.stepId },
-              data: { status: 'LOCKED', last_activity_at: new Date() },
-            });
+          case 'LOCK': {
+            const lockResult = await this.prisma.application_step_states.updateMany(
+              {
+                where: { application_id: app.id, step_id: dto.stepId },
+                data: { status: 'LOCKED', last_activity_at: new Date() },
+              },
+            );
+            if (lockResult.count === 0) {
+              continue;
+            }
             break;
+          }
         }
         updated++;
       } catch {

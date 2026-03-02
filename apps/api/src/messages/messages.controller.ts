@@ -282,7 +282,7 @@ export class AdminAnnouncementsController {
   @Delete(':messageId')
   @RequirePermission(Permission.ADMIN_EVENTS_MANAGE)
   async deleteAnnouncement(@Param('messageId') messageId: string) {
-    await this.messagesService.deleteMessage(null, messageId);
+    await this.messagesService.deleteSystemAnnouncement(messageId);
     return { success: true };
   }
 }

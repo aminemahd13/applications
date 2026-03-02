@@ -129,7 +129,11 @@ export class MessagesService {
     if (filterAny.country?.length) {
       andConditions.push({
         users_applications_applicant_user_idTousers: {
-          applicant_profiles: { country: { in: filterAny.country } },
+          is: {
+            applicant_profiles: {
+              is: { country: { in: filterAny.country } },
+            },
+          },
         },
       });
     }
@@ -137,8 +141,12 @@ export class MessagesService {
     if (filterAny.city?.length) {
       andConditions.push({
         users_applications_applicant_user_idTousers: {
-          applicant_profiles: {
-            city: { in: filterAny.city, mode: 'insensitive' },
+          is: {
+            applicant_profiles: {
+              is: {
+                city: { in: filterAny.city, mode: 'insensitive' },
+              },
+            },
           },
         },
       });
@@ -147,37 +155,27 @@ export class MessagesService {
     if (filterAny.educationLevel?.length) {
       andConditions.push({
         users_applications_applicant_user_idTousers: {
-          applicant_profiles: { education_level: { in: filterAny.educationLevel } },
+          is: {
+            applicant_profiles: {
+              is: { education_level: { in: filterAny.educationLevel } },
+            },
+          },
         },
       });
     }
 
     if (filterAny.ageMin !== undefined || filterAny.ageMax !== undefined) {
-      const now = new Date();
-      const dobConditions: any = {};
-
-      if (filterAny.ageMax !== undefined) {
-        const minBirthDate = new Date(
-          now.getFullYear() - filterAny.ageMax - 1,
-          now.getMonth(),
-          now.getDate(),
-        );
-        dobConditions.gte = minBirthDate;
-      }
-
-      if (filterAny.ageMin !== undefined) {
-        const maxBirthDate = new Date(
-          now.getFullYear() - filterAny.ageMin,
-          now.getMonth(),
-          now.getDate(),
-        );
-        dobConditions.lte = maxBirthDate;
-      }
+      const dobConditions = this.buildDateOfBirthRange(
+        filterAny.ageMin,
+        filterAny.ageMax,
+      );
 
       andConditions.push({
         users_applications_applicant_user_idTousers: {
-          applicant_profiles: {
-            date_of_birth: dobConditions,
+          is: {
+            applicant_profiles: {
+              is: { date_of_birth: dobConditions },
+            },
           },
         },
       });
@@ -763,46 +761,40 @@ export class MessagesService {
     // Demographic filters via applicant_profiles
     if (filter.country?.length) {
       andConditions.push({
-        applicant_profiles: { country: { in: filter.country } },
+        applicant_profiles: {
+          is: { country: { in: filter.country } },
+        },
       });
     }
 
     if (filter.city?.length) {
       andConditions.push({
         applicant_profiles: {
-          city: { in: filter.city, mode: 'insensitive' },
+          is: {
+            city: { in: filter.city, mode: 'insensitive' },
+          },
         },
       });
     }
 
     if (filter.educationLevel?.length) {
       andConditions.push({
-        applicant_profiles: { education_level: { in: filter.educationLevel } },
+        applicant_profiles: {
+          is: { education_level: { in: filter.educationLevel } },
+        },
       });
     }
 
     if (filter.ageMin !== undefined || filter.ageMax !== undefined) {
-      const now = new Date();
-      const dobConditions: any = {};
-
-      if (filter.ageMax !== undefined) {
-        dobConditions.gte = new Date(
-          now.getFullYear() - filter.ageMax - 1,
-          now.getMonth(),
-          now.getDate(),
-        );
-      }
-
-      if (filter.ageMin !== undefined) {
-        dobConditions.lte = new Date(
-          now.getFullYear() - filter.ageMin,
-          now.getMonth(),
-          now.getDate(),
-        );
-      }
+      const dobConditions = this.buildDateOfBirthRange(
+        filter.ageMin,
+        filter.ageMax,
+      );
 
       andConditions.push({
-        applicant_profiles: { date_of_birth: dobConditions },
+        applicant_profiles: {
+          is: { date_of_birth: dobConditions },
+        },
       });
     }
 
@@ -908,7 +900,7 @@ export class MessagesService {
   async listSystemAnnouncements(
     query: MessageListQueryDto,
   ): Promise<{ items: MessageSummary[]; nextCursor?: string }> {
-    const where: any = { event_id: null };
+    const where: any = { event_id: null, type: MessageType.ANNOUNCEMENT };
     const cursorDate = this.parseCursorDate(query.cursor);
     if (cursorDate) {
       where.created_at = { lt: cursorDate };
@@ -961,6 +953,20 @@ export class MessagesService {
     };
   }
 
+  async deleteSystemAnnouncement(messageId: string): Promise<void> {
+    const result = await this.prisma.messages.deleteMany({
+      where: {
+        id: messageId,
+        event_id: null,
+        type: MessageType.ANNOUNCEMENT,
+      },
+    });
+
+    if (result.count === 0) {
+      throw new NotFoundException('Message not found');
+    }
+  }
+
   // ============================================================
   // HELPERS
   // ============================================================
@@ -992,6 +998,29 @@ export class MessagesService {
     const parsed = RecipientFilterSchema.safeParse(value);
     if (!parsed.success) return null;
     return parsed.data;
+  }
+
+  private buildDateOfBirthRange(
+    ageMin?: number,
+    ageMax?: number,
+  ): { gte?: Date; lte?: Date } {
+    const range: { gte?: Date; lte?: Date } = {};
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth();
+    const day = now.getUTCDate();
+
+    if (ageMax !== undefined) {
+      // Inclusive lower bound for date of birth.
+      range.gte = new Date(Date.UTC(year - ageMax - 1, month, day + 1));
+    }
+
+    if (ageMin !== undefined) {
+      // Inclusive upper bound for date of birth.
+      range.lte = new Date(Date.UTC(year - ageMin, month, day));
+    }
+
+    return range;
   }
 
   async processQueuedEmails(

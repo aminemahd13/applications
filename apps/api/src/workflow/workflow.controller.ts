@@ -43,6 +43,28 @@ export class WorkflowController {
   }
 
   /**
+   * Get lightweight workflow step list for selectors
+   */
+  @Get('steps')
+  @RequirePermission(
+    Permission.EVENT_APPLICATION_LIST,
+    Permission.EVENT_MESSAGES_SEND,
+    Permission.EVENT_STEP_OVERRIDE_UNLOCK,
+    Permission.EVENT_WORKFLOW_MANAGE,
+  )
+  async listSteps(@Param('eventId') eventId: string) {
+    const steps = await this.workflowService.getWorkflow(eventId);
+    return {
+      data: steps.map((step) => ({
+        id: step.id,
+        title: step.title,
+        stepIndex: step.stepIndex,
+        category: step.category,
+      })),
+    };
+  }
+
+  /**
    * Get single step
    */
   @Get('steps/:stepId')
