@@ -16,6 +16,7 @@ import {
   BulkApplicationTagsDto,
   BulkAssignReviewerDto,
   BulkDecisionDraftDto,
+  BulkStepActionDto,
   CreateDecisionTemplateDto,
   DecisionStatus,
   DecisionTemplateResponse,
@@ -195,6 +196,7 @@ export class ApplicationsService {
    */
   async exportEventApplicationsCsv(
     eventId: string,
+    applicationIds?: string[],
   ): Promise<{ filename: string; csv: string }> {
     const event = await this.prisma.events.findUnique({
       where: { id: eventId },
@@ -202,8 +204,13 @@ export class ApplicationsService {
     });
     if (!event) throw new NotFoundException('Event not found');
 
+    const where: Prisma.applicationsWhereInput = { event_id: eventId };
+    if (applicationIds && applicationIds.length > 0) {
+      where.id = { in: applicationIds };
+    }
+
     const applications = await this.prisma.applications.findMany({
-      where: { event_id: eventId },
+      where,
       orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
       include: {
         users_applications_applicant_user_idTousers: {
@@ -1487,6 +1494,82 @@ export class ApplicationsService {
         where: { id: applicationId },
       });
     });
+  }
+
+  /**
+   * Bulk delete applications (organizer/admin)
+   */
+  async bulkDelete(
+    eventId: string,
+    applicationIds: string[],
+  ): Promise<{ deleted: number }> {
+    const apps = await this.prisma.applications.findMany({
+      where: { event_id: eventId, id: { in: applicationIds } },
+      select: { id: true },
+    });
+    if (apps.length === 0) return { deleted: 0 };
+
+    const validIds = apps.map((a) => a.id);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.checkin_records.updateMany({
+        where: { event_id: eventId, application_id: { in: validIds } },
+        data: { application_id: null },
+      });
+
+      await tx.applications.deleteMany({
+        where: { id: { in: validIds }, event_id: eventId },
+      });
+    });
+
+    return { deleted: validIds.length };
+  }
+
+  /**
+   * Bulk step action (unlock, approve, needs revision, lock)
+   */
+  async bulkStepAction(
+    eventId: string,
+    dto: BulkStepActionDto,
+  ): Promise<{ updated: number; skipped: number }> {
+    const step = await this.prisma.workflow_steps.findFirst({
+      where: { id: dto.stepId, event_id: eventId },
+    });
+    if (!step) throw new NotFoundException('Step not found in this event');
+
+    const apps = await this.prisma.applications.findMany({
+      where: { event_id: eventId, id: { in: dto.applicationIds } },
+      select: { id: true },
+    });
+    if (apps.length === 0) return { updated: 0, skipped: 0 };
+
+    let updated = 0;
+    for (const app of apps) {
+      try {
+        switch (dto.action) {
+          case 'UNLOCK':
+            await this.stepStateService.manualUnlock(app.id, dto.stepId);
+            break;
+          case 'APPROVE':
+            await this.stepStateService.markApproved(app.id, dto.stepId);
+            break;
+          case 'NEEDS_REVISION':
+            await this.stepStateService.markNeedsRevision(app.id, dto.stepId);
+            break;
+          case 'LOCK':
+            await this.prisma.application_step_states.updateMany({
+              where: { application_id: app.id, step_id: dto.stepId },
+              data: { status: 'LOCKED', last_activity_at: new Date() },
+            });
+            break;
+        }
+        updated++;
+      } catch {
+        // Skip individual failures
+      }
+    }
+
+    return { updated, skipped: apps.length - updated };
   }
 
   /**

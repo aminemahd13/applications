@@ -17,6 +17,8 @@ import {
   Mail,
   CheckCircle2,
   Award,
+  Send,
+  ListChecks,
 } from "lucide-react";
 import {
   useReactTable,
@@ -204,6 +206,9 @@ export default function ApplicationsListPage() {
   const canDraftDecisions = hasPermission(Permission.EVENT_DECISION_DRAFT);
   const canSendMessages = hasPermission(Permission.EVENT_MESSAGES_SEND);
   const canIssueCredentials = hasPermission(Permission.EVENT_UPDATE);
+  const canPublishDecisions = hasPermission(Permission.EVENT_DECISION_PUBLISH);
+  const canExport = hasPermission(Permission.EVENT_APPLICATION_EXPORT);
+  const canStepOverride = hasPermission(Permission.EVENT_STEP_OVERRIDE_UNLOCK);
 
   const [applications, setApplications] = useState<Application[]>([]);
   const [reviewers, setReviewers] = useState<ReviewerOption[]>([]);
@@ -233,6 +238,13 @@ export default function ApplicationsListPage() {
     "ACCEPTED" | "WAITLISTED" | "REJECTED"
   >("ACCEPTED");
   const [bulkDecisionTemplateId, setBulkDecisionTemplateId] = useState("__none__");
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [isPublishingDecisions, setIsPublishingDecisions] = useState(false);
+  const [showBulkStepAction, setShowBulkStepAction] = useState(false);
+  const [bulkStepId, setBulkStepId] = useState("");
+  const [bulkStepAction, setBulkStepAction] = useState<"UNLOCK" | "APPROVE" | "NEEDS_REVISION" | "LOCK">("UNLOCK");
+  const [workflowSteps, setWorkflowSteps] = useState<Array<{ id: string; title: string; stepIndex: number }>>([]);
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState("");
   const [templateStatus, setTemplateStatus] = useState<
@@ -289,6 +301,17 @@ export default function ApplicationsListPage() {
         if (canDraftDecisions) {
           await refreshDecisionTemplates();
         }
+        // Fetch workflow steps for bulk step action
+        const stepsRes = await apiClient<{ data?: Array<any> }>(
+          `/events/${eventId}/workflow/steps`,
+        ).catch(() => ({ data: [] }));
+        setWorkflowSteps(
+          (stepsRes.data ?? []).map((s: any) => ({
+            id: s.id,
+            title: s.title,
+            stepIndex: s.stepIndex ?? s.step_index ?? 0,
+          }))
+        );
       } catch {
         /* handled */
       } finally {
@@ -535,6 +558,109 @@ export default function ApplicationsListPage() {
       setBulkMessageSendEmail(false);
     } catch {
       /* handled */
+    } finally {
+      setIsApplyingBulk(false);
+    }
+  }
+
+  async function bulkDeleteApplications() {
+    if (!canDeleteApplications || selectedApplicationIds.length === 0 || isBulkDeleting) return;
+    setIsBulkDeleting(true);
+    try {
+      await apiClient(`/events/${eventId}/applications/bulk/delete`, {
+        method: "POST",
+        body: { applicationIds: selectedApplicationIds },
+        csrfToken: csrfToken ?? undefined,
+      });
+      await refreshApplications();
+      toast.success(`${selectedApplicationIds.length} application(s) deleted`);
+      setShowBulkDelete(false);
+      setSelectedIds([]);
+    } catch {
+      toast.error("Could not delete applications");
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  }
+
+  async function publishSelectedDecisions() {
+    if (!canPublishDecisions || selectedApplicationIds.length === 0 || isPublishingDecisions) return;
+    setIsPublishingDecisions(true);
+    try {
+      const res = await apiClient<{ data?: { count: number } }>(
+        `/events/${eventId}/applications/decisions/publish`,
+        {
+          method: "POST",
+          body: { applicationIds: selectedApplicationIds },
+          csrfToken: csrfToken ?? undefined,
+        },
+      );
+      const count = res?.data?.count ?? 0;
+      await refreshApplications();
+      toast.success(
+        count > 0
+          ? `Published ${count} decision(s)`
+          : "No unpublished decisions found among selected"
+      );
+      setSelectedIds([]);
+    } catch {
+      toast.error("Could not publish decisions");
+    } finally {
+      setIsPublishingDecisions(false);
+    }
+  }
+
+  async function handleExportSelected() {
+    if (selectedApplicationIds.length === 0) return;
+    setIsExporting(true);
+    try {
+      const idsParam = selectedApplicationIds.join(",");
+      const res = await fetch(
+        `${PUBLIC_API_URL}/events/${eventId}/applications/export?applicationIds=${encodeURIComponent(idsParam)}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filenameFromContentDisposition(
+        res.headers.get("content-disposition"),
+        `applications-selected-${eventId}.csv`,
+      );
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${selectedApplicationIds.length} application(s)`);
+    } catch {
+      toast.error("Could not export selected applications");
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
+  async function applyBulkStepAction() {
+    if (!bulkStepId || selectedApplicationIds.length === 0) return;
+    setIsApplyingBulk(true);
+    try {
+      const res = await apiClient<{ data?: { updated: number; skipped: number } }>(
+        `/events/${eventId}/applications/bulk/step-action`,
+        {
+          method: "POST",
+          body: {
+            applicationIds: selectedApplicationIds,
+            stepId: bulkStepId,
+            action: bulkStepAction,
+          },
+          csrfToken: csrfToken ?? undefined,
+        },
+      );
+      const updated = res?.data?.updated ?? 0;
+      const skipped = res?.data?.skipped ?? 0;
+      await refreshApplications();
+      toast.success(`Step action applied: ${updated} updated, ${skipped} skipped`);
+      setShowBulkStepAction(false);
+    } catch {
+      toast.error("Could not apply step action");
     } finally {
       setIsApplyingBulk(false);
     }
@@ -915,6 +1041,49 @@ export default function ApplicationsListPage() {
               <Award className="mr-1.5 h-3.5 w-3.5" />
               {isIssuingCredentials ? "Issuing..." : "Issue credentials"}
             </Button>
+            {canPublishDecisions && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={publishSelectedDecisions}
+                disabled={isPublishingDecisions}
+              >
+                <Send className="mr-1.5 h-3.5 w-3.5" />
+                {isPublishingDecisions ? "Publishing..." : "Publish decisions"}
+              </Button>
+            )}
+            {canExport && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExportSelected}
+                disabled={isExporting}
+              >
+                <Download className="mr-1.5 h-3.5 w-3.5" />
+                {isExporting ? "Exporting..." : "Export selected"}
+              </Button>
+            )}
+            {canStepOverride && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setShowBulkStepAction(true)}
+              >
+                <ListChecks className="mr-1.5 h-3.5 w-3.5" />
+                Step action
+              </Button>
+            )}
+            {canDeleteApplications && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-destructive hover:text-destructive"
+                onClick={() => setShowBulkDelete(true)}
+              >
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                Delete selected
+              </Button>
+            )}
             <Button
               size="sm"
               variant="ghost"
@@ -1344,6 +1513,69 @@ export default function ApplicationsListPage() {
         variant="destructive"
         onConfirm={deleteApplication}
       />
+
+      <ConfirmDialog
+        open={showBulkDelete}
+        onOpenChange={setShowBulkDelete}
+        title={`Delete ${selectedCount} application(s)?`}
+        description={`This will permanently delete ${selectedCount} selected application(s) and all related submissions, drafts, and step states. This action cannot be undone.`}
+        confirmLabel={isBulkDeleting ? "Deleting..." : `Delete ${selectedCount}`}
+        variant="destructive"
+        onConfirm={bulkDeleteApplications}
+      />
+
+      {/* Bulk step action dialog */}
+      <Dialog open={showBulkStepAction} onOpenChange={setShowBulkStepAction}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bulk step action</DialogTitle>
+            <DialogDescription>
+              Apply a step action for {selectedCount} selected application(s).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Step</Label>
+              <Select value={bulkStepId} onValueChange={setBulkStepId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select step..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {workflowSteps
+                    .sort((a, b) => a.stepIndex - b.stepIndex)
+                    .map((step) => (
+                      <SelectItem key={step.id} value={step.id}>
+                        {step.stepIndex + 1}. {step.title}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Action</Label>
+              <Select value={bulkStepAction} onValueChange={(v) => setBulkStepAction(v as typeof bulkStepAction)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="UNLOCK">Unlock</SelectItem>
+                  <SelectItem value="APPROVE">Approve</SelectItem>
+                  <SelectItem value="NEEDS_REVISION">Request revision</SelectItem>
+                  <SelectItem value="LOCK">Lock</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkStepAction(false)}>
+              Cancel
+            </Button>
+            <Button onClick={applyBulkStepAction} disabled={isApplyingBulk || !bulkStepId}>
+              {isApplyingBulk ? "Applying..." : "Apply"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

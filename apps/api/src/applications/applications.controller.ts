@@ -25,6 +25,7 @@ import {
   BulkApplicationTagsSchema,
   BulkAssignReviewerSchema,
   BulkDecisionDraftSchema,
+  BulkStepActionSchema,
   SaveDraftSchema,
   SubmitStepSchema,
   SetDecisionSchema,
@@ -76,9 +77,16 @@ export class ApplicationsController {
    */
   @Get('export')
   @RequirePermission(Permission.EVENT_APPLICATION_EXPORT)
-  async exportCsv(@Param('eventId') eventId: string, @Res() res: Response) {
+  async exportCsv(
+    @Param('eventId') eventId: string,
+    @Query('applicationIds') applicationIds: string | undefined,
+    @Res() res: Response,
+  ) {
+    const parsedIds = applicationIds
+      ? applicationIds.split(',').map((id) => id.trim()).filter(Boolean)
+      : undefined;
     const result =
-      await this.applicationsService.exportEventApplicationsCsv(eventId);
+      await this.applicationsService.exportEventApplicationsCsv(eventId, parsedIds);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',
@@ -254,6 +262,40 @@ export class ApplicationsController {
   ) {
     const dto = BulkDecisionDraftSchema.parse(body);
     const result = await this.applicationsService.bulkDraftDecisions(
+      eventId,
+      dto,
+    );
+    return { data: result };
+  }
+
+  /**
+   * Bulk delete applications
+   */
+  @Post('bulk/delete')
+  @RequirePermission(Permission.EVENT_APPLICATION_DELETE)
+  async bulkDelete(
+    @Param('eventId') eventId: string,
+    @Body() body: any,
+  ) {
+    const dto = BulkApplicationIdsSchema.parse(body);
+    const result = await this.applicationsService.bulkDelete(
+      eventId,
+      dto.applicationIds,
+    );
+    return { data: result };
+  }
+
+  /**
+   * Bulk step action (unlock, approve, needs revision, lock)
+   */
+  @Post('bulk/step-action')
+  @RequirePermission(Permission.EVENT_STEP_OVERRIDE_UNLOCK)
+  async bulkStepAction(
+    @Param('eventId') eventId: string,
+    @Body() body: any,
+  ) {
+    const dto = BulkStepActionSchema.parse(body);
+    const result = await this.applicationsService.bulkStepAction(
       eventId,
       dto,
     );

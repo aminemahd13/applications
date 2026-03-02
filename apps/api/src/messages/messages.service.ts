@@ -10,6 +10,8 @@ import {
   RecipientFilter,
   RecipientFilterSchema,
   CreateMessageDto,
+  CreateSystemAnnouncementDto,
+  SystemAnnouncementFilter,
   InboxQueryDto,
   MessageSummary,
   MessageDetail,
@@ -121,6 +123,64 @@ export class MessagesService {
           ],
         });
       }
+    }
+
+    // Demographic filters (join through user → applicant_profiles)
+    if (filterAny.country?.length) {
+      andConditions.push({
+        users_applications_applicant_user_idTousers: {
+          applicant_profiles: { country: { in: filterAny.country } },
+        },
+      });
+    }
+
+    if (filterAny.city?.length) {
+      andConditions.push({
+        users_applications_applicant_user_idTousers: {
+          applicant_profiles: {
+            city: { in: filterAny.city, mode: 'insensitive' },
+          },
+        },
+      });
+    }
+
+    if (filterAny.educationLevel?.length) {
+      andConditions.push({
+        users_applications_applicant_user_idTousers: {
+          applicant_profiles: { education_level: { in: filterAny.educationLevel } },
+        },
+      });
+    }
+
+    if (filterAny.ageMin !== undefined || filterAny.ageMax !== undefined) {
+      const now = new Date();
+      const dobConditions: any = {};
+
+      if (filterAny.ageMax !== undefined) {
+        const minBirthDate = new Date(
+          now.getFullYear() - filterAny.ageMax - 1,
+          now.getMonth(),
+          now.getDate(),
+        );
+        dobConditions.gte = minBirthDate;
+      }
+
+      if (filterAny.ageMin !== undefined) {
+        const maxBirthDate = new Date(
+          now.getFullYear() - filterAny.ageMin,
+          now.getMonth(),
+          now.getDate(),
+        );
+        dobConditions.lte = maxBirthDate;
+      }
+
+      andConditions.push({
+        users_applications_applicant_user_idTousers: {
+          applicant_profiles: {
+            date_of_birth: dobConditions,
+          },
+        },
+      });
     }
 
     if (andConditions.length) {
@@ -350,11 +410,17 @@ export class MessagesService {
   }
 
   async getMessageById(
-    eventId: string,
+    eventId: string | null,
     messageId: string,
   ): Promise<MessageDetail> {
+    const findWhere: any = { id: messageId };
+    if (eventId !== null) {
+      findWhere.event_id = eventId;
+    } else {
+      findWhere.event_id = null;
+    }
     const message = await this.prisma.messages.findFirst({
-      where: { id: messageId, event_id: eventId },
+      where: findWhere,
       include: { _count: { select: { message_recipients: true } } },
     });
 
@@ -437,13 +503,14 @@ export class MessagesService {
     };
   }
 
-  async deleteMessage(eventId: string, messageId: string): Promise<void> {
-    const result = await this.prisma.messages.deleteMany({
-      where: {
-        id: messageId,
-        event_id: eventId,
-      },
-    });
+  async deleteMessage(eventId: string | null, messageId: string): Promise<void> {
+    const where: any = { id: messageId };
+    if (eventId !== null) {
+      where.event_id = eventId;
+    } else {
+      where.event_id = null;
+    }
+    const result = await this.prisma.messages.deleteMany({ where });
 
     if (result.count === 0) {
       throw new NotFoundException('Message not found');
@@ -664,6 +731,234 @@ export class MessagesService {
     }
 
     return {};
+  }
+
+  // ============================================================
+  // SYSTEM-WIDE ANNOUNCEMENTS (admin, no event context)
+  // ============================================================
+
+  async evaluateSystemFilter(
+    filter: SystemAnnouncementFilter,
+  ): Promise<string[]> {
+    const where: any = {};
+    const andConditions: any[] = [];
+
+    // Users who applied to specific events
+    if (filter.eventsAttended?.length) {
+      andConditions.push({
+        applications: {
+          some: { event_id: { in: filter.eventsAttended } },
+        },
+      });
+    }
+
+    // Registration date range
+    if (filter.registeredAfter) {
+      andConditions.push({ created_at: { gte: filter.registeredAfter } });
+    }
+    if (filter.registeredBefore) {
+      andConditions.push({ created_at: { lte: filter.registeredBefore } });
+    }
+
+    // Demographic filters via applicant_profiles
+    if (filter.country?.length) {
+      andConditions.push({
+        applicant_profiles: { country: { in: filter.country } },
+      });
+    }
+
+    if (filter.city?.length) {
+      andConditions.push({
+        applicant_profiles: {
+          city: { in: filter.city, mode: 'insensitive' },
+        },
+      });
+    }
+
+    if (filter.educationLevel?.length) {
+      andConditions.push({
+        applicant_profiles: { education_level: { in: filter.educationLevel } },
+      });
+    }
+
+    if (filter.ageMin !== undefined || filter.ageMax !== undefined) {
+      const now = new Date();
+      const dobConditions: any = {};
+
+      if (filter.ageMax !== undefined) {
+        dobConditions.gte = new Date(
+          now.getFullYear() - filter.ageMax - 1,
+          now.getMonth(),
+          now.getDate(),
+        );
+      }
+
+      if (filter.ageMin !== undefined) {
+        dobConditions.lte = new Date(
+          now.getFullYear() - filter.ageMin,
+          now.getMonth(),
+          now.getDate(),
+        );
+      }
+
+      andConditions.push({
+        applicant_profiles: { date_of_birth: dobConditions },
+      });
+    }
+
+    if (andConditions.length) {
+      where.AND = andConditions;
+    }
+
+    const users = await this.prisma.users.findMany({
+      where,
+      select: { id: true },
+    });
+
+    let userIds = users.map((u) => u.id);
+
+    if (filter.excludeUserIds?.length) {
+      const excludeSet = new Set(filter.excludeUserIds);
+      userIds = userIds.filter((id) => !excludeSet.has(id));
+    }
+
+    return userIds;
+  }
+
+  async previewSystemRecipients(
+    filter: SystemAnnouncementFilter,
+  ): Promise<{ count: number; sample: any[] }> {
+    const userIds = await this.evaluateSystemFilter(filter);
+
+    const sampleUsers = await this.prisma.users.findMany({
+      where: { id: { in: userIds.slice(0, 10) } },
+      select: {
+        id: true,
+        email: true,
+        applicant_profiles: { select: { full_name: true } },
+      },
+    });
+
+    return {
+      count: userIds.length,
+      sample: sampleUsers.map((u) => ({
+        id: u.id,
+        email: u.email,
+        name: u.applicant_profiles?.full_name,
+      })),
+    };
+  }
+
+  async createSystemAnnouncement(
+    dto: CreateSystemAnnouncementDto,
+  ): Promise<MessageDetail> {
+    const actorId = this.cls.get('actorId');
+
+    const userIds = dto.recipientFilter
+      ? await this.evaluateSystemFilter(dto.recipientFilter)
+      : await this.prisma.users.findMany({ select: { id: true } }).then((u) => u.map((x) => x.id));
+
+    if (userIds.length === 0) {
+      throw new BadRequestException('No recipients matched the filter');
+    }
+
+    const now = new Date();
+    const messageId = crypto.randomUUID();
+    const bodyText = dto.bodyText || this.extractPlaintext(dto.bodyRich);
+
+    await this.prisma.messages.create({
+      data: {
+        id: messageId,
+        event_id: null, // system-wide
+        created_by: actorId,
+        type: 'ANNOUNCEMENT' as MessageType,
+        title: dto.title,
+        body_rich: dto.bodyRich || {},
+        action_buttons: dto.actionButtons || [],
+        body_text: bodyText,
+        recipient_filter_json: dto.recipientFilter
+          ? (dto.recipientFilter as any)
+          : undefined,
+        resolved_recipient_count: userIds.length,
+        resolved_at: now,
+        status: 'SENT',
+      },
+    });
+
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+      const batch = userIds.slice(i, i + BATCH_SIZE);
+      await this.prisma.message_recipients.createMany({
+        data: batch.map((userId) => ({
+          id: crypto.randomUUID(),
+          message_id: messageId,
+          recipient_user_id: userId,
+          delivery_inbox_status: 'DELIVERED',
+          delivery_email_status: dto.sendEmail
+            ? EmailDeliveryStatus.QUEUED
+            : EmailDeliveryStatus.NOT_REQUESTED,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return this.getMessageById(null, messageId);
+  }
+
+  async listSystemAnnouncements(
+    query: MessageListQueryDto,
+  ): Promise<{ items: MessageSummary[]; nextCursor?: string }> {
+    const where: any = { event_id: null };
+    const cursorDate = this.parseCursorDate(query.cursor);
+    if (cursorDate) {
+      where.created_at = { lt: cursorDate };
+    }
+
+    const messages = await this.prisma.messages.findMany({
+      where,
+      orderBy: { created_at: 'desc' },
+      take: query.limit + 1,
+      include: { _count: { select: { message_recipients: true } } },
+    });
+
+    const hasMore = messages.length > query.limit;
+    const page = hasMore ? messages.slice(0, query.limit) : messages;
+
+    const messageIds = page.map((m) => m.id);
+    const readCounts =
+      messageIds.length === 0
+        ? []
+        : await this.prisma.message_recipients.groupBy({
+            by: ['message_id'],
+            where: {
+              message_id: { in: messageIds },
+              read_at: { not: null },
+            },
+            _count: { id: true },
+          });
+    const readCountByMessageId = new Map<string, number>(
+      readCounts.map((row) => [row.message_id, row._count.id]),
+    );
+
+    const items = page.map((m) => ({
+      id: m.id,
+      eventId: m.event_id,
+      type: m.type as MessageType,
+      title: m.title,
+      status: this.normalizeMessageStatus(m.status),
+      recipientCount: m._count.message_recipients,
+      readCount: readCountByMessageId.get(m.id) ?? 0,
+      createdAt: m.created_at,
+      createdBy: m.created_by,
+    }));
+
+    return {
+      items,
+      nextCursor:
+        hasMore && page.length > 0
+          ? page[page.length - 1].created_at.toISOString()
+          : undefined,
+    };
   }
 
   // ============================================================
