@@ -144,6 +144,78 @@ describe('ApplicationsService completion credentials', () => {
   });
 });
 
+describe('ApplicationsService cursor pagination', () => {
+  let service: ApplicationsService;
+  let mockPrisma: any;
+
+  beforeEach(() => {
+    mockPrisma = {
+      applications: {
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+
+    service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+  });
+
+  it('uses stable descending pagination by updated_at then id', async () => {
+    const cursorTime = new Date('2026-03-08T10:00:00.000Z');
+    mockPrisma.applications.findFirst.mockResolvedValue({
+      id: 'cursor-id',
+      updated_at: cursorTime,
+    });
+
+    await service.findAll(
+      'event-1',
+      { cursor: 'cursor-id', limit: 50, order: 'desc' } as any,
+    );
+
+    expect(mockPrisma.applications.findMany).toHaveBeenCalledTimes(1);
+    const query = mockPrisma.applications.findMany.mock.calls[0][0];
+
+    expect(query.orderBy).toEqual([{ updated_at: 'desc' }, { id: 'desc' }]);
+    expect(query.where.AND).toEqual([
+      {
+        OR: [
+          { updated_at: { lt: cursorTime } },
+          { updated_at: cursorTime, id: { lt: 'cursor-id' } },
+        ],
+      },
+    ]);
+  });
+
+  it('uses stable ascending pagination by updated_at then id', async () => {
+    const cursorTime = new Date('2026-03-08T10:00:00.000Z');
+    mockPrisma.applications.findFirst.mockResolvedValue({
+      id: 'cursor-id',
+      updated_at: cursorTime,
+    });
+
+    await service.findAll(
+      'event-1',
+      { cursor: 'cursor-id', limit: 50, order: 'asc' } as any,
+    );
+
+    expect(mockPrisma.applications.findMany).toHaveBeenCalledTimes(1);
+    const query = mockPrisma.applications.findMany.mock.calls[0][0];
+
+    expect(query.orderBy).toEqual([{ updated_at: 'asc' }, { id: 'asc' }]);
+    expect(query.where.AND).toEqual([
+      {
+        OR: [
+          { updated_at: { gt: cursorTime } },
+          { updated_at: cursorTime, id: { gt: 'cursor-id' } },
+        ],
+      },
+    ]);
+  });
+});
+
 describe('ApplicationsService applicant visibility', () => {
   it('only resolves my application for published events', async () => {
     const mockPrisma = {

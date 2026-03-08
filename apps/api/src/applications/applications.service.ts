@@ -93,7 +93,6 @@ export class ApplicationsService {
 
     const where: any = { event_id: eventId };
 
-    if (cursor) where.id = { lt: cursor };
     if (decisionStatus) where.decision_status = decisionStatus;
     if (assignedReviewerId) where.assigned_reviewer_id = assignedReviewerId;
     if (tags && tags.length > 0) where.tags = { hasEvery: tags };
@@ -143,9 +142,43 @@ export class ApplicationsService {
       };
     }
 
+    let cursorAnchor: { id: string; updated_at: Date } | null = null;
+    if (cursor) {
+      cursorAnchor = await this.prisma.applications.findFirst({
+        where: { id: cursor, event_id: eventId },
+        select: { id: true, updated_at: true },
+      });
+      if (cursorAnchor) {
+        const cursorCondition: Prisma.applicationsWhereInput =
+          order === 'asc'
+            ? {
+                OR: [
+                  { updated_at: { gt: cursorAnchor.updated_at } },
+                  {
+                    updated_at: cursorAnchor.updated_at,
+                    id: { gt: cursorAnchor.id },
+                  },
+                ],
+              }
+            : {
+                OR: [
+                  { updated_at: { lt: cursorAnchor.updated_at } },
+                  {
+                    updated_at: cursorAnchor.updated_at,
+                    id: { lt: cursorAnchor.id },
+                  },
+                ],
+              };
+        where.AND = [...(where.AND ?? []), cursorCondition];
+      } else {
+        // Fallback for stale cursors that no longer resolve.
+        where.id = order === 'asc' ? { gt: cursor } : { lt: cursor };
+      }
+    }
+
     const applications = await this.prisma.applications.findMany({
       where,
-      orderBy: { updated_at: order },
+      orderBy: [{ updated_at: order }, { id: order }],
       take: limit + 1,
       include: {
         users_applications_applicant_user_idTousers: {
