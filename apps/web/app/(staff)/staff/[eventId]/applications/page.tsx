@@ -259,18 +259,53 @@ export default function ApplicationsListPage() {
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
 
   const refreshApplications = useCallback(async () => {
-    const res = await apiClient<
-      | Application[]
-      | { data: Array<Record<string, unknown>>; meta?: unknown }
-    >(`/events/${eventId}/applications`);
-    const raw = Array.isArray(res)
-      ? (res as unknown as Array<Record<string, unknown>>)
-      : Array.isArray((res as any).data)
-        ? (res as any).data
-        : [];
-    const mapped: Application[] = raw.map(normalizeApplication);
-    setApplications(mapped);
-    setSelectedIds((prev) => prev.filter((id) => mapped.some((app) => app.id === id)));
+    const PAGE_SIZE = 100;
+    const MAX_PAGES = 200;
+    const seenIds = new Set<string>();
+    const allApplications: Application[] = [];
+    let cursor: string | null = null;
+    let page = 0;
+
+    while (page < MAX_PAGES) {
+      page += 1;
+      const query = new URLSearchParams({ limit: String(PAGE_SIZE) });
+      if (cursor) query.set("cursor", cursor);
+      const res = await apiClient<
+        | Application[]
+        | {
+            data: Array<Record<string, unknown>>;
+            meta?: { hasMore?: boolean; nextCursor?: string | null };
+          }
+      >(`/events/${eventId}/applications?${query.toString()}`);
+
+      const raw = Array.isArray(res)
+        ? (res as unknown as Array<Record<string, unknown>>)
+        : Array.isArray((res as any).data)
+          ? (res as any).data
+          : [];
+
+      for (const item of raw) {
+        const application = normalizeApplication(item);
+        if (seenIds.has(application.id)) continue;
+        seenIds.add(application.id);
+        allApplications.push(application);
+      }
+
+      if (Array.isArray(res)) break;
+
+      const hasMore = Boolean((res as any).meta?.hasMore);
+      const nextCursor = (res as any).meta?.nextCursor;
+      if (!hasMore || typeof nextCursor !== "string" || nextCursor.length === 0) {
+        break;
+      }
+      if (nextCursor === cursor) break;
+      cursor = nextCursor;
+    }
+
+    setApplications(allApplications);
+    setSelectedIds((prev) =>
+      prev.filter((id) => allApplications.some((app) => app.id === id))
+    );
   }, [eventId]);
 
   const refreshDecisionTemplates = useCallback(async () => {
