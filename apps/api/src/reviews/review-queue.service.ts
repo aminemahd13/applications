@@ -22,6 +22,40 @@ export class ReviewQueueService {
     private readonly cls: ClsService,
   ) {}
 
+  private encodeQueueCursor(value: { updatedAt: Date; id: string }): string {
+    const payload = {
+      updatedAt: value.updatedAt.toISOString(),
+      id: value.id,
+    };
+    return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  }
+
+  private decodeQueueCursor(
+    cursor: string,
+  ): { updatedAt: Date; id: string } | null {
+    try {
+      const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+      const parsed = JSON.parse(decoded) as {
+        updatedAt?: unknown;
+        id?: unknown;
+      };
+      if (
+        typeof parsed.updatedAt !== 'string' ||
+        typeof parsed.id !== 'string' ||
+        parsed.id.trim().length === 0
+      ) {
+        return null;
+      }
+      const updatedAt = new Date(parsed.updatedAt);
+      if (Number.isNaN(updatedAt.getTime())) {
+        return null;
+      }
+      return { updatedAt, id: parsed.id };
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Get review queue with filtering
    */
@@ -63,9 +97,55 @@ export class ReviewQueueService {
       stepStateStatus = [StepStatus.SUBMITTED, StepStatus.NEEDS_REVISION];
     }
 
+    const stepStateWhere: any = {
+      status: { in: stepStateStatus },
+      step_id: { in: reviewableStepIds },
+      ...(status === 'resubmitted' ? { revision_cycle_count: { gt: 0 } } : {}),
+    };
+
     // Build application filter
     const appWhere: any = { event_id: eventId };
-    if (cursor) appWhere.id = { lt: cursor };
+    appWhere.application_step_states = { some: stepStateWhere };
+
+    if (cursor) {
+      const parsedCursor = this.decodeQueueCursor(cursor);
+      if (parsedCursor) {
+        appWhere.AND = [
+          ...(appWhere.AND ?? []),
+          {
+            OR: [
+              { updated_at: { lt: parsedCursor.updatedAt } },
+              {
+                updated_at: parsedCursor.updatedAt,
+                id: { lt: parsedCursor.id },
+              },
+            ],
+          },
+        ];
+      } else {
+        // Backward compatibility for legacy id-only cursors.
+        const legacyAnchor = await this.prisma.applications.findFirst({
+          where: { id: cursor, event_id: eventId },
+          select: { id: true, updated_at: true },
+        });
+        if (legacyAnchor) {
+          appWhere.AND = [
+            ...(appWhere.AND ?? []),
+            {
+              OR: [
+                { updated_at: { lt: legacyAnchor.updated_at } },
+                {
+                  updated_at: legacyAnchor.updated_at,
+                  id: { lt: legacyAnchor.id },
+                },
+              ],
+            },
+          ];
+        } else {
+          appWhere.id = { lt: cursor };
+        }
+      }
+    }
 
     if (assignedTo === 'me') {
       appWhere.assigned_reviewer_id = reviewerId;
@@ -79,7 +159,7 @@ export class ReviewQueueService {
     // Query applications with step states
     const applications = await this.prisma.applications.findMany({
       where: appWhere,
-      orderBy: { updated_at: 'desc' },
+      orderBy: [{ updated_at: 'desc' }, { id: 'desc' }],
       take: limit + 1,
       include: {
         users_applications_applicant_user_idTousers: {
@@ -89,13 +169,7 @@ export class ReviewQueueService {
           },
         },
         application_step_states: {
-          where: {
-            status: { in: stepStateStatus },
-            step_id: { in: reviewableStepIds },
-            ...(status === 'resubmitted'
-              ? { revision_cycle_count: { gt: 0 } }
-              : {}),
-          },
+          where: stepStateWhere,
           include: {
             workflow_steps: {
               select: { id: true, title: true, step_index: true },
@@ -109,13 +183,8 @@ export class ReviewQueueService {
       },
     });
 
-    // Filter to only apps with matching step states
-    const filtered = applications.filter(
-      (app) => app.application_step_states.length > 0,
-    );
-
-    const hasMore = filtered.length > limit;
-    const data = hasMore ? filtered.slice(0, -1) : filtered;
+    const hasMore = applications.length > limit;
+    const data = hasMore ? applications.slice(0, limit) : applications;
 
     const queueStepStates = data.flatMap((app) => app.application_step_states);
     const submissionVersionIds = Array.from(
@@ -223,7 +292,13 @@ export class ReviewQueueService {
     return {
       data: items as ReviewQueueItem[],
       meta: {
-        nextCursor: hasMore ? data[data.length - 1].id : null,
+        nextCursor:
+          hasMore && data.length > 0
+            ? this.encodeQueueCursor({
+                updatedAt: data[data.length - 1].updated_at,
+                id: data[data.length - 1].id,
+              })
+            : null,
         hasMore,
       },
     };

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -54,6 +54,12 @@ import { renderAnswerValue } from "@/lib/render-answer-value";
 import { getRequiredFieldKeySet } from "@/lib/file-answer-utils";
 import { Badge } from "@/components/ui/badge";
 import { Permission } from "@event-platform/shared";
+import {
+  appendUniqueQueueItems,
+  normalizeReviewQueueResponse,
+  shouldAutoLoadNext,
+  type ReviewQueueResponse,
+} from "@/lib/review-queue-pagination";
 
 interface ReviewItem {
   id: string;
@@ -187,6 +193,7 @@ function extractRequestFieldOptions(
 
 type ReviewVerdict = "APPROVE" | "REJECT" | "REQUEST_INFO";
 type QueueStatusFilter = "all" | "pending" | "needs_info" | "resubmitted";
+const QUEUE_PAGE_LIMIT = 50;
 
 export default function ReviewsPage() {
   const params = useParams();
@@ -199,6 +206,9 @@ export default function ReviewsPage() {
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
   const [selectedViewId, setSelectedViewId] = useState<string>("none");
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [stepFilter, setStepFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<QueueStatusFilter>("all");
@@ -218,8 +228,20 @@ export default function ReviewsPage() {
     useState(true);
   const [requestInfoSendEmail, setRequestInfoSendEmail] = useState(false);
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const queueRequestVersionRef = useRef(0);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(false);
+  const nextCursorRef = useRef<string | null>(null);
 
   const canSendMessages = hasPermission(Permission.EVENT_MESSAGES_SEND);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  useEffect(() => {
+    nextCursorRef.current = nextCursor;
+  }, [nextCursor]);
 
   const activeTags = useMemo(
     () =>
@@ -256,48 +278,93 @@ export default function ReviewsPage() {
     setStepOptions(options.filter((option) => option.id.length > 0));
   }, [eventId]);
 
-  const loadQueue = useCallback(async () => {
+  const loadQueue = useCallback(async (mode: "replace" | "append" = "replace") => {
+    const isAppend = mode === "append";
+    if (isAppend) {
+      if (
+        loadingMoreRef.current ||
+        !hasMoreRef.current ||
+        !nextCursorRef.current
+      ) {
+        return 0;
+      }
+      loadingMoreRef.current = true;
+      setIsLoadingMore(true);
+    }
+
+    const requestVersion = ++queueRequestVersionRef.current;
     const query = new URLSearchParams();
+    query.set("limit", String(QUEUE_PAGE_LIMIT));
     if (stepFilter !== "all") query.set("stepId", stepFilter);
     if (statusFilter !== "all") query.set("status", statusFilter);
     for (const tag of activeTags) {
       query.append("tags", tag);
     }
+    if (isAppend && nextCursorRef.current) {
+      query.set("cursor", nextCursorRef.current);
+    }
 
-    const qs = query.toString();
-    const res = await apiClient<any>(
-      `/events/${eventId}/review-queue${qs ? `?${qs}` : ""}`,
-    );
-    const list: ReviewItem[] = Array.isArray(res)
-      ? res
-      : Array.isArray(res?.data)
-        ? res.data
-        : [];
-    setQueue(list);
-    setCurrentIndex((prev) => {
-      if (list.length === 0) return 0;
-      return Math.min(prev, list.length - 1);
-    });
+    try {
+      const qs = query.toString();
+      const res = await apiClient<ReviewQueueResponse<ReviewItem>>(
+        `/events/${eventId}/review-queue${qs ? `?${qs}` : ""}`,
+      );
+
+      if (requestVersion !== queueRequestVersionRef.current) {
+        return 0;
+      }
+
+      const normalized = normalizeReviewQueueResponse<ReviewItem>(res);
+      const list = normalized.items;
+      const nextMetaCursor = normalized.meta.nextCursor;
+      const nextMetaHasMore = normalized.meta.hasMore;
+
+      let addedCount = 0;
+      if (isAppend) {
+        setQueue((prev) => {
+          const merged = appendUniqueQueueItems(prev, list);
+          addedCount = merged.length - prev.length;
+          return merged;
+        });
+      } else {
+        setQueue(list);
+        setCurrentIndex((prev) => {
+          if (list.length === 0) return 0;
+          return Math.min(prev, list.length - 1);
+        });
+        addedCount = list.length;
+      }
+
+      nextCursorRef.current = nextMetaCursor;
+      hasMoreRef.current = nextMetaHasMore;
+      setNextCursor(nextMetaCursor);
+      setHasMore(nextMetaHasMore);
+      return addedCount;
+    } finally {
+      if (isAppend) {
+        loadingMoreRef.current = false;
+        setIsLoadingMore(false);
+      }
+    }
   }, [activeTags, eventId, statusFilter, stepFilter]);
 
   useEffect(() => {
     (async () => {
       try {
         await Promise.all([loadSavedViews(), loadStepOptions()]);
-        await loadQueue();
       } catch {
         /* handled */
       } finally {
         setIsLoading(false);
       }
     })();
-  }, [loadQueue, loadSavedViews, loadStepOptions]);
+  }, [loadSavedViews, loadStepOptions]);
 
   useEffect(() => {
     if (isLoading) return;
     (async () => {
       try {
-        await loadQueue();
+        await loadQueue("replace");
       } catch {
         /* handled */
       }
@@ -462,15 +529,47 @@ export default function ReviewsPage() {
             ? "Step rejected"
             : "Revision requested",
       );
-      setQueue((prev) => prev.filter((item) => item.id !== current.id));
-      setCurrentIndex((prev) =>
-        queue.length <= 1 ? 0 : Math.max(0, Math.min(prev, queue.length - 2)),
-      );
+      let nextLength = 0;
+      setQueue((prev) => {
+        const updated = prev.filter((item) => item.id !== current.id);
+        nextLength = updated.length;
+        return updated;
+      });
+      setCurrentIndex((prev) => {
+        if (nextLength <= 0) return 0;
+        return Math.min(prev, nextLength - 1);
+      });
     } catch {
       /* handled */
     } finally {
       setIsSubmittingReview(false);
       setShowReviewDialog(false);
+    }
+  }
+
+  async function goNext() {
+    if (currentIndex < queue.length - 1) {
+      setCurrentIndex((prev) => Math.min(queue.length - 1, prev + 1));
+      return;
+    }
+
+    if (
+      !shouldAutoLoadNext({
+        currentIndex,
+        queueLength: queue.length,
+        hasMore,
+        isLoadingMore,
+      })
+    ) {
+      return;
+    }
+
+    const previousLength = queue.length;
+    const added = await loadQueue("append");
+    if (added > 0) {
+      setCurrentIndex((prev) =>
+        Math.min(prev + 1, previousLength + added - 1),
+      );
     }
   }
 
@@ -487,7 +586,7 @@ export default function ReviewsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Review Queue"
-        description={`${queue.length} submissions awaiting review`}
+        description={`${queue.length}${hasMore ? "+" : ""} submissions awaiting review`}
       />
 
       <div className="grid gap-3 lg:grid-cols-5">
@@ -669,11 +768,17 @@ export default function ReviewsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() =>
-                  setCurrentIndex(Math.min(queue.length - 1, currentIndex + 1))
+                onClick={() => {
+                  void goNext();
+                }}
+                disabled={
+                  (currentIndex >= queue.length - 1 && !hasMore) ||
+                  isLoadingMore
                 }
-                disabled={currentIndex >= queue.length - 1}
               >
+                {isLoadingMore ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : null}
                 Next
                 <ChevronRight className="ml-1 h-4 w-4" />
               </Button>
