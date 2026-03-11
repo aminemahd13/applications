@@ -953,6 +953,14 @@ export class MessagesService {
     };
   }
 
+  async getSystemAnnouncementById(messageId: string): Promise<MessageDetail> {
+    const message = await this.getMessageById(null, messageId);
+    if (message.type !== MessageType.ANNOUNCEMENT) {
+      throw new NotFoundException('Message not found');
+    }
+    return message;
+  }
+
   async deleteSystemAnnouncement(messageId: string): Promise<void> {
     const result = await this.prisma.messages.deleteMany({
       where: {

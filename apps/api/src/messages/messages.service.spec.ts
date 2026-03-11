@@ -17,9 +17,11 @@ describe('MessagesService', () => {
       },
       messages: {
         deleteMany: jest.fn(),
+        findFirst: jest.fn(),
         findMany: jest.fn(),
       },
       message_recipients: {
+        count: jest.fn(),
         findMany: jest.fn(),
         updateMany: jest.fn(),
         update: jest.fn(),
@@ -234,6 +236,58 @@ describe('MessagesService', () => {
           where: { event_id: null, type: MessageType.ANNOUNCEMENT },
         }),
       );
+    });
+
+    it('returns detail for a valid null-event announcement message', async () => {
+      mockPrisma.messages.findFirst.mockResolvedValue({
+        id: 'message-1',
+        event_id: null,
+        type: MessageType.ANNOUNCEMENT,
+        title: 'System update',
+        status: 'SENT',
+        created_at: new Date('2026-03-01T10:00:00.000Z'),
+        created_by: 'admin-user',
+        body_rich: { type: 'doc', content: [] },
+        body_text: 'Full system announcement body',
+        action_buttons: [],
+        recipient_filter_json: {},
+        resolved_at: new Date('2026-03-01T10:00:00.000Z'),
+        _count: { message_recipients: 3 },
+      });
+      mockPrisma.message_recipients.count.mockResolvedValue(2);
+
+      const detail = await service.getSystemAnnouncementById('message-1');
+
+      expect(detail.id).toBe('message-1');
+      expect(detail.type).toBe(MessageType.ANNOUNCEMENT);
+      expect(detail.bodyText).toBe('Full system announcement body');
+      expect(mockPrisma.messages.findFirst).toHaveBeenCalledWith({
+        where: { id: 'message-1', event_id: null },
+        include: { _count: { select: { message_recipients: true } } },
+      });
+    });
+
+    it('rejects non-announcement messages in system scope', async () => {
+      mockPrisma.messages.findFirst.mockResolvedValue({
+        id: 'message-2',
+        event_id: null,
+        type: MessageType.DIRECT,
+        title: 'Direct message',
+        status: 'SENT',
+        created_at: new Date('2026-03-01T10:00:00.000Z'),
+        created_by: 'admin-user',
+        body_rich: {},
+        body_text: 'Body',
+        action_buttons: [],
+        recipient_filter_json: null,
+        resolved_at: null,
+        _count: { message_recipients: 1 },
+      });
+      mockPrisma.message_recipients.count.mockResolvedValue(0);
+
+      await expect(
+        service.getSystemAnnouncementById('message-2'),
+      ).rejects.toThrow(NotFoundException);
     });
 
     it('deletes only null-event announcement messages', async () => {

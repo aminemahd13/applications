@@ -36,9 +36,22 @@ import { toast } from "sonner";
 interface SentAnnouncement {
   id: string;
   title: string;
+  status: string;
   recipientCount: number;
   sentAt: string;
   readCount: number;
+}
+
+interface AnnouncementDetail {
+  id: string;
+  title: string;
+  status: string;
+  type: string;
+  recipientCount: number;
+  readCount: number;
+  createdAt: string;
+  bodyText: string | null;
+  bodyRich: unknown;
 }
 
 interface SystemFilter {
@@ -56,10 +69,38 @@ function normalizeAnnouncement(raw: any): SentAnnouncement {
   return {
     id: raw.id,
     title: raw.title ?? "(no subject)",
+    status: raw.status ?? "SENT",
     recipientCount: raw.recipientCount ?? 0,
     sentAt: raw.createdAt ?? new Date().toISOString(),
     readCount: raw.readCount ?? 0,
   };
+}
+
+function normalizeAnnouncementDetail(raw: any): AnnouncementDetail {
+  return {
+    id: raw.id,
+    title: raw.title ?? "(no subject)",
+    status: raw.status ?? "SENT",
+    type: raw.type ?? "ANNOUNCEMENT",
+    recipientCount: raw.recipientCount ?? 0,
+    readCount: raw.readCount ?? 0,
+    createdAt: raw.createdAt ?? new Date().toISOString(),
+    bodyText: typeof raw.bodyText === "string" ? raw.bodyText : null,
+    bodyRich: raw.bodyRich,
+  };
+}
+
+function resolveMessageBody(bodyText: unknown, bodyRich: unknown): string {
+  if (typeof bodyText === "string" && bodyText.trim().length > 0) {
+    return bodyText;
+  }
+  if (typeof bodyRich === "string" && bodyRich.trim().length > 0) {
+    return bodyRich;
+  }
+  if (bodyRich && typeof bodyRich === "object") {
+    return JSON.stringify(bodyRich, null, 2);
+  }
+  return "";
 }
 
 function CollapsibleSection({
@@ -157,6 +198,12 @@ export default function AdminAnnouncementsPage() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
 
+  const [selectedAnnouncement, setSelectedAnnouncement] = useState<SentAnnouncement | null>(null);
+  const [announcementDetail, setAnnouncementDetail] = useState<AnnouncementDetail | null>(null);
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
   // Compose
   const [showCompose, setShowCompose] = useState(false);
   const [composeSubject, setComposeSubject] = useState("");
@@ -181,6 +228,36 @@ export default function AdminAnnouncementsPage() {
     },
     [],
   );
+
+  const openAnnouncementDialog = useCallback(async (announcement: SentAnnouncement) => {
+    setSelectedAnnouncement(announcement);
+    setAnnouncementDetail(null);
+    setDetailError(null);
+    setIsDetailLoading(true);
+    setIsDetailOpen(true);
+
+    try {
+      const response = await apiClient<
+        { data?: Record<string, unknown> } | Record<string, unknown>
+      >(`/admin/announcements/${announcement.id}`);
+
+      const rawDetail =
+        response &&
+        typeof response === "object" &&
+        !Array.isArray(response) &&
+        "data" in response &&
+        response.data &&
+        typeof response.data === "object"
+          ? (response.data as Record<string, unknown>)
+          : (response as Record<string, unknown>);
+
+      setAnnouncementDetail(normalizeAnnouncementDetail(rawDetail));
+    } catch {
+      setDetailError("Could not load full announcement.");
+    } finally {
+      setIsDetailLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -282,11 +359,16 @@ export default function AdminAnnouncementsPage() {
         csrfToken: csrfToken ?? undefined,
       });
       setAnnouncements((current) => current.filter((a) => a.id !== id));
+      if (selectedAnnouncement?.id === id) {
+        setIsDetailOpen(false);
+      }
       toast.success("Announcement deleted");
     } catch {
       toast.error("Could not delete announcement");
     }
   }
+
+  const fullBody = resolveMessageBody(announcementDetail?.bodyText, announcementDetail?.bodyRich);
 
   return (
     <div className="space-y-6">
@@ -321,7 +403,7 @@ export default function AdminAnnouncementsPage() {
             return (
               <Card key={ann.id}>
                 <CardContent className="p-4">
-                  <div className="flex items-start justify-between">
+                  <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="font-medium text-sm">{ann.title}</p>
                       <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
@@ -339,6 +421,9 @@ export default function AdminAnnouncementsPage() {
                         {readRate}% read
                       </Badge>
                       <Badge>System</Badge>
+                      <Button variant="outline" size="sm" onClick={() => void openAnnouncementDialog(ann)}>
+                        View full message
+                      </Button>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -365,6 +450,57 @@ export default function AdminAnnouncementsPage() {
           </Button>
         </div>
       )}
+
+      <Dialog
+        open={isDetailOpen}
+        onOpenChange={(open) => {
+          setIsDetailOpen(open);
+          if (!open) {
+            setSelectedAnnouncement(null);
+            setAnnouncementDetail(null);
+            setDetailError(null);
+            setIsDetailLoading(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{selectedAnnouncement?.title ?? "Announcement"}</DialogTitle>
+            <DialogDescription className="space-y-2">
+              <span className="block text-xs">
+                {selectedAnnouncement ? new Date(selectedAnnouncement.sentAt).toLocaleString("en-GB") : ""}
+              </span>
+              <span className="flex flex-wrap items-center gap-2">
+                <Badge>System</Badge>
+                <Badge variant="outline" className="text-xs">
+                  <BarChart3 className="mr-1 h-3 w-3" />
+                  {selectedAnnouncement && selectedAnnouncement.recipientCount > 0
+                    ? `${Math.round((selectedAnnouncement.readCount / selectedAnnouncement.recipientCount) * 100)}% read`
+                    : "0% read"}
+                </Badge>
+                {announcementDetail ? (
+                  <Badge variant="outline" className="text-xs">
+                    {announcementDetail.status}
+                  </Badge>
+                ) : null}
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+
+          {isDetailLoading ? (
+            <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Loading announcement...
+            </div>
+          ) : detailError ? (
+            <p className="text-sm text-destructive">{detailError}</p>
+          ) : (
+            <div className="rounded-md border p-3 text-sm whitespace-pre-wrap break-words">
+              {fullBody || "No announcement body available."}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Compose dialog */}
       <Dialog open={showCompose} onOpenChange={setShowCompose}>

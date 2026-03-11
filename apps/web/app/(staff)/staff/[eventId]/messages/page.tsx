@@ -53,9 +53,22 @@ interface SentMessage {
   id: string;
   subject: string;
   type: "ANNOUNCEMENT" | "DIRECT";
+  status: string;
   recipientCount: number;
   sentAt: string;
   readCount: number;
+}
+
+interface MessageDetail {
+  id: string;
+  subject: string;
+  type: "ANNOUNCEMENT" | "DIRECT";
+  status: string;
+  recipientCount: number;
+  readCount: number;
+  createdAt: string;
+  bodyText: string | null;
+  bodyRich: unknown;
 }
 
 function normalizeMessage(raw: any): SentMessage {
@@ -63,10 +76,38 @@ function normalizeMessage(raw: any): SentMessage {
     id: raw.id,
     subject: raw.title ?? raw.subject ?? "(no subject)",
     type: raw.type ?? "ANNOUNCEMENT",
+    status: raw.status ?? "SENT",
     recipientCount: raw.recipientCount ?? 0,
     sentAt: raw.createdAt ?? raw.sentAt ?? new Date().toISOString(),
     readCount: raw.readCount ?? 0,
   };
+}
+
+function normalizeMessageDetail(raw: any): MessageDetail {
+  return {
+    id: raw.id,
+    subject: raw.title ?? raw.subject ?? "(no subject)",
+    type: raw.type ?? "ANNOUNCEMENT",
+    status: raw.status ?? "SENT",
+    recipientCount: raw.recipientCount ?? 0,
+    readCount: raw.readCount ?? 0,
+    createdAt: raw.createdAt ?? new Date().toISOString(),
+    bodyText: typeof raw.bodyText === "string" ? raw.bodyText : null,
+    bodyRich: raw.bodyRich,
+  };
+}
+
+function resolveMessageBody(bodyText: unknown, bodyRich: unknown): string {
+  if (typeof bodyText === "string" && bodyText.trim().length > 0) {
+    return bodyText;
+  }
+  if (typeof bodyRich === "string" && bodyRich.trim().length > 0) {
+    return bodyRich;
+  }
+  if (bodyRich && typeof bodyRich === "object") {
+    return JSON.stringify(bodyRich, null, 2);
+  }
+  return "";
 }
 
 function unpackMessagesPayload(raw: any): {
@@ -101,6 +142,12 @@ export default function MessagesPage() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
 
+  const [selectedMessage, setSelectedMessage] = useState<SentMessage | null>(null);
+  const [messageDetail, setMessageDetail] = useState<MessageDetail | null>(null);
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
   // Compose dialog
   const [showCompose, setShowCompose] = useState(false);
   const [composeType, setComposeType] = useState<"ANNOUNCEMENT" | "DIRECT">("ANNOUNCEMENT");
@@ -120,6 +167,39 @@ export default function MessagesPage() {
     const res = await apiClient<any>(`/events/${eventId}/messages${query}`);
     return unpackMessagesPayload(res);
   }, [eventId]);
+
+  const openMessageDialog = useCallback(
+    async (message: SentMessage) => {
+      setSelectedMessage(message);
+      setMessageDetail(null);
+      setDetailError(null);
+      setIsDetailLoading(true);
+      setIsDetailOpen(true);
+
+      try {
+        const response = await apiClient<
+          { data?: Record<string, unknown> } | Record<string, unknown>
+        >(`/events/${eventId}/messages/${message.id}`);
+
+        const rawDetail =
+          response &&
+          typeof response === "object" &&
+          !Array.isArray(response) &&
+          "data" in response &&
+          response.data &&
+          typeof response.data === "object"
+            ? (response.data as Record<string, unknown>)
+            : (response as Record<string, unknown>);
+
+        setMessageDetail(normalizeMessageDetail(rawDetail));
+      } catch {
+        setDetailError("Could not load full message.");
+      } finally {
+        setIsDetailLoading(false);
+      }
+    },
+    [eventId]
+  );
 
   useEffect(() => {
     (async () => {
@@ -242,6 +322,9 @@ export default function MessagesPage() {
       setMessages((current) =>
         current.filter((message) => message.id !== messageId)
       );
+      if (selectedMessage?.id === messageId) {
+        setIsDetailOpen(false);
+      }
       toast.success("Message deleted");
     } catch {
       /* handled */
@@ -251,217 +334,278 @@ export default function MessagesPage() {
   const announcements = messages.filter((m) => m.type === "ANNOUNCEMENT");
   const direct = messages.filter((m) => m.type === "DIRECT");
 
+  const fullBody = resolveMessageBody(messageDetail?.bodyText, messageDetail?.bodyRich);
+
   return (
-    <div className="space-y-6">
-      <PageHeader title="Messages" description="Send announcements and direct messages to applicants">
-        <Button onClick={() => setShowCompose(true)}>
-          <Plus className="mr-1.5 h-4 w-4" />
-          Compose
-        </Button>
-      </PageHeader>
-
-      <Tabs defaultValue="announcements">
-        <TabsList>
-          <TabsTrigger value="announcements">
-            <Bell className="mr-1.5 h-3.5 w-3.5" />
-            Announcements
-            <Badge variant="secondary" className="ml-1.5 h-5 min-w-5 px-1">
-              {announcements.length}
-            </Badge>
-          </TabsTrigger>
-          <TabsTrigger value="direct">
-            <Mail className="mr-1.5 h-3.5 w-3.5" />
-            Direct
-            <Badge variant="secondary" className="ml-1.5 h-5 min-w-5 px-1">
-              {direct.length}
-            </Badge>
-          </TabsTrigger>
-        </TabsList>
-
-        {isLoading ? (
-          <div className="space-y-3 mt-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <CardSkeleton key={i} />
-            ))}
-          </div>
-        ) : (
-          <>
-            <TabsContent value="announcements" className="mt-4">
-              {announcements.length === 0 ? (
-                <EmptyState
-                  icon={Bell}
-                  title="No announcements"
-                  description="Send your first announcement to all applicants."
-                  actionLabel="Compose"
-                  onAction={() => {
-                    setComposeType("ANNOUNCEMENT");
-                    setShowCompose(true);
-                  }}
-                />
-              ) : (
-                <div className="space-y-3">
-                  {announcements.map((msg) => (
-                    <MessageCard
-                      key={msg.id}
-                      message={msg}
-                      canDelete={canDeleteMessages}
-                      onDelete={deleteMessage}
-                    />
-                  ))}
-                </div>
-              )}
-            </TabsContent>
-
-            <TabsContent value="direct" className="mt-4">
-              {direct.length === 0 ? (
-                <EmptyState
-                  icon={Mail}
-                  title="No direct messages"
-                  description="Send a message to a specific applicant."
-                  actionLabel="Compose"
-                  onAction={() => {
-                    setComposeType("DIRECT");
-                    setShowCompose(true);
-                  }}
-                />
-              ) : (
-                <div className="space-y-3">
-                  {direct.map((msg) => (
-                    <MessageCard
-                      key={msg.id}
-                      message={msg}
-                      canDelete={canDeleteMessages}
-                      onDelete={deleteMessage}
-                    />
-                  ))}
-                </div>
-              )}
-            </TabsContent>
-          </>
-        )}
-      </Tabs>
-
-      {!isLoading && nextCursor && (
-        <div className="flex justify-center">
-          <Button
-            variant="outline"
-            onClick={loadMoreMessages}
-            disabled={isLoadingMore}
-          >
-            {isLoadingMore ? (
-              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-            ) : null}
-            Load older messages
+    <>
+      <div className="space-y-6">
+        <PageHeader title="Messages" description="Send announcements and direct messages to applicants">
+          <Button onClick={() => setShowCompose(true)}>
+            <Plus className="mr-1.5 h-4 w-4" />
+            Compose
           </Button>
-        </div>
-      )}
+        </PageHeader>
 
-      {/* Compose dialog */}
-      <Dialog open={showCompose} onOpenChange={setShowCompose}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Compose message</DialogTitle>
-            <DialogDescription>
-              Send an announcement or direct message to applicants.
-            </DialogDescription>
-          </DialogHeader>
+        <Tabs defaultValue="announcements">
+          <TabsList>
+            <TabsTrigger value="announcements">
+              <Bell className="mr-1.5 h-3.5 w-3.5" />
+              Announcements
+              <Badge variant="secondary" className="ml-1.5 h-5 min-w-5 px-1">
+                {announcements.length}
+              </Badge>
+            </TabsTrigger>
+            <TabsTrigger value="direct">
+              <Mail className="mr-1.5 h-3.5 w-3.5" />
+              Direct
+              <Badge variant="secondary" className="ml-1.5 h-5 min-w-5 px-1">
+                {direct.length}
+              </Badge>
+            </TabsTrigger>
+          </TabsList>
 
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label className="text-sm">Type</Label>
-              <Select
-                value={composeType}
-                onValueChange={(v) => setComposeType(v as typeof composeType)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ANNOUNCEMENT">
-                    <span className="flex items-center gap-2">
-                      <Users className="h-3.5 w-3.5" />
-                      Announcement
-                    </span>
-                  </SelectItem>
-                  <SelectItem value="DIRECT">
-                    <span className="flex items-center gap-2">
-                      <User className="h-3.5 w-3.5" />
-                      Direct message
-                    </span>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+          {isLoading ? (
+            <div className="space-y-3 mt-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <CardSkeleton key={i} />
+              ))}
             </div>
+          ) : (
+            <>
+              <TabsContent value="announcements" className="mt-4">
+                {announcements.length === 0 ? (
+                  <EmptyState
+                    icon={Bell}
+                    title="No announcements"
+                    description="Send your first announcement to all applicants."
+                    actionLabel="Compose"
+                    onAction={() => {
+                      setComposeType("ANNOUNCEMENT");
+                      setShowCompose(true);
+                    }}
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    {announcements.map((msg) => (
+                      <MessageCard
+                        key={msg.id}
+                        message={msg}
+                        canDelete={canDeleteMessages}
+                        onDelete={deleteMessage}
+                        onView={openMessageDialog}
+                      />
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
 
-            {composeType === "ANNOUNCEMENT" && (
-              <AudienceBuilder
-                eventId={eventId}
-                filter={recipientFilter}
-                onChange={setRecipientFilter}
-                previewCount={previewCount}
-                isLoadingPreview={isLoadingPreview}
-              />
-            )}
+              <TabsContent value="direct" className="mt-4">
+                {direct.length === 0 ? (
+                  <EmptyState
+                    icon={Mail}
+                    title="No direct messages"
+                    description="Send a message to a specific applicant."
+                    actionLabel="Compose"
+                    onAction={() => {
+                      setComposeType("DIRECT");
+                      setShowCompose(true);
+                    }}
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    {direct.map((msg) => (
+                      <MessageCard
+                        key={msg.id}
+                        message={msg}
+                        canDelete={canDeleteMessages}
+                        onDelete={deleteMessage}
+                        onView={openMessageDialog}
+                      />
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+            </>
+          )}
+        </Tabs>
 
-            {composeType === "DIRECT" && (
-              <div className="space-y-2">
-                <Label className="text-sm">Recipient email</Label>
-                <Input
-                  value={composeRecipient}
-                  onChange={(e) => setComposeRecipient(e.target.value)}
-                  placeholder="applicant@example.com"
-                  type="email"
-                />
+        {!isLoading && nextCursor && (
+          <div className="flex justify-center">
+            <Button
+              variant="outline"
+              onClick={loadMoreMessages}
+              disabled={isLoadingMore}
+            >
+              {isLoadingMore ? (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              ) : null}
+              Load older messages
+            </Button>
+          </div>
+        )}
+
+        <Dialog
+          open={isDetailOpen}
+          onOpenChange={(open) => {
+            setIsDetailOpen(open);
+            if (!open) {
+              setSelectedMessage(null);
+              setMessageDetail(null);
+              setDetailError(null);
+              setIsDetailLoading(false);
+            }
+          }}
+        >
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>{selectedMessage?.subject ?? "Message"}</DialogTitle>
+              <DialogDescription className="space-y-2">
+                <span className="block text-xs">
+                  {selectedMessage ? new Date(selectedMessage.sentAt).toLocaleString("en-GB") : ""}
+                </span>
+                <span className="flex flex-wrap items-center gap-2">
+                  {selectedMessage ? (
+                    <Badge variant={selectedMessage.type === "ANNOUNCEMENT" ? "default" : "secondary"}>
+                      {selectedMessage.type === "ANNOUNCEMENT" ? "Announcement" : "Direct"}
+                    </Badge>
+                  ) : null}
+                  <Badge variant="outline" className="text-xs">
+                    <BarChart3 className="mr-1 h-3 w-3" />
+                    {selectedMessage && selectedMessage.recipientCount > 0
+                      ? `${Math.round((selectedMessage.readCount / selectedMessage.recipientCount) * 100)}% read`
+                      : "0% read"}
+                  </Badge>
+                  {messageDetail ? (
+                    <Badge variant="outline" className="text-xs">
+                      {messageDetail.status}
+                    </Badge>
+                  ) : null}
+                </span>
+              </DialogDescription>
+            </DialogHeader>
+
+            {isDetailLoading ? (
+              <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading message...
+              </div>
+            ) : detailError ? (
+              <p className="text-sm text-destructive">{detailError}</p>
+            ) : (
+              <div className="rounded-md border p-3 text-sm whitespace-pre-wrap break-words">
+                {fullBody || "No message body available."}
               </div>
             )}
+          </DialogContent>
+        </Dialog>
 
-            <div className="space-y-2">
-              <Label className="text-sm">Subject</Label>
-              <Input
-                value={composeSubject}
-                onChange={(e) => setComposeSubject(e.target.value)}
-                placeholder="Message subject..."
-              />
-            </div>
+        {/* Compose dialog */}
+        <Dialog open={showCompose} onOpenChange={setShowCompose}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Compose message</DialogTitle>
+              <DialogDescription>
+                Send an announcement or direct message to applicants.
+              </DialogDescription>
+            </DialogHeader>
 
-            <div className="space-y-2">
-              <Label className="text-sm">Body</Label>
-              <Textarea
-                value={composeBody}
-                onChange={(e) => setComposeBody(e.target.value)}
-                placeholder="Write your message..."
-                rows={6}
-              />
-            </div>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label className="text-sm">Type</Label>
+                <Select
+                  value={composeType}
+                  onValueChange={(v) => setComposeType(v as typeof composeType)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ANNOUNCEMENT">
+                      <span className="flex items-center gap-2">
+                        <Users className="h-3.5 w-3.5" />
+                        Announcement
+                      </span>
+                    </SelectItem>
+                    <SelectItem value="DIRECT">
+                      <span className="flex items-center gap-2">
+                        <User className="h-3.5 w-3.5" />
+                        Direct message
+                      </span>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-            <div className="flex items-center gap-2">
-              <Switch
-                checked={composeSendEmail}
-                onCheckedChange={setComposeSendEmail}
-                id="compose-send-email"
-              />
-              <Label htmlFor="compose-send-email" className="text-sm">
-                Also send via email
-              </Label>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCompose(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleSend} disabled={isSending}>
-              {isSending ? (
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="mr-1.5 h-4 w-4" />
+              {composeType === "ANNOUNCEMENT" && (
+                <AudienceBuilder
+                  eventId={eventId}
+                  filter={recipientFilter}
+                  onChange={setRecipientFilter}
+                  previewCount={previewCount}
+                  isLoadingPreview={isLoadingPreview}
+                />
               )}
-              Send
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+
+              {composeType === "DIRECT" && (
+                <div className="space-y-2">
+                  <Label className="text-sm">Recipient email</Label>
+                  <Input
+                    value={composeRecipient}
+                    onChange={(e) => setComposeRecipient(e.target.value)}
+                    placeholder="applicant@example.com"
+                    type="email"
+                  />
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <Label className="text-sm">Subject</Label>
+                <Input
+                  value={composeSubject}
+                  onChange={(e) => setComposeSubject(e.target.value)}
+                  placeholder="Message subject..."
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm">Body</Label>
+                <Textarea
+                  value={composeBody}
+                  onChange={(e) => setComposeBody(e.target.value)}
+                  placeholder="Write your message..."
+                  rows={6}
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={composeSendEmail}
+                  onCheckedChange={setComposeSendEmail}
+                  id="compose-send-email"
+                />
+                <Label htmlFor="compose-send-email" className="text-sm">
+                  Also send via email
+                </Label>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowCompose(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleSend} disabled={isSending}>
+                {isSending ? (
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="mr-1.5 h-4 w-4" />
+                )}
+                Send
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    </>
   );
 }
 
@@ -469,10 +613,12 @@ function MessageCard({
   message,
   canDelete,
   onDelete,
+  onView,
 }: {
   message: SentMessage;
   canDelete: boolean;
   onDelete: (messageId: string) => void;
+  onView: (message: SentMessage) => void;
 }) {
   const readRate =
     message.recipientCount > 0
@@ -482,7 +628,7 @@ function MessageCard({
   return (
     <Card>
       <CardContent className="p-4">
-        <div className="flex items-start justify-between">
+        <div className="flex items-start justify-between gap-2">
           <div>
             <p className="font-medium text-sm">{message.subject}</p>
             <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
@@ -502,6 +648,9 @@ function MessageCard({
             <Badge variant={message.type === "ANNOUNCEMENT" ? "default" : "secondary"}>
               {message.type === "ANNOUNCEMENT" ? "Announcement" : "Direct"}
             </Badge>
+            <Button variant="outline" size="sm" onClick={() => onView(message)}>
+              View full message
+            </Button>
             {canDelete && (
               <Button
                 variant="ghost"

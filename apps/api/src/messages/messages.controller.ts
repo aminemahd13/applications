@@ -277,6 +277,18 @@ export class AdminAnnouncementsController {
   }
 
   /**
+   * Get system announcement detail
+   */
+  @Get(':messageId')
+  @RequirePermission(Permission.ADMIN_EVENTS_MANAGE)
+  async getAnnouncement(@Param('messageId') messageId: string) {
+    const message = await this.messagesService.getSystemAnnouncementById(
+      messageId,
+    );
+    return { data: message };
+  }
+
+  /**
    * Delete a system announcement
    */
   @Delete(':messageId')
