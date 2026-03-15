@@ -12,6 +12,9 @@ export const metadata: Metadata = {
   },
   description:
     "Math&Maroc Event Platform - Apply to events, track applications, and manage your journey.",
+  other: {
+    google: "notranslate",
+  },
 };
 
 const PLATFORM_SETTINGS_REVALIDATE_SECONDS = 300;
@@ -62,8 +65,13 @@ export default async function RootLayout({
   const settings = await getSettings();
 
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className="antialiased">
+    <html
+      lang="en"
+      suppressHydrationWarning
+      translate="no"
+      className="notranslate"
+    >
+      <body className="antialiased notranslate">
         <Providers settings={settings}>{children}</Providers>
       </body>
     </html>
