@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   KeyRound,
   Loader2,
+  Pencil,
   Save,
   ShieldAlert,
   User,
@@ -87,6 +88,19 @@ interface UserFormState {
   linksText: string;
 }
 
+type EditableFieldKey =
+  | "email"
+  | "firstName"
+  | "lastName"
+  | "phone"
+  | "education"
+  | "institution"
+  | "city"
+  | "country"
+  | "dateOfBirth"
+  | "linksText"
+  | "isDisabled";
+
 const EMPTY_FORM: UserFormState = {
   email: "",
   isDisabled: false,
@@ -99,6 +113,20 @@ const EMPTY_FORM: UserFormState = {
   country: "",
   dateOfBirth: "",
   linksText: "",
+};
+
+const INITIAL_EDITABLE_FIELDS: Record<EditableFieldKey, boolean> = {
+  email: false,
+  firstName: false,
+  lastName: false,
+  phone: false,
+  education: false,
+  institution: false,
+  city: false,
+  country: false,
+  dateOfBirth: false,
+  linksText: false,
+  isDisabled: false,
 };
 
 function formatDate(value: string | null): string {
@@ -134,6 +162,17 @@ export default function AdminUserDetailPage() {
 
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
+  const [editableFields, setEditableFields] = useState<
+    Record<EditableFieldKey, boolean>
+  >({ ...INITIAL_EDITABLE_FIELDS });
+
+  function toggleEditable(field: EditableFieldKey) {
+    setEditableFields((prev) => ({ ...prev, [field]: !prev[field] }));
+  }
+
+  function resetEditableFields() {
+    setEditableFields({ ...INITIAL_EDITABLE_FIELDS });
+  }
 
   useEffect(() => {
     if (!userId) return;
@@ -158,6 +197,7 @@ export default function AdminUserDetailPage() {
           dateOfBirth: data.profile.dateOfBirth ?? "",
           linksText: (data.profile.links ?? []).join("\n"),
         });
+        resetEditableFields();
       } catch {
         if (cancelled) return;
         setUser(null);
@@ -259,6 +299,7 @@ export default function AdminUserDetailPage() {
       } else {
         toast.success("User updated.");
       }
+      resetEditableFields();
     } catch {
       // apiClient already surfaces error feedback
     } finally {
@@ -400,16 +441,32 @@ export default function AdminUserDetailPage() {
                 <User className="h-4 w-4" />
                 Account & Profile
               </CardTitle>
-              <CardDescription>Update email, status, and profile fields</CardDescription>
+              <CardDescription>
+                Click the pen icon beside a field to enable editing.
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="email">Email</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="email">Email</Label>
+                    <Button
+                      type="button"
+                      variant={editableFields.email ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => toggleEditable("email")}
+                      disabled={isSaving}
+                      aria-label="Toggle email edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <Input
                     id="email"
                     type="email"
                     value={form.email}
+                    disabled={!editableFields.email || isSaving}
                     onChange={(event) =>
                       setForm((prev) => ({ ...prev, email: event.target.value }))
                     }
@@ -417,20 +474,48 @@ export default function AdminUserDetailPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="firstName">First name</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="firstName">First name</Label>
+                    <Button
+                      type="button"
+                      variant={editableFields.firstName ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => toggleEditable("firstName")}
+                      disabled={isSaving}
+                      aria-label="Toggle first name edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <Input
                     id="firstName"
                     value={form.firstName}
+                    disabled={!editableFields.firstName || isSaving}
                     onChange={(event) =>
                       setForm((prev) => ({ ...prev, firstName: event.target.value }))
                     }
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="lastName">Last name</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="lastName">Last name</Label>
+                    <Button
+                      type="button"
+                      variant={editableFields.lastName ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => toggleEditable("lastName")}
+                      disabled={isSaving}
+                      aria-label="Toggle last name edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <Input
                     id="lastName"
                     value={form.lastName}
+                    disabled={!editableFields.lastName || isSaving}
                     onChange={(event) =>
                       setForm((prev) => ({ ...prev, lastName: event.target.value }))
                     }
@@ -438,20 +523,48 @@ export default function AdminUserDetailPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="phone">Phone</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="phone">Phone</Label>
+                    <Button
+                      type="button"
+                      variant={editableFields.phone ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => toggleEditable("phone")}
+                      disabled={isSaving}
+                      aria-label="Toggle phone edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <Input
                     id="phone"
                     value={form.phone}
+                    disabled={!editableFields.phone || isSaving}
                     onChange={(event) =>
                       setForm((prev) => ({ ...prev, phone: event.target.value }))
                     }
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="education">Education</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="education">Education</Label>
+                    <Button
+                      type="button"
+                      variant={editableFields.education ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => toggleEditable("education")}
+                      disabled={isSaving}
+                      aria-label="Toggle education edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <Input
                     id="education"
                     value={form.education}
+                    disabled={!editableFields.education || isSaving}
                     onChange={(event) =>
                       setForm((prev) => ({ ...prev, education: event.target.value }))
                     }
@@ -459,21 +572,49 @@ export default function AdminUserDetailPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="institution">Institution</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="institution">Institution</Label>
+                    <Button
+                      type="button"
+                      variant={editableFields.institution ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => toggleEditable("institution")}
+                      disabled={isSaving}
+                      aria-label="Toggle institution edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <Input
                     id="institution"
                     value={form.institution}
+                    disabled={!editableFields.institution || isSaving}
                     onChange={(event) =>
                       setForm((prev) => ({ ...prev, institution: event.target.value }))
                     }
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="dateOfBirth">Date of birth</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="dateOfBirth">Date of birth</Label>
+                    <Button
+                      type="button"
+                      variant={editableFields.dateOfBirth ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => toggleEditable("dateOfBirth")}
+                      disabled={isSaving}
+                      aria-label="Toggle date of birth edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <Input
                     id="dateOfBirth"
                     type="date"
                     value={form.dateOfBirth}
+                    disabled={!editableFields.dateOfBirth || isSaving}
                     onChange={(event) =>
                       setForm((prev) => ({ ...prev, dateOfBirth: event.target.value }))
                     }
@@ -481,20 +622,48 @@ export default function AdminUserDetailPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="city">City</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="city">City</Label>
+                    <Button
+                      type="button"
+                      variant={editableFields.city ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => toggleEditable("city")}
+                      disabled={isSaving}
+                      aria-label="Toggle city edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <Input
                     id="city"
                     value={form.city}
+                    disabled={!editableFields.city || isSaving}
                     onChange={(event) =>
                       setForm((prev) => ({ ...prev, city: event.target.value }))
                     }
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="country">Country</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="country">Country</Label>
+                    <Button
+                      type="button"
+                      variant={editableFields.country ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => toggleEditable("country")}
+                      disabled={isSaving}
+                      aria-label="Toggle country edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <Input
                     id="country"
                     value={form.country}
+                    disabled={!editableFields.country || isSaving}
                     onChange={(event) =>
                       setForm((prev) => ({ ...prev, country: event.target.value }))
                     }
@@ -502,10 +671,24 @@ export default function AdminUserDetailPage() {
                 </div>
 
                 <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="links">Links (one URL per line)</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="links">Links (one URL per line)</Label>
+                    <Button
+                      type="button"
+                      variant={editableFields.linksText ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => toggleEditable("linksText")}
+                      disabled={isSaving}
+                      aria-label="Toggle links edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <Textarea
                     id="links"
                     value={form.linksText}
+                    disabled={!editableFields.linksText || isSaving}
                     onChange={(event) =>
                       setForm((prev) => ({ ...prev, linksText: event.target.value }))
                     }
@@ -516,13 +699,27 @@ export default function AdminUserDetailPage() {
 
               <div className="flex items-center justify-between rounded-md border p-3">
                 <div>
-                  <p className="text-sm font-medium">Disable account</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium">Disable account</p>
+                    <Button
+                      type="button"
+                      variant={editableFields.isDisabled ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => toggleEditable("isDisabled")}
+                      disabled={isSaving}
+                      aria-label="Toggle disable account edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     Disabled users cannot log in.
                   </p>
                 </div>
                 <Switch
                   checked={form.isDisabled}
+                  disabled={!editableFields.isDisabled || isSaving}
                   onCheckedChange={(checked) =>
                     setForm((prev) => ({ ...prev, isDisabled: checked }))
                   }
