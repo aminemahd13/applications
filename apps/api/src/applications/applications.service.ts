@@ -180,22 +180,23 @@ export class ApplicationsService {
       where,
       orderBy: [{ updated_at: order }, { id: order }],
       take: limit + 1,
-      include: {
+      select: {
+        id: true,
+        event_id: true,
+        applicant_user_id: true,
+        decision_status: true,
+        decision_published_at: true,
+        tags: true,
+        created_at: true,
+        updated_at: true,
         users_applications_applicant_user_idTousers: {
           select: {
-            id: true,
             email: true,
             applicant_profiles: {
               select: {
                 full_name: true,
                 first_name: true,
                 last_name: true,
-                phone: true,
-                education_level: true,
-                institution: true,
-                city: true,
-                country: true,
-                links: true,
               },
             },
           },

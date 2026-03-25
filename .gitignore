@@ -17,7 +17,7 @@ ideas.md
 .turbo/
 .eslintcache
 .cache/
-
+plan.md
 # Logs
 *.log
 npm-debug.log*

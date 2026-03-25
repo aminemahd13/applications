@@ -75,6 +75,7 @@ import { useAuth, usePermissions } from "@/lib/auth-context";
 import { Permission } from "@event-platform/shared";
 
 const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
+const APPLICATIONS_PAGE_SIZE = 100;
 
 interface Application {
   id: string;
@@ -102,6 +103,13 @@ interface DecisionTemplate {
   bodyTemplate: string;
   isActive: boolean;
 }
+
+type ApplicationsListResponse =
+  | Application[]
+  | {
+      data: Array<Record<string, unknown>>;
+      meta?: { hasMore?: boolean; nextCursor?: string | null };
+    };
 
 type StatusFilterValue =
   | "all"
@@ -216,6 +224,9 @@ export default function ApplicationsListPage() {
   const [reviewers, setReviewers] = useState<ReviewerOption[]>([]);
   const [decisionTemplates, setDecisionTemplates] = useState<DecisionTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMoreApplications, setIsLoadingMoreApplications] = useState(false);
+  const [hasMoreApplications, setHasMoreApplications] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isIssuingCredentials, setIsIssuingCredentials] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -258,25 +269,16 @@ export default function ApplicationsListPage() {
   const [isSavingTemplate, setIsSavingTemplate] = useState(false);
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
 
-  const refreshApplications = useCallback(async () => {
-    const PAGE_SIZE = 100;
-    const MAX_PAGES = 200;
-    const seenIds = new Set<string>();
-    const allApplications: Application[] = [];
-    let cursor: string | null = null;
-    let page = 0;
-
-    while (page < MAX_PAGES) {
-      page += 1;
-      const query = new URLSearchParams({ limit: String(PAGE_SIZE) });
+  const fetchApplicationsPage = useCallback(
+    async (cursor?: string | null) => {
+      const query = new URLSearchParams({
+        limit: String(APPLICATIONS_PAGE_SIZE),
+      });
       if (cursor) query.set("cursor", cursor);
-      const res = await apiClient<
-        | Application[]
-        | {
-            data: Array<Record<string, unknown>>;
-            meta?: { hasMore?: boolean; nextCursor?: string | null };
-          }
-      >(`/events/${eventId}/applications?${query.toString()}`);
+
+      const res = await apiClient<ApplicationsListResponse>(
+        `/events/${eventId}/applications?${query.toString()}`
+      );
 
       const raw = Array.isArray(res)
         ? (res as unknown as Array<Record<string, unknown>>)
@@ -284,29 +286,75 @@ export default function ApplicationsListPage() {
           ? (res as any).data
           : [];
 
-      for (const item of raw) {
-        const application = normalizeApplication(item);
-        if (seenIds.has(application.id)) continue;
-        seenIds.add(application.id);
-        allApplications.push(application);
-      }
+      const normalized = raw.map(normalizeApplication);
+      const pageNextCursor =
+        !Array.isArray(res) &&
+        typeof (res as any).meta?.nextCursor === "string" &&
+        (res as any).meta?.nextCursor.length > 0
+          ? (res as any).meta.nextCursor
+          : null;
+      const pageHasMore =
+        !Array.isArray(res) &&
+        Boolean((res as any).meta?.hasMore) &&
+        Boolean(pageNextCursor);
 
-      if (Array.isArray(res)) break;
+      return {
+        applications: normalized,
+        hasMore: pageHasMore,
+        nextCursor: pageNextCursor,
+      };
+    },
+    [eventId]
+  );
 
-      const hasMore = Boolean((res as any).meta?.hasMore);
-      const nextCursor = (res as any).meta?.nextCursor;
-      if (!hasMore || typeof nextCursor !== "string" || nextCursor.length === 0) {
-        break;
-      }
-      if (nextCursor === cursor) break;
-      cursor = nextCursor;
+  const refreshApplications = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const firstPage = await fetchApplicationsPage();
+      const hasMore =
+        firstPage.hasMore &&
+        Boolean(firstPage.nextCursor) &&
+        firstPage.nextCursor !== null;
+      setApplications(firstPage.applications);
+      setHasMoreApplications(hasMore);
+      setNextCursor(hasMore ? firstPage.nextCursor : null);
+      setSelectedIds([]);
+    } catch {
+      toast.error("Could not load applications.");
+    } finally {
+      setIsLoading(false);
     }
+  }, [fetchApplicationsPage]);
 
-    setApplications(allApplications);
-    setSelectedIds((prev) =>
-      prev.filter((id) => allApplications.some((app) => app.id === id))
-    );
-  }, [eventId]);
+  const loadMoreApplications = useCallback(async () => {
+    if (!hasMoreApplications || !nextCursor || isLoadingMoreApplications) return;
+    setIsLoadingMoreApplications(true);
+    try {
+      const nextPage = await fetchApplicationsPage(nextCursor);
+      const hasMore =
+        nextPage.hasMore &&
+        Boolean(nextPage.nextCursor) &&
+        nextPage.nextCursor !== nextCursor;
+      setApplications((prev) => {
+        const byId = new Map<string, Application>();
+        for (const application of [...prev, ...nextPage.applications]) {
+          byId.set(application.id, application);
+        }
+        return Array.from(byId.values());
+      });
+      setHasMoreApplications(hasMore);
+      setNextCursor(hasMore ? nextPage.nextCursor : null);
+    } catch {
+      toast.error("Could not load more applications.");
+    } finally {
+      setIsLoadingMoreApplications(false);
+    }
+  }, [
+    fetchApplicationsPage,
+    hasMoreApplications,
+    isLoadingMoreApplications,
+    nextCursor,
+  ]);
 
   const refreshDecisionTemplates = useCallback(async () => {
     if (!canDraftDecisions) return;
@@ -995,7 +1043,7 @@ export default function ApplicationsListPage() {
     <div className="space-y-6">
       <PageHeader
         title="Applications"
-        description={`${applications.length} total applications`}
+        description={`${applications.length}${hasMoreApplications ? "+" : ""} loaded applications`}
       >
         {canDraftDecisions && (
           <Button
@@ -1224,10 +1272,20 @@ export default function ApplicationsListPage() {
       {/* Pagination */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          Showing {table.getRowModel().rows.length} of {filteredData.length}{" "}
-          applications
+          Showing {table.getRowModel().rows.length} of {filteredData.length} loaded
+          applications{hasMoreApplications ? " (more available)" : ""}
         </p>
         <div className="flex gap-2">
+          {hasMoreApplications && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={loadMoreApplications}
+              disabled={isLoadingMoreApplications}
+            >
+              {isLoadingMoreApplications ? "Loading more..." : "Load more"}
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
