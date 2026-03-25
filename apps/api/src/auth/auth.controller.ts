@@ -273,7 +273,7 @@ export class AuthController {
   // Password Reset Flow - Token-based, no session auth required
   @Post('password/forgot')
   @SkipCsrf()
-  @Throttle({ default: { limit: 5, ttl: 900000 } }) // 5 per 15 min
+  @SkipThrottle()
   @HttpCode(HttpStatus.OK)
   async requestPasswordReset(@Body() body: { email: string }) {
     if (!body.email) throw new BadRequestException('Email is required');
@@ -287,7 +287,7 @@ export class AuthController {
 
   @Post('request-password-reset')
   @SkipCsrf()
-  @Throttle({ default: { limit: 5, ttl: 900000 } }) // 5 per 15 min
+  @SkipThrottle()
   @HttpCode(HttpStatus.OK)
   async requestPasswordResetAlias(@Body() body: { email: string }) {
     return this.requestPasswordReset(body);
@@ -295,7 +295,7 @@ export class AuthController {
 
   @Post('password/reset')
   @SkipCsrf()
-  @Throttle({ default: { limit: 5, ttl: 900000 } }) // 5 per 15 min
+  @SkipThrottle()
   @HttpCode(HttpStatus.OK)
   async resetPassword(@Body() body: { token: string; password: string }) {
     if (!body.token || !body.password) {
@@ -308,7 +308,7 @@ export class AuthController {
 
   @Post('reset-password')
   @SkipCsrf()
-  @Throttle({ default: { limit: 5, ttl: 900000 } }) // 5 per 15 min
+  @SkipThrottle()
   @HttpCode(HttpStatus.OK)
   async resetPasswordAlias(
     @Body() body: { token: string; password?: string; newPassword?: string },

@@ -47,6 +47,23 @@ function getHashSnapshot() {
   return window.location.hash ?? "";
 }
 
+function normalizeToken(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function tokenFromHash(hash: string): string | null {
+  if (!hash) return null;
+  const rawHash = hash.replace(/^#/, "");
+  const directToken = normalizeToken(new URLSearchParams(rawHash).get("token"));
+  if (directToken) return directToken;
+
+  const queryIndex = rawHash.indexOf("?");
+  if (queryIndex === -1) return null;
+  return normalizeToken(new URLSearchParams(rawHash.slice(queryIndex + 1)).get("token"));
+}
+
 function ResetPasswordForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -56,11 +73,7 @@ function ResetPasswordForm() {
     getHashSnapshot,
     () => "",
   );
-  const hashToken =
-    queryToken || !hash
-      ? null
-      : new URLSearchParams(hash.replace(/^#/, "")).get("token");
-  const token = queryToken ?? hashToken;
+  const token = normalizeToken(queryToken) ?? tokenFromHash(hash);
   const { csrfToken } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
 

@@ -11,6 +11,7 @@ import * as argon2 from 'argon2';
 
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const HEX_TOKEN_RE = /^[a-f0-9]{64}$/i;
 
 @Injectable()
 export class PasswordResetService {
@@ -133,15 +134,19 @@ export class PasswordResetService {
    * Atomic transaction: validate token, update password, revoke sessions.
    */
   async resetPassword(token: string, newPassword: string): Promise<void> {
-    if (!token || token.length !== 64) {
+    const normalizedToken = typeof token === 'string' ? token.trim() : '';
+    if (!HEX_TOKEN_RE.test(normalizedToken)) {
       throw new BadRequestException('Invalid token format');
     }
 
-    if (!newPassword || newPassword.length < 10) {
-      throw new BadRequestException('Password must be at least 10 characters');
+    if (!newPassword || newPassword.length < 8) {
+      throw new BadRequestException('Password must be at least 8 characters');
     }
 
-    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(normalizedToken)
+      .digest('hex');
 
     await this.prisma.$transaction(async (tx) => {
       // Find and lock token row

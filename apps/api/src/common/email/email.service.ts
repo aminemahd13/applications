@@ -80,7 +80,8 @@ export class EmailService implements OnModuleInit {
     userName?: string,
   ): Promise<void> {
     const baseUrl = process.env.APP_BASE_URL || 'http://localhost:3000';
-    const resetUrl = `${baseUrl}/reset-password#token=${token}`;
+    const encodedToken = encodeURIComponent(token);
+    const resetUrl = `${baseUrl}/reset-password?token=${encodedToken}`;
     const name = userName || 'there';
 
     await this.send({
@@ -110,7 +111,8 @@ export class EmailService implements OnModuleInit {
     },
   ): Promise<void> {
     const baseUrl = process.env.APP_BASE_URL || 'http://localhost:3000';
-    const inviteUrl = `${baseUrl}/reset-password#token=${token}`;
+    const encodedToken = encodeURIComponent(token);
+    const inviteUrl = `${baseUrl}/reset-password?token=${encodedToken}`;
     const name = options?.userName || 'there';
     const roleLabel = options?.role
       ? options.role.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
