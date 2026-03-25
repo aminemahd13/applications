@@ -364,7 +364,16 @@ export class MessagesService {
       where,
       orderBy: { created_at: 'desc' },
       take: query.limit + 1,
-      include: { _count: { select: { message_recipients: true } } },
+      select: {
+        id: true,
+        event_id: true,
+        type: true,
+        title: true,
+        status: true,
+        created_at: true,
+        created_by: true,
+        _count: { select: { message_recipients: true } },
+      },
     });
 
     const hasMore = messages.length > query.limit;

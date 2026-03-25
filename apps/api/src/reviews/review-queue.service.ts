@@ -161,7 +161,11 @@ export class ReviewQueueService {
       where: appWhere,
       orderBy: [{ updated_at: 'desc' }, { id: 'desc' }],
       take: limit + 1,
-      include: {
+      select: {
+        id: true,
+        updated_at: true,
+        assigned_reviewer_id: true,
+        tags: true,
         users_applications_applicant_user_idTousers: {
           select: {
             email: true,
@@ -170,7 +174,12 @@ export class ReviewQueueService {
         },
         application_step_states: {
           where: stepStateWhere,
-          include: {
+          select: {
+            step_id: true,
+            status: true,
+            latest_submission_version_id: true,
+            last_activity_at: true,
+            revision_cycle_count: true,
             workflow_steps: {
               select: { id: true, title: true, step_index: true },
             },

@@ -244,13 +244,42 @@ export class EventsService {
       where,
       orderBy: { [sortField]: order },
       take: limit + 1, // Fetch one extra to check hasMore
+      select: {
+        id: true,
+        title: true,
+        slug: true,
+        status: true,
+        application_open_at: true,
+        application_close_at: true,
+        created_at: true,
+        updated_at: true,
+        _count: {
+          select: {
+            applications: true,
+            event_role_assignments: true,
+          },
+        },
+      },
     });
 
     const hasMore = events.length > limit;
     const data = hasMore ? events.slice(0, -1) : events;
 
     return {
-      data: data.map((e) => this.toEventResponse(e)),
+      data: data.map((event) => ({
+        id: event.id,
+        title: event.title,
+        slug: event.slug,
+        status: event.status,
+        isPublished: event.status === 'published',
+        lifecycleStatus: this.computeLifecycleStatus(event),
+        applicationOpenAt: event.application_open_at,
+        applicationCloseAt: event.application_close_at,
+        applicationCount: event._count.applications,
+        staffCount: event._count.event_role_assignments,
+        createdAt: event.created_at,
+        updatedAt: event.updated_at,
+      })),
       meta: {
         nextCursor: hasMore
           ? sortField === EventsService.DEFAULT_SORT_FIELD
