@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Users,
   UserCheck,
@@ -16,6 +17,7 @@ import {
   Download,
   ChevronLeft,
   ChevronRight,
+  ArrowUpRight,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -96,6 +98,10 @@ interface AdminUserSummary {
   hasLinks: boolean;
   profileCompleteness: number;
   isDisabled: boolean;
+  isGlobalAdmin: boolean;
+  hasStaffRole: boolean;
+  staffRoleCount: number;
+  accountType: "global_admin" | "staff" | "applicant" | "user";
   emailVerifiedAt?: string;
   createdAt: string;
   applicationCount: number;
@@ -153,6 +159,22 @@ function formatDate(value?: string) {
 function asPercent(value: number, total: number) {
   if (total <= 0) return 0;
   return Math.round((value / total) * 100);
+}
+
+function getAccountTypeBadge(user: AdminUserSummary): {
+  label: string;
+  variant: "default" | "secondary" | "outline";
+} {
+  if (user.accountType === "global_admin") {
+    return { label: "Global Admin", variant: "default" };
+  }
+  if (user.accountType === "staff") {
+    return { label: "Staff", variant: "secondary" };
+  }
+  if (user.accountType === "applicant") {
+    return { label: "Applicant", variant: "outline" };
+  }
+  return { label: "User", variant: "outline" };
 }
 
 function filenameFromContentDisposition(
@@ -363,7 +385,7 @@ export default function AdminPeoplePage() {
     <div className="space-y-6">
       <PageHeader
         title="People & Stats"
-        description="Insights for applicants and non-staff users, with regional and profile health breakdowns"
+        description="Insights across all users, with regional and profile health breakdowns"
       >
         <Button
           variant="outline"
@@ -569,7 +591,7 @@ export default function AdminPeoplePage() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="relative flex-1 max-w-sm">
               <Input
-                placeholder="Search by name, email, city, country..."
+                placeholder="Search by name, email, role, city, country..."
                 value={userSearch}
                 onChange={(e) => {
                   setUsersLoading(true);
@@ -593,8 +615,12 @@ export default function AdminPeoplePage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All users</SelectItem>
+                <SelectItem value="admins">Global admins</SelectItem>
+                <SelectItem value="staff">Staff & admins</SelectItem>
+                <SelectItem value="non_staff">Non-staff</SelectItem>
                 <SelectItem value="applicants">Applicants</SelectItem>
                 <SelectItem value="non_applicants">Non-applicants</SelectItem>
+                <SelectItem value="enabled">Enabled</SelectItem>
                 <SelectItem value="verified">Verified</SelectItem>
                 <SelectItem value="unverified">Unverified</SelectItem>
                 <SelectItem value="disabled">Disabled</SelectItem>
@@ -603,11 +629,11 @@ export default function AdminPeoplePage() {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Showing {users.length} of {usersTotal} users (staff/admin excluded).
+            Showing {users.length} of {usersTotal} users.
           </p>
 
           {usersLoading ? (
-            <TableSkeleton columns={6} />
+            <TableSkeleton columns={7} />
           ) : users.length === 0 ? (
             <EmptyState
               icon={Users}
@@ -630,6 +656,7 @@ export default function AdminPeoplePage() {
                       <TableHead>Profile</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Joined</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -649,6 +676,19 @@ export default function AdminPeoplePage() {
                               <p className="text-xs text-muted-foreground truncate">
                                 {user.email}
                               </p>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                <Badge
+                                  variant={getAccountTypeBadge(user).variant}
+                                >
+                                  {getAccountTypeBadge(user).label}
+                                </Badge>
+                                {user.staffRoleCount > 0 && (
+                                  <Badge variant="secondary">
+                                    {user.staffRoleCount} role
+                                    {user.staffRoleCount === 1 ? "" : "s"}
+                                  </Badge>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </TableCell>
@@ -666,13 +706,6 @@ export default function AdminPeoplePage() {
                                 Last: {formatDate(user.lastApplicationAt)}
                               </p>
                             )}
-                            <div className="mt-1">
-                              {user.applicationCount > 0 ? (
-                                <Badge variant="outline">Applicant</Badge>
-                              ) : (
-                                <Badge variant="secondary">User</Badge>
-                              )}
-                            </div>
                           </div>
                         </TableCell>
                         <TableCell>
@@ -741,6 +774,14 @@ export default function AdminPeoplePage() {
                           <span className="text-xs text-muted-foreground">
                             {formatDate(user.createdAt)}
                           </span>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="outline" size="sm" asChild>
+                            <Link href={`/admin/people/${user.id}`}>
+                              Open
+                              <ArrowUpRight className="ml-1.5 h-3.5 w-3.5" />
+                            </Link>
+                          </Button>
                         </TableCell>
                       </TableRow>
                     ))}

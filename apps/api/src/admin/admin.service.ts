@@ -1,11 +1,13 @@
-﻿import {
+import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { EventRole } from '@event-platform/shared';
 import { PasswordResetService } from '../auth/password-reset.service';
+import { RateLimiterService } from '../common/services/rate-limiter.service';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
 
@@ -114,6 +116,10 @@ export interface AdminUserSummary {
   hasLinks: boolean;
   profileCompleteness: number;
   isDisabled: boolean;
+  isGlobalAdmin: boolean;
+  hasStaffRole: boolean;
+  staffRoleCount: number;
+  accountType: 'global_admin' | 'staff' | 'applicant' | 'user';
   emailVerifiedAt?: string;
   createdAt: string;
   applicationCount: number;
@@ -126,6 +132,58 @@ export interface AdminUserListResponse {
   total: number;
   page: number;
   pageSize: number;
+}
+
+export interface AdminUserRoleAssignmentSummary {
+  id: string;
+  role: string;
+  eventId: string;
+  eventName: string;
+  accessStartAt: string | null;
+  accessEndAt: string | null;
+  isActive: boolean;
+}
+
+export interface AdminUserDetail {
+  id: string;
+  email: string;
+  isDisabled: boolean;
+  isGlobalAdmin: boolean;
+  hasStaffRole: boolean;
+  staffRoleCount: number;
+  emailVerifiedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  applicationCount: number;
+  eventCount: number;
+  lastApplicationAt: string | null;
+  profile: {
+    fullName: string;
+    firstName: string;
+    lastName: string;
+    phone: string;
+    education: string;
+    institution: string;
+    city: string;
+    country: string;
+    dateOfBirth: string;
+    links: string[];
+  };
+  eventRoles: AdminUserRoleAssignmentSummary[];
+}
+
+interface AdminUserUpdateInput {
+  email?: string;
+  isDisabled?: boolean;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  education?: string;
+  institution?: string;
+  city?: string;
+  country?: string;
+  dateOfBirth?: string | null;
+  links?: string[];
 }
 
 export interface AdminEventStats {
@@ -186,6 +244,30 @@ function parseOptionalDateInput(value: unknown): Date | null | undefined {
   return undefined;
 }
 
+function parseDateOnly(value: Date | null | undefined): string {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) return '';
+  return value.toISOString().split('T')[0];
+}
+
+function sanitizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter((entry) => entry.length > 0)
+    .slice(0, 10);
+}
+
+function resolveAccountType(input: {
+  isGlobalAdmin: boolean;
+  hasStaffRole: boolean;
+  applicationCount: number;
+}): 'global_admin' | 'staff' | 'applicant' | 'user' {
+  if (input.isGlobalAdmin) return 'global_admin';
+  if (input.hasStaffRole) return 'staff';
+  if (input.applicationCount > 0) return 'applicant';
+  return 'user';
+}
+
 function resolveInviteStatus(
   inviteStatus: unknown,
   inviteLastExpiresAt: Date | null,
@@ -226,6 +308,7 @@ export class AdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly passwordResetService: PasswordResetService,
+    private readonly rateLimiterService: RateLimiterService,
   ) {}
 
   /* ================================================================ */
@@ -493,71 +576,7 @@ export class AdminService {
       ? Math.min(Math.max(pageSize, 1), 100)
       : 25;
     const skip = (safePage - 1) * safePageSize;
-
-    const and: any[] = [
-      { is_global_admin: false },
-      { event_role_assignments: { none: {} } },
-    ];
-
-    if (search) {
-      and.push({
-        OR: [
-          { email: { contains: search, mode: 'insensitive' } },
-          {
-            applicant_profiles: {
-              is: { first_name: { contains: search, mode: 'insensitive' } },
-            },
-          },
-          {
-            applicant_profiles: {
-              is: { last_name: { contains: search, mode: 'insensitive' } },
-            },
-          },
-          {
-            applicant_profiles: {
-              is: { city: { contains: search, mode: 'insensitive' } },
-            },
-          },
-          {
-            applicant_profiles: {
-              is: { country: { contains: search, mode: 'insensitive' } },
-            },
-          },
-          {
-            applicant_profiles: {
-              is: {
-                education_level: { contains: search, mode: 'insensitive' },
-              },
-            },
-          },
-          {
-            applicant_profiles: {
-              is: { institution: { contains: search, mode: 'insensitive' } },
-            },
-          },
-        ],
-      });
-    }
-
-    if (filter && filter !== 'all') {
-      if (filter === 'disabled') {
-        and.push({ is_disabled: true });
-      } else if (filter === 'applicants') {
-        and.push({
-          applications_applications_applicant_user_idTousers: { some: {} },
-        });
-      } else if (filter === 'non_applicants') {
-        and.push({
-          applications_applications_applicant_user_idTousers: { none: {} },
-        });
-      } else if (filter === 'verified') {
-        and.push({ email_verified_at: { not: null } });
-      } else if (filter === 'unverified') {
-        and.push({ email_verified_at: null });
-      }
-    }
-
-    const where = { AND: and };
+    const where = this.buildAdminUsersWhere(search, filter);
 
     const [users, total] = await Promise.all([
       this.prisma.users.findMany({
@@ -569,6 +588,7 @@ export class AdminService {
           id: true,
           email: true,
           is_disabled: true,
+          is_global_admin: true,
           email_verified_at: true,
           created_at: true,
           applicant_profiles: {
@@ -582,6 +602,11 @@ export class AdminService {
               city: true,
               country: true,
               links: true,
+            },
+          },
+          _count: {
+            select: {
+              event_role_assignments: true,
             },
           },
         },
@@ -650,6 +675,9 @@ export class AdminService {
         Boolean(city || country),
         hasLinks,
       ].filter(Boolean).length;
+      const staffRoleCount = user._count.event_role_assignments;
+      const hasStaffRole = user.is_global_admin || staffRoleCount > 0;
+      const applicationCount = applicationInfo?.count ?? 0;
 
       return {
         id: user.id,
@@ -663,11 +691,19 @@ export class AdminService {
         hasLinks,
         profileCompleteness: Math.round((completedProfileFields / 6) * 100),
         isDisabled: user.is_disabled ?? false,
+        isGlobalAdmin: user.is_global_admin ?? false,
+        hasStaffRole,
+        staffRoleCount,
+        accountType: resolveAccountType({
+          isGlobalAdmin: user.is_global_admin ?? false,
+          hasStaffRole,
+          applicationCount,
+        }),
         emailVerifiedAt: user.email_verified_at
           ? user.email_verified_at.toISOString()
           : undefined,
         createdAt: user.created_at.toISOString(),
-        applicationCount: applicationInfo?.count ?? 0,
+        applicationCount,
         eventCount: eventMap.get(user.id)?.size ?? 0,
         lastApplicationAt: applicationInfo?.lastApplicationAt,
       };
@@ -676,77 +712,375 @@ export class AdminService {
     return { data, total, page: safePage, pageSize: safePageSize };
   }
 
+  async getUserDetail(userId: string): Promise<AdminUserDetail> {
+    const user = await this.prisma.users.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        is_disabled: true,
+        is_global_admin: true,
+        email_verified_at: true,
+        created_at: true,
+        updated_at: true,
+        applicant_profiles: {
+          select: {
+            full_name: true,
+            first_name: true,
+            last_name: true,
+            phone: true,
+            education_level: true,
+            institution: true,
+            city: true,
+            country: true,
+            date_of_birth: true,
+            links: true,
+          },
+        },
+        event_role_assignments: {
+          orderBy: [{ created_at: 'desc' }, { id: 'asc' }],
+          select: {
+            id: true,
+            role: true,
+            access_start_at: true,
+            access_end_at: true,
+            events: {
+              select: {
+                id: true,
+                title: true,
+              },
+            },
+          },
+        },
+        _count: {
+          select: {
+            event_role_assignments: true,
+          },
+        },
+      },
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    const applications = await this.prisma.applications.findMany({
+      where: { applicant_user_id: userId },
+      select: {
+        event_id: true,
+        created_at: true,
+        updated_at: true,
+      },
+    });
+    const applicationCount = applications.length;
+    const eventCount = new Set(applications.map((app) => app.event_id)).size;
+    const lastApplicationAt = applications.reduce<Date | null>(
+      (latest, app) => {
+        const candidate = app.updated_at ?? app.created_at;
+        if (!latest || candidate > latest) return candidate;
+        return latest;
+      },
+      null,
+    );
+
+    const staffRoleCount = user._count.event_role_assignments;
+    const hasStaffRole = user.is_global_admin || staffRoleCount > 0;
+
+    return {
+      id: user.id,
+      email: user.email,
+      isDisabled: user.is_disabled ?? false,
+      isGlobalAdmin: user.is_global_admin ?? false,
+      hasStaffRole,
+      staffRoleCount,
+      emailVerifiedAt: user.email_verified_at
+        ? user.email_verified_at.toISOString()
+        : null,
+      createdAt: user.created_at.toISOString(),
+      updatedAt: user.updated_at.toISOString(),
+      applicationCount,
+      eventCount,
+      lastApplicationAt: lastApplicationAt
+        ? lastApplicationAt.toISOString()
+        : null,
+      profile: this.mapAdminUserProfile(user.applicant_profiles),
+      eventRoles: user.event_role_assignments.map((assignment) => ({
+        id: assignment.id,
+        role: assignment.role.toLowerCase(),
+        eventId: assignment.events.id,
+        eventName: assignment.events.title,
+        accessStartAt: assignment.access_start_at
+          ? assignment.access_start_at.toISOString()
+          : null,
+        accessEndAt: assignment.access_end_at
+          ? assignment.access_end_at.toISOString()
+          : null,
+        isActive: isRoleAssignmentActiveNow({
+          access_start_at: assignment.access_start_at,
+          access_end_at: assignment.access_end_at,
+        }),
+      })),
+    };
+  }
+
+  async updateUser(
+    actorUserId: string,
+    userId: string,
+    payload: AdminUserUpdateInput,
+  ): Promise<{ user: AdminUserDetail; sessionsRevoked: number }> {
+    const targetUser = await this.prisma.users.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        is_disabled: true,
+        is_global_admin: true,
+        applicant_profiles: {
+          select: {
+            first_name: true,
+            last_name: true,
+          },
+        },
+      },
+    });
+    if (!targetUser) throw new NotFoundException('User not found');
+
+    const hasField = (key: keyof AdminUserUpdateInput) =>
+      Object.prototype.hasOwnProperty.call(payload, key);
+
+    const emailProvided = hasField('email');
+    const isDisabledProvided = hasField('isDisabled');
+    const firstNameProvided = hasField('firstName');
+    const lastNameProvided = hasField('lastName');
+    const phoneProvided = hasField('phone');
+    const educationProvided = hasField('education');
+    const institutionProvided = hasField('institution');
+    const cityProvided = hasField('city');
+    const countryProvided = hasField('country');
+    const dateOfBirthProvided = hasField('dateOfBirth');
+    const linksProvided = hasField('links');
+
+    let normalizedEmail: string | undefined;
+    let emailChanged = false;
+    if (emailProvided) {
+      if (typeof payload.email !== 'string') {
+        throw new BadRequestException('email must be a string');
+      }
+      normalizedEmail = payload.email.trim().toLowerCase();
+      if (!normalizedEmail) {
+        throw new BadRequestException('Email is required');
+      }
+      if (normalizedEmail !== targetUser.email.toLowerCase()) {
+        emailChanged = true;
+        const existing = await this.prisma.users.findFirst({
+          where: {
+            email: normalizedEmail,
+            NOT: { id: userId },
+          },
+          select: { id: true },
+        });
+        if (existing) {
+          throw new BadRequestException('Email already in use');
+        }
+      }
+    }
+
+    if (isDisabledProvided && typeof payload.isDisabled !== 'boolean') {
+      throw new BadRequestException('isDisabled must be a boolean');
+    }
+    const disabledChanged =
+      isDisabledProvided && payload.isDisabled !== targetUser.is_disabled;
+
+    if (payload.isDisabled === true && isDisabledProvided) {
+      if (targetUser.id === actorUserId) {
+        throw new ForbiddenException('You cannot disable your own account');
+      }
+      if (targetUser.is_global_admin && !targetUser.is_disabled) {
+        const enabledGlobalAdminCount = await this.prisma.users.count({
+          where: {
+            is_global_admin: true,
+            is_disabled: false,
+          },
+        });
+        if (enabledGlobalAdminCount <= 1) {
+          throw new BadRequestException(
+            'At least one enabled global admin account is required',
+          );
+        }
+      }
+    }
+
+    const firstNameValue = firstNameProvided
+      ? this.normalizeNullableTextField(payload.firstName, 'firstName')
+      : undefined;
+    const lastNameValue = lastNameProvided
+      ? this.normalizeNullableTextField(payload.lastName, 'lastName')
+      : undefined;
+    const phoneValue = phoneProvided
+      ? this.normalizeNullableTextField(payload.phone, 'phone')
+      : undefined;
+    const educationValue = educationProvided
+      ? this.normalizeNullableTextField(payload.education, 'education')
+      : undefined;
+    const institutionValue = institutionProvided
+      ? this.normalizeNullableTextField(payload.institution, 'institution')
+      : undefined;
+    const cityValue = cityProvided
+      ? this.normalizeNullableTextField(payload.city, 'city')
+      : undefined;
+    const countryValue = countryProvided
+      ? this.normalizeNullableTextField(payload.country, 'country')
+      : undefined;
+
+    let dateOfBirthValue: Date | null | undefined;
+    if (dateOfBirthProvided) {
+      dateOfBirthValue = parseOptionalDateInput(payload.dateOfBirth);
+      if (dateOfBirthValue === undefined) {
+        throw new BadRequestException('Invalid dateOfBirth value');
+      }
+    }
+
+    let linksValue: string[] | undefined;
+    if (linksProvided) {
+      if (!Array.isArray(payload.links)) {
+        throw new BadRequestException('links must be an array of strings');
+      }
+      linksValue = sanitizeStringList(payload.links);
+    }
+
+    const userData: Record<string, unknown> = {};
+    if (emailChanged) {
+      userData.email = normalizedEmail;
+      userData.email_verified_at = null;
+    }
+    if (disabledChanged) {
+      userData.is_disabled = payload.isDisabled;
+    }
+
+    const profileData: Record<string, unknown> = {};
+    if (firstNameProvided) {
+      profileData.first_name = firstNameValue ?? null;
+    }
+    if (lastNameProvided) {
+      profileData.last_name = lastNameValue ?? null;
+    }
+    if (phoneProvided) {
+      profileData.phone = phoneValue ?? null;
+    }
+    if (educationProvided) {
+      profileData.education_level = educationValue ?? null;
+    }
+    if (institutionProvided) {
+      profileData.institution = institutionValue ?? null;
+    }
+    if (cityProvided) {
+      profileData.city = cityValue ?? null;
+    }
+    if (countryProvided) {
+      profileData.country = countryValue ?? null;
+    }
+    if (dateOfBirthProvided) {
+      profileData.date_of_birth = dateOfBirthValue ?? null;
+    }
+    if (linksProvided) {
+      profileData.links = linksValue ?? [];
+    }
+    if (firstNameProvided || lastNameProvided) {
+      const resolvedFirstName = (
+        firstNameProvided
+          ? firstNameValue
+          : targetUser.applicant_profiles?.first_name
+      )?.trim();
+      const resolvedLastName = (
+        lastNameProvided ? lastNameValue : targetUser.applicant_profiles?.last_name
+      )?.trim();
+      const computedFullName =
+        [resolvedFirstName, resolvedLastName].filter(Boolean).join(' ') || null;
+      profileData.full_name = computedFullName;
+    }
+
+    const hasUserChanges = Object.keys(userData).length > 0;
+    const hasProfileChanges = Object.keys(profileData).length > 0;
+
+    if (hasUserChanges || hasProfileChanges) {
+      await this.prisma.$transaction(async (tx) => {
+        if (hasUserChanges) {
+          await tx.users.update({
+            where: { id: userId },
+            data: userData,
+          });
+        }
+        if (hasProfileChanges) {
+          await tx.applicant_profiles.upsert({
+            where: { user_id: userId },
+            update: profileData,
+            create: {
+              user_id: userId,
+              full_name: (profileData.full_name as string | null) ?? null,
+              first_name: (profileData.first_name as string | null) ?? null,
+              last_name: (profileData.last_name as string | null) ?? null,
+              phone: (profileData.phone as string | null) ?? null,
+              education_level:
+                (profileData.education_level as string | null) ?? null,
+              institution: (profileData.institution as string | null) ?? null,
+              city: (profileData.city as string | null) ?? null,
+              country: (profileData.country as string | null) ?? null,
+              date_of_birth:
+                (profileData.date_of_birth as Date | null | undefined) ?? null,
+              links: (profileData.links as string[] | undefined) ?? [],
+            },
+          });
+        }
+      });
+    }
+
+    const sessionsRevoked =
+      emailChanged || disabledChanged
+        ? await this.revokeUserSessionsSafe(userId)
+        : 0;
+
+    return {
+      user: await this.getUserDetail(userId),
+      sessionsRevoked,
+    };
+  }
+
+  async setUserPassword(
+    userId: string,
+    newPassword: string,
+  ): Promise<{ message: string; sessionsRevoked: number }> {
+    if (typeof newPassword !== 'string' || !newPassword) {
+      throw new BadRequestException('New password is required');
+    }
+    if (newPassword.length < 8) {
+      throw new BadRequestException('Password must be at least 8 characters');
+    }
+
+    const user = await this.prisma.users.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const passwordHash = await argon2.hash(newPassword);
+    await this.prisma.users.update({
+      where: { id: userId },
+      data: { password_hash: passwordHash },
+    });
+
+    const sessionsRevoked = await this.revokeUserSessionsSafe(userId);
+    return {
+      message: 'Password updated successfully',
+      sessionsRevoked,
+    };
+  }
+
   async exportUsersCsv(params?: {
     search?: string;
     filter?: string;
   }): Promise<{ filename: string; csv: string }> {
     const search = params?.search?.trim();
     const filter = params?.filter?.trim();
-
-    const and: any[] = [
-      { is_global_admin: false },
-      { event_role_assignments: { none: {} } },
-    ];
-
-    if (search) {
-      and.push({
-        OR: [
-          { email: { contains: search, mode: 'insensitive' } },
-          {
-            applicant_profiles: {
-              is: { first_name: { contains: search, mode: 'insensitive' } },
-            },
-          },
-          {
-            applicant_profiles: {
-              is: { last_name: { contains: search, mode: 'insensitive' } },
-            },
-          },
-          {
-            applicant_profiles: {
-              is: { city: { contains: search, mode: 'insensitive' } },
-            },
-          },
-          {
-            applicant_profiles: {
-              is: { country: { contains: search, mode: 'insensitive' } },
-            },
-          },
-          {
-            applicant_profiles: {
-              is: {
-                education_level: { contains: search, mode: 'insensitive' },
-              },
-            },
-          },
-          {
-            applicant_profiles: {
-              is: { institution: { contains: search, mode: 'insensitive' } },
-            },
-          },
-        ],
-      });
-    }
-
-    if (filter && filter !== 'all') {
-      if (filter === 'disabled') {
-        and.push({ is_disabled: true });
-      } else if (filter === 'applicants') {
-        and.push({
-          applications_applications_applicant_user_idTousers: { some: {} },
-        });
-      } else if (filter === 'non_applicants') {
-        and.push({
-          applications_applications_applicant_user_idTousers: { none: {} },
-        });
-      } else if (filter === 'verified') {
-        and.push({ email_verified_at: { not: null } });
-      } else if (filter === 'unverified') {
-        and.push({ email_verified_at: null });
-      }
-    }
-
-    const where = { AND: and };
+    const where = this.buildAdminUsersWhere(search, filter);
 
     const users = await this.prisma.users.findMany({
       where,
@@ -755,11 +1089,14 @@ export class AdminService {
         id: true,
         email: true,
         is_disabled: true,
+        is_global_admin: true,
         email_verified_at: true,
         created_at: true,
         updated_at: true,
         applicant_profiles: {
           select: {
+            first_name: true,
+            last_name: true,
             full_name: true,
             phone: true,
             education_level: true,
@@ -767,6 +1104,11 @@ export class AdminService {
             city: true,
             country: true,
             links: true,
+          },
+        },
+        _count: {
+          select: {
+            event_role_assignments: true,
           },
         },
       },
@@ -941,6 +1283,10 @@ export class AdminService {
     const headers = [
       'userId',
       'email',
+      'accountType',
+      'isGlobalAdmin',
+      'hasStaffRole',
+      'staffRoleCount',
       'fullName',
       'phone',
       'educationLevel',
@@ -995,6 +1341,8 @@ export class AdminService {
       const country = normalizeOptionalText(profile?.country);
       const hasPhone = Boolean(phone);
       const hasLinks = hasFilledValue(profile?.links);
+      const staffRoleCount = user._count.event_role_assignments;
+      const hasStaffRole = user.is_global_admin || staffRoleCount > 0;
       const profileCompleteness = Math.round(
         ([
           Boolean(fullName),
@@ -1036,6 +1384,14 @@ export class AdminService {
       const sharedUserColumns: unknown[] = [
         user.id,
         user.email,
+        resolveAccountType({
+          isGlobalAdmin: user.is_global_admin ?? false,
+          hasStaffRole,
+          applicationCount: userApplications.length,
+        }),
+        user.is_global_admin ?? false,
+        hasStaffRole,
+        staffRoleCount,
         fullName ?? '',
         phone ?? '',
         educationLevel ?? '',
@@ -2050,6 +2406,168 @@ export class AdminService {
     await this.prisma.event_role_assignments.delete({ where: { id } });
   }
 
+  private buildAdminUsersWhere(search?: string, filter?: string): any {
+    const and: any[] = [];
+    const trimmedSearch = search?.trim();
+    if (trimmedSearch) {
+      and.push({
+        OR: [
+          { email: { contains: trimmedSearch, mode: 'insensitive' } },
+          { event_role_assignments: { some: { role: { contains: trimmedSearch, mode: 'insensitive' } } } },
+          {
+            event_role_assignments: {
+              some: {
+                events: {
+                  is: {
+                    title: { contains: trimmedSearch, mode: 'insensitive' },
+                  },
+                },
+              },
+            },
+          },
+          {
+            applicant_profiles: {
+              is: { first_name: { contains: trimmedSearch, mode: 'insensitive' } },
+            },
+          },
+          {
+            applicant_profiles: {
+              is: { last_name: { contains: trimmedSearch, mode: 'insensitive' } },
+            },
+          },
+          {
+            applicant_profiles: {
+              is: { full_name: { contains: trimmedSearch, mode: 'insensitive' } },
+            },
+          },
+          {
+            applicant_profiles: {
+              is: { city: { contains: trimmedSearch, mode: 'insensitive' } },
+            },
+          },
+          {
+            applicant_profiles: {
+              is: { country: { contains: trimmedSearch, mode: 'insensitive' } },
+            },
+          },
+          {
+            applicant_profiles: {
+              is: {
+                education_level: {
+                  contains: trimmedSearch,
+                  mode: 'insensitive',
+                },
+              },
+            },
+          },
+          {
+            applicant_profiles: {
+              is: { institution: { contains: trimmedSearch, mode: 'insensitive' } },
+            },
+          },
+        ],
+      });
+    }
+
+    const normalizedFilter = filter?.trim().toLowerCase();
+    if (normalizedFilter && normalizedFilter !== 'all') {
+      if (normalizedFilter === 'disabled') {
+        and.push({ is_disabled: true });
+      } else if (normalizedFilter === 'enabled') {
+        and.push({ is_disabled: false });
+      } else if (normalizedFilter === 'applicants') {
+        and.push({
+          applications_applications_applicant_user_idTousers: { some: {} },
+        });
+      } else if (normalizedFilter === 'non_applicants') {
+        and.push({
+          applications_applications_applicant_user_idTousers: { none: {} },
+        });
+      } else if (normalizedFilter === 'verified') {
+        and.push({ email_verified_at: { not: null } });
+      } else if (normalizedFilter === 'unverified') {
+        and.push({ email_verified_at: null });
+      } else if (normalizedFilter === 'admins') {
+        and.push({ is_global_admin: true });
+      } else if (normalizedFilter === 'staff') {
+        and.push({
+          OR: [
+            { is_global_admin: true },
+            { event_role_assignments: { some: {} } },
+          ],
+        });
+      } else if (normalizedFilter === 'non_staff') {
+        and.push({
+          AND: [
+            { is_global_admin: false },
+            { event_role_assignments: { none: {} } },
+          ],
+        });
+      }
+    }
+
+    return and.length > 0 ? { AND: and } : {};
+  }
+
+  private mapAdminUserProfile(
+    profile:
+      | {
+          full_name?: string | null;
+          first_name?: string | null;
+          last_name?: string | null;
+          phone?: string | null;
+          education_level?: string | null;
+          institution?: string | null;
+          city?: string | null;
+          country?: string | null;
+          date_of_birth?: Date | null;
+          links?: unknown;
+        }
+      | null
+      | undefined,
+  ): AdminUserDetail['profile'] {
+    const firstName = profile?.first_name?.trim?.() ?? '';
+    const lastName = profile?.last_name?.trim?.() ?? '';
+    const fullName =
+      [firstName, lastName].filter(Boolean).join(' ') ||
+      profile?.full_name?.trim?.() ||
+      '';
+
+    return {
+      fullName,
+      firstName,
+      lastName,
+      phone: profile?.phone?.trim?.() ?? '',
+      education: profile?.education_level?.trim?.() ?? '',
+      institution: profile?.institution?.trim?.() ?? '',
+      city: profile?.city?.trim?.() ?? '',
+      country: profile?.country?.trim?.() ?? '',
+      dateOfBirth: parseDateOnly(profile?.date_of_birth ?? null),
+      links: sanitizeStringList(profile?.links),
+    };
+  }
+
+  private normalizeNullableTextField(
+    value: unknown,
+    fieldName: string,
+  ): string | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (typeof value !== 'string') {
+      throw new BadRequestException(`${fieldName} must be a string`);
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private async revokeUserSessionsSafe(userId: string): Promise<number> {
+    try {
+      return await this.rateLimiterService.revokeUserSessions(userId);
+    } catch {
+      return 0;
+    }
+  }
+
   private async getEffectiveAnswersBySubmissionVersionIds(
     submissionVersionIds: string[],
   ): Promise<Map<string, Record<string, any>>> {
@@ -2333,3 +2851,4 @@ export class AdminService {
     return `WAITING_FOR_APPLICANT_STEP_${stepIndex}`;
   }
 }
+

@@ -1,4 +1,4 @@
-﻿import {
+import {
   Controller,
   Get,
   Post,
@@ -9,6 +9,8 @@
   Query,
   Res,
   UseGuards,
+  Session,
+  BadRequestException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { Permission } from '@event-platform/shared';
@@ -72,6 +74,48 @@ export class AdminController {
       `attachment; filename="${result.filename}"`,
     );
     res.send(result.csv);
+  }
+
+  @Get('users/:userId')
+  @RequirePermission(Permission.ADMIN_SEARCH_GLOBAL)
+  async getUserDetail(@Param('userId') userId: string) {
+    return this.adminService.getUserDetail(userId);
+  }
+
+  @Patch('users/:userId')
+  @RequirePermission(Permission.ADMIN_ROLES_MANAGE)
+  async updateUser(
+    @Session() session: any,
+    @Param('userId') userId: string,
+    @Body()
+    body: {
+      email?: string;
+      isDisabled?: boolean;
+      firstName?: string;
+      lastName?: string;
+      phone?: string;
+      education?: string;
+      institution?: string;
+      city?: string;
+      country?: string;
+      dateOfBirth?: string | null;
+      links?: string[];
+    },
+  ) {
+    const actorUserId = session?.user?.id;
+    if (!actorUserId) {
+      throw new BadRequestException('Invalid session');
+    }
+    return this.adminService.updateUser(actorUserId, userId, body ?? {});
+  }
+
+  @Post('users/:userId/password')
+  @RequirePermission(Permission.ADMIN_ROLES_MANAGE)
+  async updateUserPassword(
+    @Param('userId') userId: string,
+    @Body() body: { newPassword: string },
+  ) {
+    return this.adminService.setUserPassword(userId, body?.newPassword);
   }
 
   /* ============ Event Stats ============ */
