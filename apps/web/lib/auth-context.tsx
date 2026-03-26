@@ -16,6 +16,7 @@ import {
 } from "@event-platform/shared";
 import { toast } from "sonner";
 import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
+import { useI18n } from "@/lib/i18n";
 
 /* ---------- Types ---------- */
 
@@ -63,6 +64,7 @@ export function AuthProvider({
   children: React.ReactNode;
   bootstrapOnMount?: boolean;
 }) {
+  const { t } = useI18n();
   const [state, setState] = useState<AuthState>({
     user: null,
     csrfToken: null,
@@ -148,7 +150,7 @@ export function AuthProvider({
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          toast.error(err.message ?? "Invalid credentials");
+          toast.error(err.message ?? t("Invalid credentials"));
           return null;
         }
 
@@ -162,11 +164,11 @@ export function AuthProvider({
         }));
         return user;
       } catch {
-        toast.error("Network error. Please try again.");
+        toast.error(t("Network error. Please try again."));
         return null;
       }
     },
-    [state.csrfToken, fetchCsrf, fetchUser],
+    [state.csrfToken, fetchCsrf, fetchUser, t],
   );
 
   /** Signup */
@@ -188,16 +190,16 @@ export function AuthProvider({
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          toast.error(err.message ?? "Signup failed");
+          toast.error(err.message ?? t("Signup failed"));
           return false;
         }
         return true;
       } catch {
-        toast.error("Network error. Please try again.");
+        toast.error(t("Network error. Please try again."));
         return false;
       }
     },
-    [state.csrfToken, fetchCsrf],
+    [state.csrfToken, fetchCsrf, t],
   );
 
   /** Logout */

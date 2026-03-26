@@ -151,6 +151,7 @@ export default function StaffLayout({
       navGroups={navGroups}
       headerTitle="Math&Maroc"
       headerSubtitle={event?.name ?? "Event"}
+      translateHeaderSubtitle={false}
     >
       <div className={isMicrositeBuilder ? "min-h-0" : "space-y-4 min-h-0"}>
         {!isMicrositeBuilder && (

@@ -157,6 +157,7 @@ export default function StaffDashboardPage() {
         label: event.title,
         href: `/staff/${event.eventId}`,
         icon: CalendarDays,
+        translateLabel: false,
       })),
     },
   ].filter((group) => group.items.length > 0);

@@ -4,8 +4,10 @@ import { ThemeProvider } from "next-themes";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/lib/auth-context";
+import { AutoTranslate, LocaleProvider } from "@/lib/i18n";
 import { useState } from "react";
 import { usePathname } from "next/navigation";
+import { GlobalLocaleToggle } from "@/components/shared/global-locale-toggle";
 
 import {
   PlatformSettingsProvider,
@@ -56,14 +58,17 @@ export function Providers({
       enableSystem
       disableTransitionOnChange
     >
-      <PlatformSettingsProvider initialSettings={settings}>
-        <QueryClientProvider client={queryClient}>
-          <AuthProvider bootstrapOnMount={shouldBootstrapAuth}>
-            {children}
-            <Toaster richColors position="bottom-right" />
-          </AuthProvider>
-        </QueryClientProvider>
-      </PlatformSettingsProvider>
+      <LocaleProvider>
+        <PlatformSettingsProvider initialSettings={settings}>
+          <QueryClientProvider client={queryClient}>
+            <AuthProvider bootstrapOnMount={shouldBootstrapAuth}>
+              <AutoTranslate>{children}</AutoTranslate>
+              <GlobalLocaleToggle />
+              <Toaster richColors position="bottom-right" />
+            </AuthProvider>
+          </QueryClientProvider>
+        </PlatformSettingsProvider>
+      </LocaleProvider>
     </ThemeProvider>
   );
 }

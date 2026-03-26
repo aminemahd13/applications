@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/form";
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useI18n } from "@/lib/i18n";
 import { toast } from "sonner";
 
 const schema = z
@@ -67,6 +68,7 @@ function tokenFromHash(hash: string): string | null {
 function ResetPasswordForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { t } = useI18n();
   const queryToken = searchParams.get("token");
   const hash = useSyncExternalStore(
     subscribeToHashChange,
@@ -84,7 +86,7 @@ function ResetPasswordForm() {
 
   async function onSubmit(values: z.infer<typeof schema>) {
     if (!token) {
-      toast.error("Invalid or missing reset token.");
+      toast.error(t("Invalid or missing reset token."));
       return;
     }
     setIsLoading(true);
@@ -94,7 +96,7 @@ function ResetPasswordForm() {
         body: { token, newPassword: values.newPassword },
         csrfToken: csrfToken ?? undefined,
       });
-      toast.success("Password reset successfully!");
+      toast.success(t("Password reset successfully!"));
       router.push("/login");
     } catch {
       // Error toast handled by apiClient

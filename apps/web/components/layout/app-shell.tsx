@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import { ThemeToggle } from "@/components/shared/theme-toggle";
 import { useAuth } from "@/lib/auth-context";
+import { useI18n } from "@/lib/i18n";
 import { apiClient } from "@/lib/api";
 import { toast } from "sonner";
 import {
@@ -57,11 +58,13 @@ export interface NavItem {
   icon: LucideIcon;
   badge?: number;
   permission?: string;
+  translateLabel?: boolean;
 }
 
 export interface NavGroup {
   label: string;
   items: NavItem[];
+  translateLabel?: boolean;
 }
 
 interface AppShellProps {
@@ -69,7 +72,9 @@ interface AppShellProps {
   navGroups: NavGroup[];
   headerTitle?: string;
   headerSubtitle?: string;
-  breadcrumbs?: Array<{ label: string; href?: string }>;
+  translateHeaderTitle?: boolean;
+  translateHeaderSubtitle?: boolean;
+  breadcrumbs?: Array<{ label: string; href?: string; translateLabel?: boolean }>;
 }
 
 /* ---------- Component ---------- */
@@ -79,10 +84,13 @@ export function AppShell({
   navGroups,
   headerTitle = "Math&Maroc",
   headerSubtitle,
+  translateHeaderTitle = true,
+  translateHeaderSubtitle = true,
   breadcrumbs,
 }: AppShellProps) {
   const pathname = usePathname();
   const { user, logout, csrfToken } = useAuth();
+  const { locale, setLocale, t } = useI18n();
   const [reminderDismissed, setReminderDismissed] = useState(false);
   const [isSendingVerification, setIsSendingVerification] = useState(false);
   const profileHref = pathname?.startsWith("/admin") ? "/admin/profile" : "/profile";
@@ -143,7 +151,7 @@ export function AppShell({
     if (isSendingVerification) return;
 
     if (!csrfToken) {
-      toast.error("Please wait and try again.");
+      toast.error(t("Please wait and try again."));
       return;
     }
 
@@ -153,13 +161,35 @@ export function AppShell({
         method: "POST",
         csrfToken,
       });
-      toast.success("Verification email sent.");
+      toast.success(t("Verification email sent."));
     } catch {
       // apiClient already shows error toast.
     } finally {
       setIsSendingVerification(false);
     }
-  }, [csrfToken, isSendingVerification]);
+  }, [csrfToken, isSendingVerification, t]);
+
+  const localizedNavGroups = useMemo(
+    () =>
+      navGroups.map((group) => ({
+        ...group,
+        label: group.translateLabel === false ? group.label : t(group.label),
+        items: group.items.map((item) => ({
+          ...item,
+          label: item.translateLabel === false ? item.label : t(item.label),
+        })),
+      })),
+    [navGroups, t],
+  );
+
+  const localizedBreadcrumbs = useMemo(
+    () =>
+      breadcrumbs?.map((crumb) => ({
+        ...crumb,
+        label: crumb.translateLabel === false ? crumb.label : t(crumb.label),
+      })),
+    [breadcrumbs, t],
+  );
 
   return (
     <SidebarProvider>
@@ -177,10 +207,12 @@ export function AppShell({
                   M
                 </div>
                 <div className="flex flex-col gap-0.5 leading-none group-data-[collapsible=icon]:hidden">
-                  <span className="font-semibold text-sm">{headerTitle}</span>
+                  <span className="font-semibold text-sm">
+                    {translateHeaderTitle ? t(headerTitle) : headerTitle}
+                  </span>
                   {headerSubtitle && (
                     <span className="text-xs text-muted-foreground truncate max-w-[160px]">
-                      {headerSubtitle}
+                      {translateHeaderSubtitle ? t(headerSubtitle) : headerSubtitle}
                     </span>
                   )}
                 </div>
@@ -191,7 +223,7 @@ export function AppShell({
 
         {/* Navigation groups */}
         <SidebarContent>
-          {navGroups.map((group) => (
+          {localizedNavGroups.map((group) => (
             <SidebarGroup key={group.label}>
               <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
               <SidebarMenu>
@@ -240,7 +272,7 @@ export function AppShell({
                     </Avatar>
                     <div className="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
                       <span className="truncate font-semibold text-xs">
-                        {user?.fullName ?? user?.email ?? "User"}
+                        {user?.fullName ?? user?.email ?? t("User")}
                       </span>
                       <span className="truncate text-xs text-muted-foreground">
                         {user?.email}
@@ -257,13 +289,13 @@ export function AppShell({
                   <DropdownMenuItem asChild>
                     <Link href={profileHref}>
                       <User className="mr-2 h-4 w-4" />
-                      Profile
+                      {t("Profile")}
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={logout}>
                     <LogOut className="mr-2 h-4 w-4" />
-                    Log out
+                    {t("Log out")}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -280,14 +312,14 @@ export function AppShell({
           <Separator orientation="vertical" className="mx-2 h-4" />
 
           {/* Breadcrumbs */}
-          {breadcrumbs && breadcrumbs.length > 0 && (
+          {localizedBreadcrumbs && localizedBreadcrumbs.length > 0 && (
             <Breadcrumb>
               <BreadcrumbList>
-                {breadcrumbs.map((crumb, i) => (
+                {localizedBreadcrumbs.map((crumb, i) => (
                   <span key={crumb.label} className="contents">
                     {i > 0 && <BreadcrumbSeparator />}
                     <BreadcrumbItem>
-                      {i === breadcrumbs.length - 1 || !crumb.href ? (
+                      {i === localizedBreadcrumbs.length - 1 || !crumb.href ? (
                         <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
                       ) : (
                         <BreadcrumbLink asChild>
@@ -302,6 +334,16 @@ export function AppShell({
           )}
 
           <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2 text-xs font-medium"
+              onClick={() => setLocale(locale === "en" ? "fr" : "en")}
+              aria-label={t("Switch language")}
+              title={t("Switch language")}
+            >
+              {locale === "en" ? "FR" : "EN"}
+            </Button>
             <ThemeToggle />
           </div>
         </header>
@@ -310,11 +352,12 @@ export function AppShell({
           <div className="border-b px-4 py-3 lg:px-6 print:hidden">
             <Alert className="border-warning/40 bg-warning/5">
               <MailWarning className="h-4 w-4 text-warning" />
-              <AlertTitle>Email verification required</AlertTitle>
+              <AlertTitle>{t("Email verification required")}</AlertTitle>
               <AlertDescription>
                 <p>
-                  You can continue using your account, but you still need to
-                  verify your email address.
+                  {t(
+                    "You can continue using your account, but you still need to verify your email address.",
+                  )}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Button
@@ -325,14 +368,14 @@ export function AppShell({
                     {isSendingVerification && (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     )}
-                    Send verification email
+                    {t("Send verification email")}
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
                     onClick={dismissVerificationReminder}
                   >
-                    Remind me later
+                    {t("Remind me later")}
                   </Button>
                 </div>
               </AlertDescription>

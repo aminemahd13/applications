@@ -86,6 +86,7 @@ export default function AdminEventLayout({ children }: { children: React.ReactNo
       navGroups={navGroups}
       headerTitle="Math&Maroc"
       headerSubtitle={event?.name ?? "Admin"}
+      translateHeaderSubtitle={false}
     >
       {children}
     </AppShell>
