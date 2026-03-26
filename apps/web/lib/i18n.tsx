@@ -98,6 +98,7 @@ const FR_MESSAGES: Record<string, string> = {
   "Active Events": "Événements actifs",
   "Total Users": "Total des utilisateurs",
   "Total Applications": "Total des candidatures",
+  "Started Applications": "Candidatures démarrées",
   "Staff Users": "Utilisateurs staff",
   "Role Assignments": "Attributions de rôles",
   Published: "Publié",

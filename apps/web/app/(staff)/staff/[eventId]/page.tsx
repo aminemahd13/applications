@@ -145,7 +145,7 @@ export default function StaffOverviewPage() {
   }
 
   const kpis = [
-    { label: "Total Applications", value: data.totalApplications, icon: Users, color: "text-primary" },
+    { label: "Started Applications", value: data.totalApplications, icon: Users, color: "text-primary" },
     { label: "Submitted", value: data.submitted, icon: Send, color: "text-blue-500" },
     { label: "In Review", value: data.inReview, icon: Clock, color: "text-amber-500" },
     { label: "Accepted", value: data.accepted, icon: CheckCircle2, color: "text-success" },
@@ -192,10 +192,23 @@ export default function StaffOverviewPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {data.stepFunnel.map((step, i) => {
-              const total = step.total || 1;
-              const submittedPct = (step.submitted / total) * 100;
-              const approvedPct = (step.approved / total) * 100;
-              const rejectedPct = (step.rejected / total) * 100;
+              const total = Math.max(step.total, 1);
+              const submittedPct = Math.min(
+                100,
+                Math.max(0, (step.submitted / total) * 100)
+              );
+              const approvedPct = Math.min(
+                submittedPct,
+                Math.max(0, (step.approved / total) * 100)
+              );
+              const rejectedPct = Math.min(
+                submittedPct - approvedPct,
+                Math.max(0, (step.rejected / total) * 100)
+              );
+              const inProgressPct = Math.max(
+                0,
+                submittedPct - approvedPct - rejectedPct
+              );
               return (
                 <div key={step.stepTitle} className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
@@ -213,7 +226,7 @@ export default function StaffOverviewPage() {
                     />
                     <div
                       className="bg-primary transition-all"
-                      style={{ width: `${submittedPct - approvedPct - rejectedPct}%` }}
+                      style={{ width: `${inProgressPct}%` }}
                     />
                     <div
                       className="bg-destructive rounded-r-full transition-all"

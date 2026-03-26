@@ -545,55 +545,84 @@ export class EventsService {
     });
     if (!event) throw new NotFoundException('Event not found');
 
-    // Aggregate application counts by decision_status
-    const statusCounts = await this.prisma.applications.groupBy({
-      by: ['decision_status'],
-      where: { event_id: eventId },
-      _count: { id: true },
-    });
+    const submissionStatuses = [
+      'SUBMITTED',
+      'NEEDS_REVISION',
+      'APPROVED',
+      'REJECTED_FINAL',
+    ] as const;
+    const submissionStatusSet = new Set<string>(submissionStatuses);
+
+    const [
+      totalApplications,
+      statusCounts,
+      submittedApplications,
+      inReviewApplications,
+      pendingReviews,
+      checkedIn,
+      steps,
+    ] = await Promise.all([
+      this.prisma.applications.count({
+        where: { event_id: eventId },
+      }),
+      this.prisma.applications.groupBy({
+        by: ['decision_status'],
+        where: { event_id: eventId },
+        _count: { id: true },
+      }),
+      this.prisma.application_step_states.groupBy({
+        by: ['application_id'],
+        where: {
+          applications: { event_id: eventId },
+          status: { in: [...submissionStatuses] },
+        },
+        _count: { id: true },
+      }),
+      this.prisma.application_step_states.groupBy({
+        by: ['application_id'],
+        where: {
+          applications: { event_id: eventId },
+          status: 'SUBMITTED',
+        },
+        _count: { id: true },
+      }),
+      this.prisma.application_step_states.count({
+        where: {
+          applications: { event_id: eventId },
+          status: 'SUBMITTED',
+        },
+      }),
+      this.prisma.attendance_records.count({
+        where: {
+          applications: { event_id: eventId },
+          status: 'CHECKED_IN',
+        },
+      }),
+      this.prisma.workflow_steps.findMany({
+        where: { event_id: eventId },
+        orderBy: { step_index: 'asc' },
+        select: {
+          title: true,
+          step_index: true,
+          application_step_states: {
+            select: { status: true },
+          },
+        },
+      }),
+    ]);
 
     const statusMap: Record<string, number> = {};
-    let totalApplications = 0;
     for (const row of statusCounts) {
       statusMap[row.decision_status] = row._count.id;
-      totalApplications += row._count.id;
     }
-
-    // Count step-states with status SUBMITTED (proxy for "in review")
-    const submittedSteps = await this.prisma.application_step_states.count({
-      where: {
-        applications: { event_id: eventId },
-        status: 'SUBMITTED',
-      },
-    });
-
-    // Count checked-in
-    const checkedIn = await this.prisma.attendance_records.count({
-      where: {
-        applications: { event_id: eventId },
-        status: 'CHECKED_IN',
-      },
-    });
-
-    // Step funnel: per workflow step, count totals + statuses
-    const steps = await this.prisma.workflow_steps.findMany({
-      where: { event_id: eventId },
-      orderBy: { step_index: 'asc' },
-      select: {
-        title: true,
-        step_index: true,
-        application_step_states: {
-          select: { status: true },
-        },
-      },
-    });
 
     const stepFunnel = steps.map((s) => {
       const states = s.application_step_states;
       return {
         stepTitle: s.title,
-        total: states.length,
-        submitted: states.filter((st) => st.status === 'SUBMITTED').length,
+        total: states.filter((st) => st.status !== 'LOCKED').length,
+        submitted: states.filter((st) => submissionStatusSet.has(st.status))
+          .length,
         approved: states.filter((st) => st.status === 'APPROVED').length,
         rejected: states.filter((st) => st.status === 'REJECTED_FINAL').length,
       };
@@ -601,12 +630,12 @@ export class EventsService {
 
     return {
       totalApplications,
-      submitted: statusMap['NONE'] ?? 0, // applications still in progress
-      inReview: submittedSteps,
+      submitted: submittedApplications.length,
+      inReview: inReviewApplications.length,
       accepted: statusMap['ACCEPTED'] ?? 0,
       rejected: statusMap['REJECTED'] ?? 0,
       waitlisted: statusMap['WAITLISTED'] ?? 0,
-      pendingReviews: submittedSteps,
+      pendingReviews,
       checkedIn,
       recentActivity: [],
       stepFunnel,
