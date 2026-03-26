@@ -36,6 +36,7 @@ const FR_MESSAGES: Record<string, string> = {
   Applications: "Candidatures",
   Reviews: "Évaluations",
   Messages: "Messages",
+  Metrics: "Metriques",
   "Check-in": "Enregistrement",
   Workflow: "Flux de travail",
   Forms: "Formulaires",

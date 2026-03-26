@@ -9,6 +9,7 @@ import {
   Users,
   ClipboardCheck,
   MessageSquare,
+  BarChart3,
   ScanLine,
   Workflow,
   FileEdit,
@@ -105,6 +106,12 @@ export default function StaffLayout({
           href: `${base}/messages`,
           icon: MessageSquare,
           visible: hasPermission("event.messages.read"),
+        },
+        {
+          label: "Metrics",
+          href: `${base}/metrics`,
+          icon: BarChart3,
+          visible: hasPermission("event.update"),
         },
         {
           label: "Check-in",

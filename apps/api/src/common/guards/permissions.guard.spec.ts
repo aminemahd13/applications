@@ -156,6 +156,36 @@ describe('PermissionsGuard', () => {
         await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
     });
 
+    it('should allow organizer role to access event.update routes', async () => {
+        mockPrisma.event_role_assignments.findMany.mockResolvedValue([
+            { role: 'organizer' },
+        ]);
+
+        const ctx = createMockContext({
+            permissions: [Permission.EVENT_UPDATE],
+            userId: 'organizer-user-id',
+            isGlobalAdmin: false,
+            eventId: 'event-uuid-123',
+        });
+
+        await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    });
+
+    it('should deny reviewer role for event.update routes', async () => {
+        mockPrisma.event_role_assignments.findMany.mockResolvedValue([
+            { role: 'reviewer' },
+        ]);
+
+        const ctx = createMockContext({
+            permissions: [Permission.EVENT_UPDATE],
+            userId: 'reviewer-user-id',
+            isGlobalAdmin: false,
+            eventId: 'event-uuid-123',
+        });
+
+        await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    });
+
     it('should set actor context (actorId, ip, ua) in CLS', async () => {
         const ctx = createMockContext({
             permissions: [Permission.SELF_PROFILE_UPDATE],

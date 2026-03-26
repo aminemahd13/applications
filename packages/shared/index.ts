@@ -10,4 +10,5 @@ export * from './dtos/reviews.dto';
 export * from './dtos/files.dto';
 export * from './dtos/messages.dto';
 export * from './dtos/settings.dto';
+export * from './dtos/metrics.dto';
 
