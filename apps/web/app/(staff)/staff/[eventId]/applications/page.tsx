@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useEventBasePath } from "@/hooks/use-event-base-path";
 import {
@@ -24,10 +24,10 @@ import {
   useReactTable,
   getCoreRowModel,
   getSortedRowModel,
-  getFilteredRowModel,
   getPaginationRowModel,
   flexRender,
   type ColumnDef,
+  type PaginationState,
   type SortingState,
 } from "@tanstack/react-table";
 import { Card, CardContent } from "@/components/ui/card";
@@ -232,7 +232,12 @@ export default function ApplicationsListPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isApplyingBulk, setIsApplyingBulk] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
-  const [globalFilter, setGlobalFilter] = useState("");
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 20,
+  });
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>("all");
   const [deleteTarget, setDeleteTarget] = useState<Application | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -268,13 +273,50 @@ export default function ApplicationsListPage() {
   const [templateIsActive, setTemplateIsActive] = useState(true);
   const [isSavingTemplate, setIsSavingTemplate] = useState(false);
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
+  const applicationsRequestVersionRef = useRef(0);
+  const hasMoreApplicationsRef = useRef(false);
+  const nextCursorRef = useRef<string | null>(null);
+  const isLoadingMoreApplicationsRef = useRef(false);
+  const searchQueryRef = useRef("");
+  const statusFilterRef = useRef<StatusFilterValue>("all");
+  const applicationsRef = useRef<Application[]>([]);
+
+  useEffect(() => {
+    hasMoreApplicationsRef.current = hasMoreApplications;
+  }, [hasMoreApplications]);
+
+  useEffect(() => {
+    nextCursorRef.current = nextCursor;
+  }, [nextCursor]);
+
+  useEffect(() => {
+    isLoadingMoreApplicationsRef.current = isLoadingMoreApplications;
+  }, [isLoadingMoreApplications]);
+
+  useEffect(() => {
+    searchQueryRef.current = searchQuery;
+  }, [searchQuery]);
+
+  useEffect(() => {
+    statusFilterRef.current = statusFilter;
+  }, [statusFilter]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setSearchQuery(searchInput.trim());
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [searchInput]);
 
   const fetchApplicationsPage = useCallback(
-    async (cursor?: string | null) => {
+    async (params?: { cursor?: string | null; query?: string }) => {
+      const cursor = params?.cursor ?? null;
+      const queryValue = params?.query?.trim() ?? "";
       const query = new URLSearchParams({
         limit: String(APPLICATIONS_PAGE_SIZE),
       });
       if (cursor) query.set("cursor", cursor);
+      if (queryValue.length > 0) query.set("q", queryValue);
 
       const res = await apiClient<ApplicationsListResponse>(
         `/events/${eventId}/applications?${query.toString()}`
@@ -307,54 +349,93 @@ export default function ApplicationsListPage() {
     [eventId]
   );
 
-  const refreshApplications = useCallback(async () => {
-    setIsLoading(true);
+  const loadApplications = useCallback(async (mode: "replace" | "append" = "replace", options?: {
+    resetPageIndex?: boolean;
+    clearSelection?: boolean;
+  }) => {
+    const isAppend = mode === "append";
+    if (isAppend) {
+      if (
+        !hasMoreApplicationsRef.current ||
+        !nextCursorRef.current ||
+        isLoadingMoreApplicationsRef.current
+      ) {
+        return { fetched: false };
+      }
+      isLoadingMoreApplicationsRef.current = true;
+      setIsLoadingMoreApplications(true);
+    } else {
+      setIsLoading(true);
+    }
+
+    const requestVersion = ++applicationsRequestVersionRef.current;
     try {
-      const firstPage = await fetchApplicationsPage();
+      const page = await fetchApplicationsPage({
+        cursor: isAppend ? nextCursorRef.current : null,
+        query: searchQueryRef.current,
+      });
+
+      if (requestVersion !== applicationsRequestVersionRef.current) {
+        return { fetched: false };
+      }
+
       const hasMore =
-        firstPage.hasMore &&
-        Boolean(firstPage.nextCursor) &&
-        firstPage.nextCursor !== null;
-      setApplications(firstPage.applications);
+        page.hasMore && Boolean(page.nextCursor) && page.nextCursor !== null;
+      const nextCursorValue = hasMore ? page.nextCursor : null;
+
+      if (isAppend) {
+        setApplications((prev) => {
+          const byId = new Map<string, Application>();
+          for (const application of [...prev, ...page.applications]) {
+            byId.set(application.id, application);
+          }
+          const merged = Array.from(byId.values());
+          applicationsRef.current = merged;
+          return merged;
+        });
+      } else {
+        applicationsRef.current = page.applications;
+        setApplications(page.applications);
+        if (options?.clearSelection ?? true) {
+          setSelectedIds([]);
+        }
+        if (options?.resetPageIndex ?? false) {
+          setPagination((prev) =>
+            prev.pageIndex === 0 ? prev : { ...prev, pageIndex: 0 }
+          );
+        }
+      }
+
+      hasMoreApplicationsRef.current = hasMore;
+      nextCursorRef.current = nextCursorValue;
       setHasMoreApplications(hasMore);
-      setNextCursor(hasMore ? firstPage.nextCursor : null);
-      setSelectedIds([]);
+      setNextCursor(nextCursorValue);
+      return { fetched: true };
     } catch {
-      toast.error("Could not load applications.");
+      if (requestVersion === applicationsRequestVersionRef.current) {
+        toast.error(
+          isAppend ? "Could not load more applications." : "Could not load applications."
+        );
+      }
+      return { fetched: false };
     } finally {
-      setIsLoading(false);
+      if (isAppend) {
+        isLoadingMoreApplicationsRef.current = false;
+        setIsLoadingMoreApplications(false);
+      } else {
+        if (requestVersion === applicationsRequestVersionRef.current) {
+          setIsLoading(false);
+        }
+      }
     }
   }, [fetchApplicationsPage]);
 
-  const loadMoreApplications = useCallback(async () => {
-    if (!hasMoreApplications || !nextCursor || isLoadingMoreApplications) return;
-    setIsLoadingMoreApplications(true);
-    try {
-      const nextPage = await fetchApplicationsPage(nextCursor);
-      const hasMore =
-        nextPage.hasMore &&
-        Boolean(nextPage.nextCursor) &&
-        nextPage.nextCursor !== nextCursor;
-      setApplications((prev) => {
-        const byId = new Map<string, Application>();
-        for (const application of [...prev, ...nextPage.applications]) {
-          byId.set(application.id, application);
-        }
-        return Array.from(byId.values());
-      });
-      setHasMoreApplications(hasMore);
-      setNextCursor(hasMore ? nextPage.nextCursor : null);
-    } catch {
-      toast.error("Could not load more applications.");
-    } finally {
-      setIsLoadingMoreApplications(false);
-    }
-  }, [
-    fetchApplicationsPage,
-    hasMoreApplications,
-    isLoadingMoreApplications,
-    nextCursor,
-  ]);
+  const refreshApplications = useCallback(async (options?: {
+    resetPageIndex?: boolean;
+    clearSelection?: boolean;
+  }) => {
+    await loadApplications("replace", options);
+  }, [loadApplications]);
 
   const refreshDecisionTemplates = useCallback(async () => {
     if (!canDraftDecisions) return;
@@ -376,7 +457,6 @@ export default function ApplicationsListPage() {
   useEffect(() => {
     (async () => {
       try {
-        await refreshApplications();
         if (canAssignReviewers) {
           const reviewerRes = await apiClient<{ data?: ReviewerOption[] }>(
             `/events/${eventId}/review-queue/reviewers`,
@@ -399,8 +479,6 @@ export default function ApplicationsListPage() {
         );
       } catch {
         /* handled */
-      } finally {
-        setIsLoading(false);
       }
     })();
   }, [
@@ -411,10 +489,32 @@ export default function ApplicationsListPage() {
     refreshDecisionTemplates,
   ]);
 
+  useEffect(() => {
+    void refreshApplications({ resetPageIndex: true, clearSelection: true });
+  }, [refreshApplications, searchQuery]);
+
   const filteredData = useMemo(
     () => applications.filter((a) => matchesStatusFilter(a.status, statusFilter)),
     [applications, statusFilter]
   );
+
+  useEffect(() => {
+    setPagination((prev) =>
+      prev.pageIndex === 0 ? prev : { ...prev, pageIndex: 0 }
+    );
+  }, [statusFilter]);
+
+  useEffect(() => {
+    setPagination((prev) => {
+      const maxPageIndex = Math.max(
+        0,
+        Math.ceil(filteredData.length / prev.pageSize) - 1
+      );
+      if (prev.pageIndex <= maxPageIndex) return prev;
+      return { ...prev, pageIndex: maxPageIndex };
+    });
+  }, [filteredData.length]);
+
   const selectedCount = selectedIds.length;
   const selectedApplicationIds = useMemo(
     () => selectedIds.filter((id) => applications.some((app) => app.id === id)),
@@ -432,6 +532,33 @@ export default function ApplicationsListPage() {
     () => [...workflowSteps].sort((a, b) => a.stepIndex - b.stepIndex),
     [workflowSteps],
   );
+
+  const handleNextPage = useCallback(async () => {
+    const targetPageIndex = pagination.pageIndex + 1;
+    const requiredVisibleRows = (targetPageIndex + 1) * pagination.pageSize;
+    const countVisibleRows = () =>
+      applicationsRef.current.filter((application) =>
+        matchesStatusFilter(application.status, statusFilterRef.current)
+      ).length;
+
+    if (countVisibleRows() >= requiredVisibleRows) {
+      setPagination((prev) => ({ ...prev, pageIndex: prev.pageIndex + 1 }));
+      return;
+    }
+
+    while (
+      hasMoreApplicationsRef.current &&
+      !isLoadingMoreApplicationsRef.current &&
+      countVisibleRows() < requiredVisibleRows
+    ) {
+      const result = await loadApplications("append");
+      if (!result.fetched) break;
+    }
+
+    if (countVisibleRows() >= requiredVisibleRows) {
+      setPagination((prev) => ({ ...prev, pageIndex: prev.pageIndex + 1 }));
+    }
+  }, [loadApplications, pagination.pageIndex, pagination.pageSize]);
 
   useEffect(() => {
     const allowedActions: Array<"UNLOCK" | "APPROVE" | "NEEDS_REVISION" | "LOCK"> = [];
@@ -492,9 +619,11 @@ export default function ApplicationsListPage() {
         method: "DELETE",
         csrfToken: csrfToken ?? undefined,
       });
-      setApplications((prev) =>
-        prev.filter((application) => application.id !== deleteTarget.id)
-      );
+      setApplications((prev) => {
+        const next = prev.filter((application) => application.id !== deleteTarget.id);
+        applicationsRef.current = next;
+        return next;
+      });
       toast.success("Application deleted");
       setDeleteTarget(null);
     } catch {
@@ -1029,15 +1158,18 @@ export default function ApplicationsListPage() {
   const table = useReactTable({
     data: filteredData,
     columns,
-    state: { sorting, globalFilter },
+    state: { sorting, pagination },
     onSortingChange: setSorting,
-    onGlobalFilterChange: setGlobalFilter,
+    onPaginationChange: setPagination,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: 20 } },
+    autoResetPageIndex: false,
   });
+
+  const hasLocalNextPage =
+    (pagination.pageIndex + 1) * pagination.pageSize < filteredData.length;
+  const canGoNextPage = hasLocalNextPage || hasMoreApplications;
 
   return (
     <div className="space-y-6">
@@ -1074,8 +1206,8 @@ export default function ApplicationsListPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search by name or email..."
-            value={globalFilter}
-            onChange={(e) => setGlobalFilter(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             className="pl-9"
           />
         </div>
@@ -1276,16 +1408,6 @@ export default function ApplicationsListPage() {
           applications{hasMoreApplications ? " (more available)" : ""}
         </p>
         <div className="flex gap-2">
-          {hasMoreApplications && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={loadMoreApplications}
-              disabled={isLoadingMoreApplications}
-            >
-              {isLoadingMoreApplications ? "Loading more..." : "Load more"}
-            </Button>
-          )}
           <Button
             variant="outline"
             size="sm"
@@ -1297,10 +1419,13 @@ export default function ApplicationsListPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
+            onClick={() => {
+              void handleNextPage();
+            }}
+            disabled={!canGoNextPage || isLoadingMoreApplications}
           >
-            <ChevronRight className="h-4 w-4" />
+            {isLoadingMoreApplications ? "Loading..." : "Next"}
+            <ChevronRight className="ml-1 h-4 w-4" />
           </Button>
         </div>
       </div>
