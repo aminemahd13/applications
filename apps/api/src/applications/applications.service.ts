@@ -88,6 +88,10 @@ export class ApplicationsService {
       stepStatus,
       assignedReviewerId,
       tags,
+      derivedStatus,
+      hasDraftProgress,
+      completionBucket,
+      needsRevisionOnly,
       q,
     } = filter;
 
@@ -179,7 +183,6 @@ export class ApplicationsService {
     const applications = await this.prisma.applications.findMany({
       where,
       orderBy: [{ updated_at: order }, { id: order }],
-      take: limit + 1,
       select: {
         id: true,
         event_id: true,
@@ -203,7 +206,10 @@ export class ApplicationsService {
         },
         application_step_states: {
           select: {
+            step_id: true,
             status: true,
+            current_draft_id: true,
+            latest_submission_version_id: true,
             workflow_steps: { select: { step_index: true } },
           },
         },
@@ -213,13 +219,31 @@ export class ApplicationsService {
       },
     });
 
-    const hasMore = applications.length > limit;
-    const data = hasMore ? applications.slice(0, -1) : applications;
+    const summaries = applications.map((application) => ({
+      application,
+      summary: this.toSummary(application),
+    }));
+
+    const filtered = summaries.filter(({ application, summary }) =>
+      this.matchesComputedApplicationFilters(
+        application,
+        summary,
+        {
+          derivedStatus,
+          hasDraftProgress,
+          completionBucket,
+          needsRevisionOnly,
+        },
+      ),
+    );
+
+    const hasMore = filtered.length > limit;
+    const data = hasMore ? filtered.slice(0, limit) : filtered;
 
     return {
-      data: data.map((app) => this.toSummary(app)),
+      data: data.map((entry) => entry.summary),
       meta: {
-        nextCursor: hasMore ? data[data.length - 1].id : null,
+        nextCursor: hasMore ? data[data.length - 1]?.application.id ?? null : null,
         hasMore,
       },
     };
@@ -690,11 +714,12 @@ export class ApplicationsService {
       if (!app) throw new NotFoundException('Application not found');
     }
 
-    const answersByStepId = await this.getEffectiveAnswersByStepId(
+    const { answersByStepId, answersSourceByStepId } =
+      await this.getResolvedAnswersByStepId(
       app.application_step_states ?? [],
     );
 
-    const detail = this.toDetail(app, { answersByStepId });
+    const detail = this.toDetail(app, { answersByStepId, answersSourceByStepId });
     const profile = await this.prisma.applicant_profiles.findUnique({
       where: { user_id: detail.applicantUserId },
       select: {
@@ -2050,12 +2075,181 @@ export class ApplicationsService {
   /**
    * Transform DB application to summary
    */
+  private isStepProgressed(stepState: any): boolean {
+    const status = String(stepState?.status ?? '');
+    if (
+      status === StepStatus.SUBMITTED ||
+      status === StepStatus.APPROVED ||
+      status === StepStatus.NEEDS_REVISION ||
+      status === StepStatus.REJECTED_FINAL
+    ) {
+      return true;
+    }
+    return Boolean(
+      stepState?.current_draft_id || stepState?.latest_submission_version_id,
+    );
+  }
+
+  private buildStepsSummary(stepStatesInput: any[] | undefined) {
+    const stepStates = Array.isArray(stepStatesInput) ? stepStatesInput : [];
+    const total = stepStates.length;
+    const completed = stepStates.filter(
+      (state: any) =>
+        state.status === StepStatus.APPROVED ||
+        state.status === StepStatus.SUBMITTED,
+    ).length;
+    const progressed = stepStates.filter((state: any) =>
+      this.isStepProgressed(state),
+    ).length;
+    const needsRevision = stepStates.filter(
+      (state: any) => state.status === StepStatus.NEEDS_REVISION,
+    ).length;
+    const progressPercent =
+      total > 0 ? Math.floor((progressed / total) * 100) : 0;
+
+    return {
+      total,
+      completed,
+      progressed,
+      progressPercent,
+      needsRevision,
+    };
+  }
+
+  private mapDerivedStatusToFilterValue(
+    derivedStatus: string,
+  ):
+    | 'waiting_applicant'
+    | 'waiting_review'
+    | 'revision_required'
+    | 'all_required_steps_approved'
+    | 'accepted'
+    | 'waitlisted'
+    | 'confirmed'
+    | 'rejected'
+    | null {
+    const normalized = String(derivedStatus ?? '').toUpperCase();
+    if (normalized.startsWith('WAITING_FOR_APPLICANT_STEP_')) {
+      return 'waiting_applicant';
+    }
+    if (
+      normalized.startsWith('WAITING_FOR_REVIEW_STEP_') ||
+      normalized === 'IN_REVIEW'
+    ) {
+      return 'waiting_review';
+    }
+    if (
+      normalized.startsWith('REVISION_REQUIRED_STEP_') ||
+      normalized === 'NEEDS_REVISION'
+    ) {
+      return 'revision_required';
+    }
+    if (normalized === 'ALL_REQUIRED_STEPS_APPROVED') {
+      return 'all_required_steps_approved';
+    }
+    if (
+      normalized === 'ACCEPTED' ||
+      normalized.startsWith('DECISION_ACCEPTED')
+    ) {
+      return 'accepted';
+    }
+    if (
+      normalized === 'WAITLISTED' ||
+      normalized.startsWith('DECISION_WAITLISTED')
+    ) {
+      return 'waitlisted';
+    }
+    if (normalized === 'CONFIRMED') {
+      return 'confirmed';
+    }
+    if (
+      normalized === 'BLOCKED_REJECTED' ||
+      normalized === 'REJECTED' ||
+      normalized === 'REJECTED_FINAL' ||
+      normalized.startsWith('DECISION_REJECTED')
+    ) {
+      return 'rejected';
+    }
+    return null;
+  }
+
+  private matchesCompletionBucket(
+    progressPercent: number,
+    bucket: '0' | '1_49' | '50_99' | '100',
+  ): boolean {
+    if (bucket === '0') return progressPercent === 0;
+    if (bucket === '1_49') return progressPercent >= 1 && progressPercent <= 49;
+    if (bucket === '50_99')
+      return progressPercent >= 50 && progressPercent <= 99;
+    return progressPercent === 100;
+  }
+
+  private matchesComputedApplicationFilters(
+    application: any,
+    summary: ApplicationSummary,
+    filters: Pick<
+      ApplicationFilterDto,
+      | 'derivedStatus'
+      | 'hasDraftProgress'
+      | 'completionBucket'
+      | 'needsRevisionOnly'
+    >,
+  ): boolean {
+    const {
+      derivedStatus,
+      hasDraftProgress,
+      completionBucket,
+      needsRevisionOnly,
+    } = filters;
+
+    if (Array.isArray(derivedStatus) && derivedStatus.length > 0) {
+      const mapped = this.mapDerivedStatusToFilterValue(summary.derivedStatus);
+      if (!mapped || !derivedStatus.includes(mapped)) {
+        return false;
+      }
+    }
+
+    if (hasDraftProgress === true) {
+      const hasAnyDraft = (application.application_step_states ?? []).some(
+        (state: any) => Boolean(state.current_draft_id),
+      );
+      if (!hasAnyDraft) {
+        return false;
+      }
+    }
+
+    if (Array.isArray(completionBucket) && completionBucket.length > 0) {
+      const progressPercent = summary.stepsSummary?.progressPercent ?? 0;
+      const matchesAnyBucket = completionBucket.some((bucket) =>
+        this.matchesCompletionBucket(
+          progressPercent,
+          bucket as '0' | '1_49' | '50_99' | '100',
+        ),
+      );
+      if (!matchesAnyBucket) {
+        return false;
+      }
+    }
+
+    if (needsRevisionOnly === true) {
+      const hasNeedsRevision = (application.application_step_states ?? []).some(
+        (state: any) => state.status === StepStatus.NEEDS_REVISION,
+      );
+      if (!hasNeedsRevision) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   private toSummary(
     app: any,
     options?: { maskDecisionIfUnpublished?: boolean },
   ): ApplicationSummary {
     const user = app.users_applications_applicant_user_idTousers;
     const stepStates = app.application_step_states || [];
+    const stepsSummary = this.buildStepsSummary(stepStates);
     const decisionPublished = app.decision_published_at != null;
     const decisionStatus =
       options?.maskDecisionIfUnpublished && !decisionPublished
@@ -2086,17 +2280,7 @@ export class ApplicationsService {
       ),
       createdAt: app.created_at,
       updatedAt: app.updated_at,
-      stepsSummary: {
-        total: stepStates.length,
-        completed: stepStates.filter(
-          (s: any) =>
-            s.status === StepStatus.APPROVED ||
-            s.status === StepStatus.SUBMITTED,
-        ).length,
-        needsRevision: stepStates.filter(
-          (s: any) => s.status === StepStatus.NEEDS_REVISION,
-        ).length,
-      },
+      stepsSummary,
     };
   }
 
@@ -2203,6 +2387,7 @@ export class ApplicationsService {
     app: any,
     options?: {
       answersByStepId?: Record<string, Record<string, any>>;
+      answersSourceByStepId?: Record<string, 'SUBMISSION' | 'DRAFT'>;
       maskDecisionIfUnpublished?: boolean;
       hideInternalNotes?: boolean;
       hideAssignedReviewer?: boolean;
@@ -2219,6 +2404,7 @@ export class ApplicationsService {
       ? allStepStates.filter((ss: any) => this.isApplicantStepVisible(ss))
       : allStepStates;
     const answersByStepId = options?.answersByStepId ?? {};
+    const answersSourceByStepId = options?.answersSourceByStepId ?? {};
 
     return {
       ...summary,
@@ -2246,6 +2432,7 @@ export class ApplicationsService {
         answers: answersByStepId[ss.step_id]
           ? this.normalizeAnswersShape(answersByStepId[ss.step_id])
           : undefined,
+        answersSource: answersSourceByStepId[ss.step_id] ?? null,
         currentDraftId: ss.current_draft_id,
         latestSubmissionVersionId: ss.latest_submission_version_id,
         revisionCycleCount: ss.revision_cycle_count,
@@ -2290,12 +2477,16 @@ export class ApplicationsService {
     }
   }
 
-  private async getEffectiveAnswersByStepId(
+  private async getResolvedAnswersByStepId(
     stepStates: Array<{
       step_id: string;
+      current_draft_id?: string | null;
       latest_submission_version_id?: string | null;
     }>,
-  ): Promise<Record<string, Record<string, any>>> {
+  ): Promise<{
+    answersByStepId: Record<string, Record<string, any>>;
+    answersSourceByStepId: Record<string, 'SUBMISSION' | 'DRAFT'>;
+  }> {
     const latestSubmissionIds = Array.from(
       new Set(
         stepStates
@@ -2303,10 +2494,19 @@ export class ApplicationsService {
           .filter((id): id is string => Boolean(id)),
       ),
     );
+    const currentDraftIds = Array.from(
+      new Set(
+        stepStates
+          .map((s) => s.current_draft_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
 
-    if (latestSubmissionIds.length === 0) return {};
+    if (latestSubmissionIds.length === 0 && currentDraftIds.length === 0) {
+      return { answersByStepId: {}, answersSourceByStepId: {} };
+    }
 
-    const [submissions, patches] = await this.prisma.$transaction([
+    const [submissions, patches, drafts] = await this.prisma.$transaction([
       this.prisma.step_submission_versions.findMany({
         where: { id: { in: latestSubmissionIds } },
         select: { id: true, answers_snapshot: true },
@@ -2318,12 +2518,22 @@ export class ApplicationsService {
         },
         orderBy: { created_at: 'asc' },
       }),
+      this.prisma.step_drafts.findMany({
+        where: { id: { in: currentDraftIds } },
+        select: { id: true, answers_draft: true },
+      }),
     ]);
 
     const submissionsById = new Map(
       submissions.map((s) => [
         s.id,
         this.normalizeAnswersShape(s.answers_snapshot as Record<string, any>),
+      ]),
+    );
+    const draftsById = new Map(
+      drafts.map((draft) => [
+        draft.id,
+        this.normalizeAnswersShape(draft.answers_draft as Record<string, any>),
       ]),
     );
 
@@ -2335,7 +2545,18 @@ export class ApplicationsService {
     }
 
     const answersByStepId: Record<string, Record<string, any>> = {};
+    const answersSourceByStepId: Record<string, 'SUBMISSION' | 'DRAFT'> = {};
     for (const state of stepStates) {
+      const draftId = state.current_draft_id;
+      if (draftId) {
+        const draftAnswers = draftsById.get(draftId);
+        if (draftAnswers) {
+          answersByStepId[state.step_id] = draftAnswers;
+          answersSourceByStepId[state.step_id] = 'DRAFT';
+          continue;
+        }
+      }
+
       const versionId = state.latest_submission_version_id;
       if (!versionId) continue;
       const baseAnswers = submissionsById.get(versionId) ?? {};
@@ -2344,9 +2565,10 @@ export class ApplicationsService {
         patchesByVersionId.get(versionId) ?? [],
       );
       answersByStepId[state.step_id] = effectiveAnswers;
+      answersSourceByStepId[state.step_id] = 'SUBMISSION';
     }
 
-    return answersByStepId;
+    return { answersByStepId, answersSourceByStepId };
   }
 
   private async getEffectiveAnswersBySubmissionVersionIds(

@@ -131,6 +131,7 @@ interface ApplicationDetail {
     title: string;
     status: string;
     submittedAt: string;
+    answersSource: "SUBMISSION" | "DRAFT" | null;
     reviewedAt: string;
     reviewerName: string;
     answers: Record<string, unknown>;
@@ -928,6 +929,12 @@ export default function ApplicationDetailPage() {
             title: s.stepTitle ?? s.title ?? "Step",
             status: s.status,
             submittedAt: s.lastActivityAt ?? s.submittedAt,
+            answersSource:
+              s.answersSource === "SUBMISSION" || s.answersSource === "DRAFT"
+                ? s.answersSource
+                : s.answers_source === "SUBMISSION" || s.answers_source === "DRAFT"
+                ? s.answers_source
+                : null,
             reviewedAt: s.reviewedAt,
             reviewerName: s.reviewerName,
             answers,
@@ -2016,6 +2023,11 @@ export default function ApplicationDetailPage() {
                       {step.submittedAt && (
                         <p className="text-xs text-muted-foreground">
                           Last activity {new Date(step.submittedAt).toLocaleString("en-GB")}
+                        </p>
+                      )}
+                      {step.answersSource === "DRAFT" && (
+                        <p className="text-xs text-warning">
+                          Draft (not submitted yet)
                         </p>
                       )}
                     </CardHeader>

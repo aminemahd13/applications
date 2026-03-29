@@ -20,6 +20,54 @@ export enum StepStatus {
     REJECTED_FINAL = 'REJECTED_FINAL',
 }
 
+export const DerivedStatusFilterSchema = z.enum([
+    'waiting_applicant',
+    'waiting_review',
+    'revision_required',
+    'all_required_steps_approved',
+    'accepted',
+    'waitlisted',
+    'confirmed',
+    'rejected',
+]);
+
+export type DerivedStatusFilter = z.infer<typeof DerivedStatusFilterSchema>;
+
+export const CompletionBucketSchema = z.enum(['0', '1_49', '50_99', '100']);
+
+export type CompletionBucket = z.infer<typeof CompletionBucketSchema>;
+
+function normalizeQueryArray(value: unknown): string[] | undefined {
+    if (value === undefined || value === null) return undefined;
+    const raw = Array.isArray(value) ? value : [value];
+    const normalized = raw
+        .flatMap((entry) => {
+            if (typeof entry === 'string') return entry.split(',');
+            if (typeof entry === 'number') return [String(entry)];
+            return [];
+        })
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+    return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeQueryBoolean(value: unknown): boolean | undefined | unknown {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+        if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    }
+    return value;
+}
+
+const QueryBooleanSchema = z.preprocess(
+    (value) => normalizeQueryBoolean(value),
+    z.boolean().optional(),
+);
+
 export const CreateApplicationSchema = z.object({
     // No extra fields needed - eventId and userId come from context
 });
@@ -34,7 +82,20 @@ export const ApplicationFilterSchema = z.object({
     stepId: z.string().uuid().optional(), // Filter by step status
     stepStatus: z.nativeEnum(StepStatus).optional(),
     assignedReviewerId: z.string().uuid().optional(),
-    tags: z.array(z.string()).optional(),
+    tags: z.preprocess(
+        (value) => normalizeQueryArray(value),
+        z.array(z.string()).optional(),
+    ),
+    derivedStatus: z.preprocess(
+        (value) => normalizeQueryArray(value),
+        z.array(DerivedStatusFilterSchema).optional(),
+    ),
+    hasDraftProgress: QueryBooleanSchema,
+    completionBucket: z.preprocess(
+        (value) => normalizeQueryArray(value),
+        z.array(CompletionBucketSchema).optional(),
+    ),
+    needsRevisionOnly: QueryBooleanSchema,
     q: z.string().optional(), // Search by applicant name/email
 });
 
@@ -180,6 +241,8 @@ export interface ApplicationSummary {
     stepsSummary?: {
         total: number;
         completed: number;
+        progressed: number;
+        progressPercent: number;
         needsRevision: number;
     };
 }
@@ -225,6 +288,7 @@ export interface StepStateResponse {
     instructions?: string;
     formDefinition?: Record<string, any>;
     answers?: Record<string, any>;
+    answersSource: 'SUBMISSION' | 'DRAFT' | null;
     currentDraftId: string | null;
     latestSubmissionVersionId: string | null;
     revisionCycleCount: number;

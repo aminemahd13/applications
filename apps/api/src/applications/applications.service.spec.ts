@@ -216,6 +216,279 @@ describe('ApplicationsService cursor pagination', () => {
   });
 });
 
+describe('ApplicationsService advanced filters and progress summary', () => {
+  const now = new Date('2026-03-08T10:00:00.000Z');
+
+  function createListApplication(input: {
+    id: string;
+    decisionStatus?: string;
+    tags?: string[];
+    stepStates: Array<{
+      stepId: string;
+      status: string;
+      stepIndex: number;
+      currentDraftId?: string | null;
+      latestSubmissionVersionId?: string | null;
+    }>;
+  }) {
+    return {
+      id: input.id,
+      event_id: 'event-1',
+      applicant_user_id: `${input.id}-user`,
+      decision_status: input.decisionStatus ?? 'NONE',
+      decision_published_at: null,
+      tags: input.tags ?? [],
+      created_at: now,
+      updated_at: now,
+      users_applications_applicant_user_idTousers: {
+        email: `${input.id}@example.com`,
+        applicant_profiles: {
+          first_name: 'Ada',
+          last_name: 'Lovelace',
+          full_name: 'Ada Lovelace',
+        },
+      },
+      application_step_states: input.stepStates.map((stepState) => ({
+        step_id: stepState.stepId,
+        status: stepState.status,
+        current_draft_id: stepState.currentDraftId ?? null,
+        latest_submission_version_id: stepState.latestSubmissionVersionId ?? null,
+        workflow_steps: { step_index: stepState.stepIndex },
+      })),
+      attendance_records: null,
+    };
+  }
+
+  it('keeps tag filtering as match-all via hasEvery', async () => {
+    const mockPrisma = {
+      applications: {
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+
+    await service.findAll(
+      'event-1',
+      {
+        limit: 50,
+        order: 'desc',
+        tags: ['vip', 'intl'],
+      } as any,
+    );
+
+    expect(mockPrisma.applications.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tags: { hasEvery: ['vip', 'intl'] },
+        }),
+      }),
+    );
+  });
+
+  it('filters by computed criteria and returns draft-aware progress summary', async () => {
+    const matching = createListApplication({
+      id: 'app-match',
+      stepStates: [
+        {
+          stepId: 'step-1',
+          status: 'NEEDS_REVISION',
+          stepIndex: 0,
+          currentDraftId: 'draft-1',
+        },
+        {
+          stepId: 'step-2',
+          status: 'UNLOCKED',
+          stepIndex: 1,
+        },
+      ],
+    });
+    const nonMatching = createListApplication({
+      id: 'app-other',
+      decisionStatus: 'ACCEPTED',
+      stepStates: [
+        {
+          stepId: 'step-1',
+          status: 'APPROVED',
+          stepIndex: 0,
+        },
+      ],
+    });
+
+    const mockPrisma = {
+      applications: {
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([matching, nonMatching]),
+      },
+    };
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+
+    const result = await service.findAll(
+      'event-1',
+      {
+        limit: 50,
+        order: 'desc',
+        derivedStatus: ['accepted', 'revision_required'],
+        hasDraftProgress: true,
+        completionBucket: ['50_99'],
+        needsRevisionOnly: true,
+      } as any,
+    );
+
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0]?.id).toBe('app-match');
+    expect(result.data[0]?.stepsSummary).toEqual({
+      total: 2,
+      completed: 0,
+      progressed: 1,
+      progressPercent: 50,
+      needsRevision: 1,
+    });
+  });
+});
+
+describe('ApplicationsService detail draft answer visibility', () => {
+  const now = new Date('2026-03-08T10:00:00.000Z');
+
+  function createDetailedApplication(stepState: {
+    currentDraftId?: string | null;
+    latestSubmissionVersionId?: string | null;
+  }) {
+    return {
+      id: 'app-1',
+      event_id: 'event-1',
+      applicant_user_id: 'user-1',
+      decision_status: 'NONE',
+      decision_published_at: null,
+      decision_draft: null,
+      tags: [],
+      internal_notes: null,
+      assigned_reviewer_id: null,
+      created_at: now,
+      updated_at: now,
+      users_applications_applicant_user_idTousers: {
+        id: 'user-1',
+        email: 'user@example.com',
+        applicant_profiles: null,
+      },
+      application_step_states: [
+        {
+          application_id: 'app-1',
+          step_id: 'step-1',
+          status: 'UNLOCKED',
+          current_draft_id: stepState.currentDraftId ?? null,
+          latest_submission_version_id: stepState.latestSubmissionVersionId ?? null,
+          revision_cycle_count: 0,
+          unlocked_at: now,
+          last_activity_at: now,
+          workflow_steps: {
+            title: 'Step 1',
+            step_index: 0,
+            category: 'APPLICATION',
+            deadline_at: null,
+            instructions_rich: null,
+            form_versions: null,
+          },
+        },
+      ],
+      attendance_records: null,
+      completion_credentials: null,
+    };
+  }
+
+  it('returns draft answers when only draft exists', async () => {
+    const mockPrisma = {
+      applications: {
+        findFirst: jest.fn().mockResolvedValue(
+          createDetailedApplication({ currentDraftId: 'draft-1' }),
+        ),
+      },
+      step_submission_versions: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      admin_change_patches: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      step_drafts: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'draft-1', answers_draft: { essay: 'Draft answer' } },
+        ]),
+      },
+      applicant_profiles: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+      $transaction: jest.fn((operations: Array<Promise<unknown>>) =>
+        Promise.all(operations),
+      ),
+    };
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      { ensureStepStates: jest.fn().mockResolvedValue(false) } as any,
+    );
+
+    const result = await service.findById('event-1', 'app-1');
+
+    expect(result.stepStates[0]?.answers).toEqual({ essay: 'Draft answer' });
+    expect(result.stepStates[0]?.answersSource).toBe('DRAFT');
+  });
+
+  it('prefers draft answers over submitted answers when both exist', async () => {
+    const mockPrisma = {
+      applications: {
+        findFirst: jest.fn().mockResolvedValue(
+          createDetailedApplication({
+            currentDraftId: 'draft-1',
+            latestSubmissionVersionId: 'submission-1',
+          }),
+        ),
+      },
+      step_submission_versions: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'submission-1', answers_snapshot: { essay: 'Submitted answer' } },
+        ]),
+      },
+      admin_change_patches: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            submission_version_id: 'submission-1',
+            ops: [{ op: 'replace', path: '/essay', value: 'Patched answer' }],
+          },
+        ]),
+      },
+      step_drafts: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'draft-1', answers_draft: { essay: 'Draft answer' } },
+        ]),
+      },
+      applicant_profiles: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+      $transaction: jest.fn((operations: Array<Promise<unknown>>) =>
+        Promise.all(operations),
+      ),
+    };
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      { ensureStepStates: jest.fn().mockResolvedValue(false) } as any,
+    );
+
+    const result = await service.findById('event-1', 'app-1');
+
+    expect(result.stepStates[0]?.answers).toEqual({ essay: 'Draft answer' });
+    expect(result.stepStates[0]?.answersSource).toBe('DRAFT');
+  });
+});
+
 describe('ApplicationsService applicant visibility', () => {
   it('only resolves my application for published events', async () => {
     const mockPrisma = {

@@ -69,6 +69,17 @@ import {
   ConfirmDialog,
 } from "@/components/shared";
 import { apiClient } from "@/lib/api";
+import {
+  buildApplicationsFilterSignature,
+  buildApplicationsListQuery,
+  formatProgressLabel,
+  parseTagFilterInput,
+  type ApplicationsAdvancedFilters,
+  type CompletionBucketValue,
+  type DecisionStatusFilterValue,
+  type DerivedStatusFilterValue,
+  type StepStatusFilterValue,
+} from "@/lib/applications-filters";
 import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
 import { toast } from "sonner";
 import { useAuth, usePermissions } from "@/lib/auth-context";
@@ -82,7 +93,7 @@ interface Application {
   applicantName: string;
   applicantEmail: string;
   status: string;
-  currentStep: string;
+  progress: string;
   submittedAt?: string;
   tags: string[];
   decision?: string;
@@ -111,70 +122,77 @@ type ApplicationsListResponse =
       meta?: { hasMore?: boolean; nextCursor?: string | null };
     };
 
-type StatusFilterValue =
-  | "all"
-  | "waiting_applicant"
-  | "waiting_review"
-  | "revision_required"
-  | "all_required_steps_approved"
-  | "accepted"
-  | "waitlisted"
-  | "confirmed"
-  | "rejected";
+const DERIVED_STATUS_OPTIONS: Array<{
+  value: DerivedStatusFilterValue;
+  label: string;
+}> = [
+  { value: "waiting_applicant", label: "Waiting for applicant" },
+  { value: "waiting_review", label: "Waiting for review" },
+  { value: "revision_required", label: "Revision required" },
+  { value: "all_required_steps_approved", label: "All steps approved" },
+  { value: "accepted", label: "Accepted" },
+  { value: "waitlisted", label: "Waitlisted" },
+  { value: "confirmed", label: "Confirmed" },
+  { value: "rejected", label: "Rejected" },
+];
 
-function matchesStatusFilter(status: string, filter: StatusFilterValue): boolean {
-  if (filter === "all") return true;
+const STEP_STATUS_OPTIONS: Array<{
+  value: StepStatusFilterValue;
+  label: string;
+}> = [
+  { value: "all", label: "Any step status" },
+  { value: "LOCKED", label: "Locked" },
+  { value: "UNLOCKED", label: "Unlocked" },
+  { value: "SUBMITTED", label: "Submitted" },
+  { value: "NEEDS_REVISION", label: "Needs revision" },
+  { value: "APPROVED", label: "Approved" },
+  { value: "REJECTED_FINAL", label: "Rejected final" },
+];
 
-  const normalized = String(status ?? "").toUpperCase();
-  switch (filter) {
-    case "waiting_applicant":
-      return normalized.startsWith("WAITING_FOR_APPLICANT_STEP_");
-    case "waiting_review":
-      return (
-        normalized.startsWith("WAITING_FOR_REVIEW_STEP_") ||
-        normalized === "IN_REVIEW"
-      );
-    case "revision_required":
-      return (
-        normalized.startsWith("REVISION_REQUIRED_STEP_") ||
-        normalized === "NEEDS_REVISION"
-      );
-    case "all_required_steps_approved":
-      return normalized === "ALL_REQUIRED_STEPS_APPROVED";
-    case "accepted":
-      return (
-        normalized === "ACCEPTED" || normalized.startsWith("DECISION_ACCEPTED")
-      );
-    case "waitlisted":
-      return (
-        normalized === "WAITLISTED" ||
-        normalized.startsWith("DECISION_WAITLISTED")
-      );
-    case "confirmed":
-      return normalized === "CONFIRMED";
-    case "rejected":
-      return (
-        normalized === "BLOCKED_REJECTED" ||
-        normalized === "REJECTED" ||
-        normalized === "REJECTED_FINAL" ||
-        normalized.startsWith("DECISION_REJECTED")
-      );
-    default:
-      return false;
-  }
-}
+const COMPLETION_BUCKET_OPTIONS: Array<{
+  value: CompletionBucketValue;
+  label: string;
+}> = [
+  { value: "0", label: "0%" },
+  { value: "1_49", label: "1-49%" },
+  { value: "50_99", label: "50-99%" },
+  { value: "100", label: "100%" },
+];
+
+const DECISION_STATUS_OPTIONS: Array<{
+  value: DecisionStatusFilterValue;
+  label: string;
+}> = [
+  { value: "all", label: "Any decision" },
+  { value: "NONE", label: "No decision" },
+  { value: "ACCEPTED", label: "Accepted" },
+  { value: "WAITLISTED", label: "Waitlisted" },
+  { value: "REJECTED", label: "Rejected" },
+];
+
+const INITIAL_ADVANCED_FILTERS: ApplicationsAdvancedFilters = {
+  derivedStatus: [],
+  decisionStatus: "all",
+  stepId: "__any__",
+  stepStatus: "all",
+  reviewerId: "__any__",
+  tagsInput: "",
+  hasDraftProgress: false,
+  completionBucket: [],
+  needsRevisionOnly: false,
+};
 
 /** Normalise an API ApplicationSummary â†’ frontend Application */
 function normalizeApplication(raw: Record<string, unknown>): Application {
-  const ss = raw.stepsSummary as { total?: number; completed?: number } | undefined;
+  const ss = raw.stepsSummary as
+    | { total?: number; completed?: number; progressed?: number }
+    | undefined;
   return {
     id: raw.id as string,
     applicantName: (raw.applicantName ?? raw.applicantEmail ?? "Unknown") as string,
     applicantEmail: (raw.applicantEmail ?? "") as string,
     status: (raw.derivedStatus ?? raw.status ?? "UNKNOWN") as string,
-    currentStep: ss
-      ? `${ss.completed ?? 0}/${ss.total ?? 0} steps`
-      : (raw.currentStep ?? "") as string,
+    progress: formatProgressLabel(ss) || ((raw.currentStep ?? "") as string),
     submittedAt: (raw.createdAt ?? raw.submittedAt) as string | undefined,
     tags: (raw.tags ?? []) as string[],
     decision: (raw.decisionStatus ?? raw.decision) as string | undefined,
@@ -238,7 +256,22 @@ export default function ApplicationsListPage() {
   });
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>("all");
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [derivedStatusFilter, setDerivedStatusFilter] = useState<
+    DerivedStatusFilterValue[]
+  >([]);
+  const [decisionStatusFilter, setDecisionStatusFilter] =
+    useState<DecisionStatusFilterValue>("all");
+  const [stepFilterId, setStepFilterId] = useState("__any__");
+  const [stepStatusFilter, setStepStatusFilter] =
+    useState<StepStatusFilterValue>("all");
+  const [reviewerFilterId, setReviewerFilterId] = useState("__any__");
+  const [tagsFilterInput, setTagsFilterInput] = useState("");
+  const [hasDraftProgressFilter, setHasDraftProgressFilter] = useState(false);
+  const [completionBucketFilter, setCompletionBucketFilter] = useState<
+    CompletionBucketValue[]
+  >([]);
+  const [needsRevisionOnlyFilter, setNeedsRevisionOnlyFilter] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Application | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showBulkTags, setShowBulkTags] = useState(false);
@@ -278,8 +311,35 @@ export default function ApplicationsListPage() {
   const nextCursorRef = useRef<string | null>(null);
   const isLoadingMoreApplicationsRef = useRef(false);
   const searchQueryRef = useRef("");
-  const statusFilterRef = useRef<StatusFilterValue>("all");
+  const advancedFiltersRef = useRef<ApplicationsAdvancedFilters>(
+    INITIAL_ADVANCED_FILTERS
+  );
   const applicationsRef = useRef<Application[]>([]);
+
+  const advancedFilters = useMemo<ApplicationsAdvancedFilters>(
+    () => ({
+      derivedStatus: derivedStatusFilter,
+      decisionStatus: decisionStatusFilter,
+      stepId: stepFilterId,
+      stepStatus: stepStatusFilter,
+      reviewerId: reviewerFilterId,
+      tagsInput: tagsFilterInput,
+      hasDraftProgress: hasDraftProgressFilter,
+      completionBucket: completionBucketFilter,
+      needsRevisionOnly: needsRevisionOnlyFilter,
+    }),
+    [
+      completionBucketFilter,
+      decisionStatusFilter,
+      derivedStatusFilter,
+      hasDraftProgressFilter,
+      needsRevisionOnlyFilter,
+      reviewerFilterId,
+      stepFilterId,
+      stepStatusFilter,
+      tagsFilterInput,
+    ]
+  );
 
   useEffect(() => {
     hasMoreApplicationsRef.current = hasMoreApplications;
@@ -298,8 +358,8 @@ export default function ApplicationsListPage() {
   }, [searchQuery]);
 
   useEffect(() => {
-    statusFilterRef.current = statusFilter;
-  }, [statusFilter]);
+    advancedFiltersRef.current = advancedFilters;
+  }, [advancedFilters]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -309,14 +369,20 @@ export default function ApplicationsListPage() {
   }, [searchInput]);
 
   const fetchApplicationsPage = useCallback(
-    async (params?: { cursor?: string | null; query?: string }) => {
+    async (params?: {
+      cursor?: string | null;
+      query?: string;
+      filters?: ApplicationsAdvancedFilters;
+    }) => {
       const cursor = params?.cursor ?? null;
       const queryValue = params?.query?.trim() ?? "";
-      const query = new URLSearchParams({
-        limit: String(APPLICATIONS_PAGE_SIZE),
+      const filterValue = params?.filters ?? advancedFiltersRef.current;
+      const query = buildApplicationsListQuery({
+        limit: APPLICATIONS_PAGE_SIZE,
+        cursor,
+        searchQuery: queryValue,
+        filters: filterValue,
       });
-      if (cursor) query.set("cursor", cursor);
-      if (queryValue.length > 0) query.set("q", queryValue);
 
       const res = await apiClient<ApplicationsListResponse>(
         `/events/${eventId}/applications?${query.toString()}`
@@ -373,6 +439,7 @@ export default function ApplicationsListPage() {
       const page = await fetchApplicationsPage({
         cursor: isAppend ? nextCursorRef.current : null,
         query: searchQueryRef.current,
+        filters: advancedFiltersRef.current,
       });
 
       if (requestVersion !== applicationsRequestVersionRef.current) {
@@ -485,24 +552,25 @@ export default function ApplicationsListPage() {
     canAssignReviewers,
     canDraftDecisions,
     eventId,
-    refreshApplications,
     refreshDecisionTemplates,
   ]);
 
+  const filterSignature = useMemo(
+    () => buildApplicationsFilterSignature(searchQuery, advancedFilters),
+    [advancedFilters, searchQuery]
+  );
+
   useEffect(() => {
     void refreshApplications({ resetPageIndex: true, clearSelection: true });
-  }, [refreshApplications, searchQuery]);
+  }, [filterSignature, refreshApplications]);
 
-  const filteredData = useMemo(
-    () => applications.filter((a) => matchesStatusFilter(a.status, statusFilter)),
-    [applications, statusFilter]
-  );
+  const filteredData = applications;
 
   useEffect(() => {
     setPagination((prev) =>
       prev.pageIndex === 0 ? prev : { ...prev, pageIndex: 0 }
     );
-  }, [statusFilter]);
+  }, [filterSignature]);
 
   useEffect(() => {
     setPagination((prev) => {
@@ -532,14 +600,106 @@ export default function ApplicationsListPage() {
     () => [...workflowSteps].sort((a, b) => a.stepIndex - b.stepIndex),
     [workflowSteps],
   );
+  const parsedTagFilters = useMemo(
+    () => parseTagFilterInput(tagsFilterInput),
+    [tagsFilterInput]
+  );
+  const activeFilterChips = useMemo(() => {
+    const chips: string[] = [];
+    if (derivedStatusFilter.length > 0) {
+      const labels = DERIVED_STATUS_OPTIONS.filter((option) =>
+        derivedStatusFilter.includes(option.value)
+      ).map((option) => option.label);
+      chips.push(`Status: ${labels.join(", ")}`);
+    }
+    if (decisionStatusFilter !== "all") {
+      const label =
+        DECISION_STATUS_OPTIONS.find((option) => option.value === decisionStatusFilter)
+          ?.label ?? decisionStatusFilter;
+      chips.push(`Decision: ${label}`);
+    }
+    if (stepFilterId !== "__any__" && stepStatusFilter !== "all") {
+      const stepLabel =
+        sortedWorkflowSteps.find((step) => step.id === stepFilterId)?.title ??
+        "Selected step";
+      const statusLabel =
+        STEP_STATUS_OPTIONS.find((option) => option.value === stepStatusFilter)
+          ?.label ?? stepStatusFilter;
+      chips.push(`Step: ${stepLabel} (${statusLabel})`);
+    }
+    if (reviewerFilterId !== "__any__") {
+      const reviewerLabel =
+        reviewers.find((reviewer) => reviewer.userId === reviewerFilterId)?.fullName ??
+        reviewers.find((reviewer) => reviewer.userId === reviewerFilterId)?.email ??
+        "Assigned reviewer";
+      chips.push(`Reviewer: ${reviewerLabel}`);
+    }
+    if (parsedTagFilters.length > 0) {
+      chips.push(`Tags (all): ${parsedTagFilters.join(", ")}`);
+    }
+    if (hasDraftProgressFilter) {
+      chips.push("Has draft progress");
+    }
+    if (completionBucketFilter.length > 0) {
+      const labels = COMPLETION_BUCKET_OPTIONS.filter((option) =>
+        completionBucketFilter.includes(option.value)
+      ).map((option) => option.label);
+      chips.push(`Completion: ${labels.join(", ")}`);
+    }
+    if (needsRevisionOnlyFilter) {
+      chips.push("Needs revision only");
+    }
+    return chips;
+  }, [
+    completionBucketFilter,
+    decisionStatusFilter,
+    derivedStatusFilter,
+    hasDraftProgressFilter,
+    needsRevisionOnlyFilter,
+    parsedTagFilters,
+    reviewerFilterId,
+    reviewers,
+    sortedWorkflowSteps,
+    stepFilterId,
+    stepStatusFilter,
+  ]);
+  const hasActiveFilters = activeFilterChips.length > 0;
+
+  const toggleDerivedStatusFilter = useCallback((value: DerivedStatusFilterValue) => {
+    setDerivedStatusFilter((previous) =>
+      previous.includes(value)
+        ? previous.filter((entry) => entry !== value)
+        : [...previous, value]
+    );
+  }, []);
+
+  const toggleCompletionBucketFilter = useCallback(
+    (value: CompletionBucketValue) => {
+      setCompletionBucketFilter((previous) =>
+        previous.includes(value)
+          ? previous.filter((entry) => entry !== value)
+          : [...previous, value]
+      );
+    },
+    []
+  );
+
+  const clearAllFilters = useCallback(() => {
+    setDerivedStatusFilter([]);
+    setDecisionStatusFilter("all");
+    setStepFilterId("__any__");
+    setStepStatusFilter("all");
+    setReviewerFilterId("__any__");
+    setTagsFilterInput("");
+    setHasDraftProgressFilter(false);
+    setCompletionBucketFilter([]);
+    setNeedsRevisionOnlyFilter(false);
+  }, []);
 
   const handleNextPage = useCallback(async () => {
     const targetPageIndex = pagination.pageIndex + 1;
     const requiredVisibleRows = (targetPageIndex + 1) * pagination.pageSize;
-    const countVisibleRows = () =>
-      applicationsRef.current.filter((application) =>
-        matchesStatusFilter(application.status, statusFilterRef.current)
-      ).length;
+    const countVisibleRows = () => applicationsRef.current.length;
 
     if (countVisibleRows() >= requiredVisibleRows) {
       setPagination((prev) => ({ ...prev, pageIndex: prev.pageIndex + 1 }));
@@ -1057,11 +1217,11 @@ export default function ApplicationsListPage() {
         cell: ({ row }) => <StatusBadge status={row.original.status} />,
       },
       {
-        accessorKey: "currentStep",
-        header: "Current Step",
+        accessorKey: "progress",
+        header: "Progress",
         cell: ({ row }) => (
           <span className="text-sm text-muted-foreground">
-            {row.original.currentStep}
+            {row.original.progress}
           </span>
         ),
       },
@@ -1201,38 +1361,208 @@ export default function ApplicationsListPage() {
       </PageHeader>
 
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search by name or email..."
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            className="pl-9"
-          />
+      <div className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by name or email..."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => setShowAdvancedFilters((previous) => !previous)}
+          >
+            <Filter className="mr-1.5 h-3.5 w-3.5" />
+            {showAdvancedFilters ? "Hide advanced filters" : "Advanced filters"}
+          </Button>
+          {hasActiveFilters && (
+            <Button variant="ghost" onClick={clearAllFilters}>
+              Clear all
+            </Button>
+          )}
         </div>
-        <Select
-          value={statusFilter}
-          onValueChange={(value) => setStatusFilter(value as StatusFilterValue)}
-        >
-          <SelectTrigger className="w-[180px]">
-            <Filter className="mr-2 h-3.5 w-3.5" />
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            <SelectItem value="waiting_applicant">Waiting for applicant</SelectItem>
-            <SelectItem value="waiting_review">Waiting for review</SelectItem>
-            <SelectItem value="revision_required">Revision required</SelectItem>
-            <SelectItem value="all_required_steps_approved">
-              All steps approved
-            </SelectItem>
-            <SelectItem value="accepted">Accepted</SelectItem>
-            <SelectItem value="waitlisted">Waitlisted</SelectItem>
-            <SelectItem value="confirmed">Confirmed</SelectItem>
-            <SelectItem value="rejected">Rejected</SelectItem>
-          </SelectContent>
-        </Select>
+
+        {hasActiveFilters && (
+          <div className="flex flex-wrap gap-2">
+            {activeFilterChips.map((chip) => (
+              <Badge key={chip} variant="secondary" className="text-xs">
+                {chip}
+              </Badge>
+            ))}
+          </div>
+        )}
+
+        {showAdvancedFilters && (
+          <Card>
+            <CardContent className="space-y-4 p-4">
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="space-y-2">
+                  <Label className="text-sm">Derived status</Label>
+                  <div className="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-2">
+                    {DERIVED_STATUS_OPTIONS.map((option) => (
+                      <label
+                        key={option.value}
+                        className="flex items-center gap-2 text-sm"
+                      >
+                        <Checkbox
+                          checked={derivedStatusFilter.includes(option.value)}
+                          onCheckedChange={() =>
+                            toggleDerivedStatusFilter(option.value)
+                          }
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-sm">Decision</Label>
+                  <Select
+                    value={decisionStatusFilter}
+                    onValueChange={(value) =>
+                      setDecisionStatusFilter(value as DecisionStatusFilterValue)
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DECISION_STATUS_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-3">
+                <div className="space-y-2">
+                  <Label className="text-sm">Step</Label>
+                  <Select value={stepFilterId} onValueChange={setStepFilterId}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__any__">Any step</SelectItem>
+                      {sortedWorkflowSteps.map((step) => (
+                        <SelectItem key={step.id} value={step.id}>
+                          {step.stepIndex + 1}. {step.title}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-sm">Step status</Label>
+                  <Select
+                    value={stepStatusFilter}
+                    onValueChange={(value) =>
+                      setStepStatusFilter(value as StepStatusFilterValue)
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {STEP_STATUS_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-sm">Assigned reviewer</Label>
+                  <Select
+                    value={reviewerFilterId}
+                    onValueChange={setReviewerFilterId}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__any__">Any reviewer</SelectItem>
+                      {reviewers.map((reviewer) => (
+                        <SelectItem key={reviewer.userId} value={reviewer.userId}>
+                          {reviewer.fullName ?? reviewer.email} ({reviewer.email})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm">Tags (match all)</Label>
+                <Input
+                  value={tagsFilterInput}
+                  onChange={(event) => setTagsFilterInput(event.target.value)}
+                  placeholder="vip, shortlist"
+                />
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="space-y-2">
+                  <Label className="text-sm">Completion bucket</Label>
+                  <div className="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-2">
+                    {COMPLETION_BUCKET_OPTIONS.map((option) => (
+                      <label
+                        key={option.value}
+                        className="flex items-center gap-2 text-sm"
+                      >
+                        <Checkbox
+                          checked={completionBucketFilter.includes(option.value)}
+                          onCheckedChange={() =>
+                            toggleCompletionBucketFilter(option.value)
+                          }
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 p-3">
+                    <div>
+                      <Label className="text-sm">Has draft progress</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Show applications with at least one draft.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={hasDraftProgressFilter}
+                      onCheckedChange={setHasDraftProgressFilter}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 p-3">
+                    <div>
+                      <Label className="text-sm">Needs revision only</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Keep applications with at least one step in needs revision.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={needsRevisionOnlyFilter}
+                      onCheckedChange={setNeedsRevisionOnlyFilter}
+                    />
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {selectedCount > 0 && (

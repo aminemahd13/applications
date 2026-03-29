@@ -389,6 +389,7 @@ export class StepStateService {
       stepTitle: state.workflow_steps?.title || 'Unknown',
       stepIndex: state.workflow_steps?.step_index ?? 0,
       status: state.status as StepStatus,
+      answersSource: null,
       currentDraftId: state.current_draft_id,
       latestSubmissionVersionId: state.latest_submission_version_id,
       revisionCycleCount: state.revision_cycle_count,
