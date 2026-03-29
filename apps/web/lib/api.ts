@@ -1,6 +1,7 @@
 import { Block, MicrositeSettings } from "@event-platform/shared";
 import { toast } from "sonner";
 import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
+import { resolveHttpErrorMessage } from "@/lib/http-errors";
 
 /* ---------- Config ---------- */
 
@@ -156,7 +157,7 @@ export async function apiClient<T = unknown>(
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: "Request failed" }));
-    const message = err.message ?? `Error ${res.status}`;
+    const message = resolveHttpErrorMessage(res.status, err, "Request failed");
     const invalidCsrf = isInvalidCsrfError(res.status, err);
 
     if (invalidCsrf) {

@@ -30,7 +30,7 @@ const THROTTLE_TTL_MS = Math.max(
   Number(process.env.THROTTLE_TTL_MS ?? 60_000),
   1_000,
 );
-const THROTTLE_LIMIT = Math.max(Number(process.env.THROTTLE_LIMIT ?? 300), 60);
+const THROTTLE_LIMIT = Math.max(Number(process.env.THROTTLE_LIMIT ?? 1000), 60);
 
 @Module({
   imports: [

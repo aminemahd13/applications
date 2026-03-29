@@ -10,6 +10,7 @@ import { Prisma } from '@event-platform/db';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { OrgSettingsService } from '../admin/org-settings.service';
 import { RateLimiterService } from '../common/services/rate-limiter.service';
+import { RateLimitExceededException } from '../common/exceptions/rate-limit-exceeded.exception';
 import { LoginDto, SignupDto } from '@event-platform/shared';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
@@ -45,6 +46,11 @@ export interface SignupResult {
   verificationRequired: boolean;
   wasExistingUnverified: boolean;
 }
+
+const LOGIN_RATE_LIMIT_MESSAGE =
+  'Too many login attempts. Please wait before trying again.';
+const SIGNUP_RATE_LIMIT_MESSAGE =
+  'Too many signup attempts. Please wait before trying again.';
 
 @Injectable()
 export class AuthService {
@@ -101,7 +107,47 @@ export class AuthService {
     };
   }
 
-  async signup(dto: SignupDto): Promise<SignupResult> {
+  private resolveClientIp(req: any): string | null {
+    if (Array.isArray(req?.ips) && req.ips.length > 0) {
+      const first = String(req.ips[0] ?? '').trim();
+      if (first) return first;
+    }
+
+    const directIp = String(req?.ip ?? '').trim();
+    if (directIp) return directIp;
+
+    const forwardedForRaw =
+      req?.headers?.['x-forwarded-for'] ?? req?.headers?.['X-Forwarded-For'];
+    const forwardedForValue = Array.isArray(forwardedForRaw)
+      ? forwardedForRaw.find((value) => typeof value === 'string')
+      : forwardedForRaw;
+    if (typeof forwardedForValue === 'string') {
+      const firstForwarded = forwardedForValue
+        .split(',')
+        .map((segment) => segment.trim())
+        .find(Boolean);
+      if (firstForwarded) return firstForwarded;
+    }
+
+    const socketIp = String(req?.socket?.remoteAddress ?? '').trim();
+    if (socketIp) return socketIp;
+
+    return null;
+  }
+
+  async signup(dto: SignupDto, req?: any): Promise<SignupResult> {
+    const normalizedEmail = dto.email.toLowerCase().trim();
+    const sourceIp = this.resolveClientIp(req);
+
+    const [signupEmailAllowed, signupIpAllowed] = await Promise.all([
+      this.rateLimiterService.checkSignupEmailLimit(normalizedEmail),
+      sourceIp ? this.rateLimiterService.checkSignupIpLimit(sourceIp) : true,
+    ]);
+
+    if (!signupEmailAllowed || !signupIpAllowed) {
+      throw new RateLimitExceededException(SIGNUP_RATE_LIMIT_MESSAGE);
+    }
+
     const settings = await this.orgSettingsService.getSettings();
     const security = this.getSecurityFlags(settings);
 
@@ -111,7 +157,7 @@ export class AuthService {
 
     // Check if user exists
     const existing = await this.prisma.users.findUnique({
-      where: { email: dto.email },
+      where: { email: normalizedEmail },
     });
     if (existing) {
       const isUnverified = !existing.email_verified_at;
@@ -141,7 +187,7 @@ export class AuthService {
       const u = await tx.users.create({
         data: {
           id: userId,
-          email: dto.email,
+          email: normalizedEmail,
           password_hash: hashedPassword,
         },
       });
@@ -177,10 +223,18 @@ export class AuthService {
    * Validates credentials, regenerates session, and issues CSRF token.
    */
   async login(dto: LoginDto, req: any) {
+    const normalizedEmail = dto.email.toLowerCase().trim();
+    const allowed = await this.rateLimiterService.checkLoginLimit(
+      normalizedEmail,
+    );
+    if (!allowed) {
+      throw new RateLimitExceededException(LOGIN_RATE_LIMIT_MESSAGE);
+    }
+
     const settings = await this.orgSettingsService.getSettings();
     const security = this.getSecurityFlags(settings);
 
-    const user = await this.validateUser(dto.email, dto.password);
+    const user = await this.validateUser(normalizedEmail, dto.password);
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }

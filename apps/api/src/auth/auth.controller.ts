@@ -109,12 +109,12 @@ export class AuthController {
   }
 
   @Post('signup')
-  @Throttle({ default: { limit: 10, ttl: 900000 } }) // 10 per 15 min
-  async signup(@Body() body: any) {
+  @SkipThrottle()
+  async signup(@Body() body: any, @Req() req: express.Request) {
     const result = SignupSchema.safeParse(body);
     if (!result.success) throw new BadRequestException('Validation failed');
 
-    const signupResult = await this.authService.signup(result.data);
+    const signupResult = await this.authService.signup(result.data, req);
 
     if (signupResult.verificationRequired) {
       try {
@@ -131,7 +131,7 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 10, ttl: 900000 } }) // 10 per 15 min
+  @SkipThrottle()
   async login(
     @Body() body: any,
     @Session() session: any,

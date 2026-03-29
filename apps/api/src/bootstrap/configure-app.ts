@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import Redis from 'ioredis';
 import { ZodExceptionFilter } from '../common/filters/zod-exception.filter';
+import { ThrottlingExceptionFilter } from '../common/filters/throttling-exception.filter';
 import type { NextFunction, Request, Response } from 'express';
 import session, { Session, SessionData, Store } from 'express-session';
 
@@ -95,9 +96,42 @@ function resolveCorsOrigins() {
     .filter((origin) => origin.length > 0);
 }
 
+function resolveTrustProxyValue():
+  | boolean
+  | number
+  | string
+  | string[]
+  | undefined {
+  const raw = process.env.TRUST_PROXY;
+  if (raw == null || raw.trim() === '') {
+    return true;
+  }
+
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+
+  if (/^\d+$/.test(normalized)) {
+    return Math.max(Number.parseInt(normalized, 10), 0);
+  }
+
+  if (normalized.includes(',')) {
+    const values = raw
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    if (values.length > 0) return values;
+  }
+
+  return raw.trim();
+}
+
 export function configureHttpApp(app: INestApplication): AppRuntimeResources {
   app.setGlobalPrefix('api/v1');
-  app.useGlobalFilters(new ZodExceptionFilter());
+  app.useGlobalFilters(
+    new ThrottlingExceptionFilter(),
+    new ZodExceptionFilter(),
+  );
 
   // CORS configuration
   app.enableCors({
@@ -107,13 +141,14 @@ export function configureHttpApp(app: INestApplication): AppRuntimeResources {
     allowedHeaders: ['Content-Type', 'x-csrf-token', 'Authorization'],
   });
 
-  // Trust proxy for production (behind Nginx/Cloudflare)
-  // Required for secure cookies to work behind reverse proxy
+  // Trust proxy in production so request IP and secure cookies are correct
+  // behind reverse proxies (Nginx, Cloudflare, host-level proxy chains).
   if (process.env.NODE_ENV === 'production') {
+    const trustProxy = resolveTrustProxyValue();
     const adapter = (app as unknown as NestAppWithAdapter).getHttpAdapter();
     adapter
-      .getInstance<{ set: (name: string, value: number) => void }>()
-      .set('trust proxy', 1);
+      .getInstance<{ set: (name: string, value: unknown) => void }>()
+      .set('trust proxy', trustProxy);
   }
 
   // Initialize Redis

@@ -6,12 +6,13 @@ The backend is built with **NestJS** and follows a modular architecture.
 
 - **Global Prefix**: `/api/v1`
 - **Guards**: 
-    - `ThrottlerGuard`: Rate limiting (60 req/min).
+    - `ThrottlerGuard`: Rate limiting (default `THROTTLE_LIMIT=1000` per `THROTTLE_TTL_MS=60000`).
     - `CsrfGuard`: Protects non-GET requests.
 - **Interceptors**:
     - `EventScopeInterceptor`: Automatically binds `eventId` to the request context for multi-tenant isolation.
 - **Filters**:
     - `ZodExceptionFilter`: Transforms Zod validation errors into user-friendly 400 responses.
+    - `ThrottlingExceptionFilter`: Normalizes 429 responses (`code: RATE_LIMITED`, friendly message, optional `retryAfterSeconds`).
 
 ## Authentication
 

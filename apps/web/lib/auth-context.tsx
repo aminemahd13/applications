@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
 import { useI18n } from "@/lib/i18n";
+import { resolveHttpErrorMessage } from "@/lib/http-errors";
 
 /* ---------- Types ---------- */
 
@@ -150,7 +151,9 @@ export function AuthProvider({
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          toast.error(err.message ?? t("Invalid credentials"));
+          toast.error(
+            resolveHttpErrorMessage(res.status, err, t("Invalid credentials")),
+          );
           return null;
         }
 
@@ -190,7 +193,7 @@ export function AuthProvider({
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          toast.error(err.message ?? t("Signup failed"));
+          toast.error(resolveHttpErrorMessage(res.status, err, t("Signup failed")));
           return false;
         }
         return true;

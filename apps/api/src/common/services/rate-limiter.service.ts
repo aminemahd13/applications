@@ -12,6 +12,22 @@ export class RateLimiterService implements OnModuleDestroy {
   private static readonly SESSION_KEY_PREFIX = 'sess:';
   private static readonly SESSION_OWNER_PREFIX = 'session_user:';
   private static readonly SESSION_TRACK_TTL_SECONDS = 14 * 24 * 60 * 60;
+  private static readonly AUTH_RATE_WINDOW_MS = Math.max(
+    Number(process.env.AUTH_RATE_WINDOW_MS ?? 900_000),
+    1_000,
+  );
+  private static readonly AUTH_LOGIN_LIMIT = Math.max(
+    Number(process.env.AUTH_LOGIN_LIMIT ?? 40),
+    1,
+  );
+  private static readonly AUTH_SIGNUP_LIMIT = Math.max(
+    Number(process.env.AUTH_SIGNUP_LIMIT ?? 25),
+    1,
+  );
+  private static readonly AUTH_SIGNUP_IP_LIMIT = Math.max(
+    Number(process.env.AUTH_SIGNUP_IP_LIMIT ?? 25),
+    1,
+  );
   private static readonly LEGACY_SCAN_ENABLED =
     process.env.SESSION_REVOKE_SCAN_FALLBACK === 'true';
   private static readonly LEGACY_SCAN_MAX_KEYS = Math.max(
@@ -117,11 +133,40 @@ export class RateLimiterService implements OnModuleDestroy {
   }
 
   /**
-   * Check login rate limit (max 10 per email per 15 minutes)
+   * Check login rate limit (email-keyed).
    */
   async checkLoginLimit(email: string): Promise<boolean> {
     const normalizedEmail = email.toLowerCase().trim();
-    return this.isAllowed(`login:${normalizedEmail}`, 10, 15 * 60 * 1000);
+    return this.isAllowed(
+      `auth:login:email:${normalizedEmail}`,
+      RateLimiterService.AUTH_LOGIN_LIMIT,
+      RateLimiterService.AUTH_RATE_WINDOW_MS,
+    );
+  }
+
+  /**
+   * Check signup rate limit by email.
+   */
+  async checkSignupEmailLimit(email: string): Promise<boolean> {
+    const normalizedEmail = email.toLowerCase().trim();
+    return this.isAllowed(
+      `auth:signup:email:${normalizedEmail}`,
+      RateLimiterService.AUTH_SIGNUP_LIMIT,
+      RateLimiterService.AUTH_RATE_WINDOW_MS,
+    );
+  }
+
+  /**
+   * Check signup rate limit by source IP.
+   */
+  async checkSignupIpLimit(ip: string): Promise<boolean> {
+    const normalizedIp = ip.trim();
+    if (!normalizedIp) return true;
+    return this.isAllowed(
+      `auth:signup:ip:${normalizedIp}`,
+      RateLimiterService.AUTH_SIGNUP_IP_LIMIT,
+      RateLimiterService.AUTH_RATE_WINDOW_MS,
+    );
   }
 
   /**
