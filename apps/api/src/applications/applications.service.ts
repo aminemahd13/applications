@@ -1592,7 +1592,7 @@ export class ApplicationsService {
   }
 
   /**
-   * Bulk step action (unlock, approve, needs revision, lock)
+   * Bulk step action (unlock, approve, needs revision, reject, lock)
    */
   async bulkStepAction(
     eventId: string,
@@ -1655,6 +1655,20 @@ export class ApplicationsService {
             break;
           case 'NEEDS_REVISION':
             await this.stepStateService.markNeedsRevision(app.id, dto.stepId);
+            break;
+          case 'REJECT':
+            await this.stepStateService.markRejectedFinal(app.id, dto.stepId);
+            await this.prisma.needs_info_requests.updateMany({
+              where: {
+                application_id: app.id,
+                step_id: dto.stepId,
+                status: 'OPEN',
+              },
+              data: {
+                status: 'CANCELED',
+                resolved_at: new Date(),
+              },
+            });
             break;
           case 'LOCK': {
             const lockResult = await this.prisma.application_step_states.updateMany(

@@ -320,7 +320,7 @@ export class ApplicationsController {
   }
 
   /**
-   * Bulk step action (unlock, approve, needs revision, lock)
+   * Bulk step action (unlock, approve, needs revision, reject, lock)
    */
   @Post('bulk/step-action')
   @RequirePermission(
@@ -339,7 +339,9 @@ export class ApplicationsController {
       ),
     );
     const requiredPermission =
-      dto.action === 'APPROVE' || dto.action === 'NEEDS_REVISION'
+      dto.action === 'APPROVE' ||
+      dto.action === 'NEEDS_REVISION' ||
+      dto.action === 'REJECT'
         ? Permission.EVENT_STEP_REVIEW
         : Permission.EVENT_STEP_OVERRIDE_UNLOCK;
     if (!permissions.has(requiredPermission)) {

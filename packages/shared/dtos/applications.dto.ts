@@ -158,7 +158,7 @@ export type BulkDecisionDraftDto = z.infer<typeof BulkDecisionDraftSchema>;
 
 export const BulkStepActionSchema = BulkApplicationIdsSchema.extend({
     stepId: z.string().uuid(),
-    action: z.enum(['UNLOCK', 'APPROVE', 'NEEDS_REVISION', 'LOCK']),
+    action: z.enum(['UNLOCK', 'APPROVE', 'NEEDS_REVISION', 'REJECT', 'LOCK']),
 });
 
 export type BulkStepActionDto = z.infer<typeof BulkStepActionSchema>;

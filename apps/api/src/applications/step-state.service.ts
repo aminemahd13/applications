@@ -310,6 +310,49 @@ export class StepStateService {
   }
 
   /**
+   * Mark step as rejected final and lock all downstream steps.
+   */
+  async markRejectedFinal(applicationId: string, stepId: string): Promise<void> {
+    const step = await this.prisma.workflow_steps.findUnique({
+      where: { id: stepId },
+      select: { event_id: true, step_index: true },
+    });
+
+    if (!step) return;
+
+    const now = new Date();
+
+    await this.prisma.application_step_states.updateMany({
+      where: { application_id: applicationId, step_id: stepId },
+      data: {
+        status: StepStatus.REJECTED_FINAL,
+        last_activity_at: now,
+      },
+    });
+
+    const downstreamSteps = await this.prisma.workflow_steps.findMany({
+      where: {
+        event_id: step.event_id,
+        step_index: { gt: step.step_index },
+      },
+      select: { id: true },
+    });
+
+    if (downstreamSteps.length > 0) {
+      await this.prisma.application_step_states.updateMany({
+        where: {
+          application_id: applicationId,
+          step_id: { in: downstreamSteps.map((item) => item.id) },
+        },
+        data: {
+          status: StepStatus.LOCKED,
+          last_activity_at: now,
+        },
+      });
+    }
+  }
+
+  /**
    * Lock all steps after a given index (strict gating)
    */
   private async lockDownstreamSteps(

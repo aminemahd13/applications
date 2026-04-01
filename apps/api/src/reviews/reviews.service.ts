@@ -13,7 +13,6 @@ import {
   ReviewRecordResponse,
   NeedsInfoResponse,
   NeedsInfoStatus,
-  StepStatus,
   Permission,
 } from '@event-platform/shared';
 import { StepStateService } from '../applications/step-state.service';
@@ -201,38 +200,7 @@ export class ReviewsService {
     rejectBehavior: string | null,
   ): Promise<void> {
     if (rejectBehavior === 'FINAL') {
-      // Permanent rejection - update step state
-      await this.prisma.application_step_states.updateMany({
-        where: { application_id: applicationId, step_id: stepId },
-        data: {
-          status: StepStatus.REJECTED_FINAL,
-          last_activity_at: new Date(),
-        },
-      });
-
-      // Lock all downstream steps (they become "not applicable")
-      const step = await this.prisma.workflow_steps.findUnique({
-        where: { id: stepId },
-      });
-      if (step) {
-        const downstreamSteps = await this.prisma.workflow_steps.findMany({
-          where: {
-            event_id: step.event_id,
-            step_index: { gt: step.step_index },
-          },
-          select: { id: true },
-        });
-
-        if (downstreamSteps.length > 0) {
-          await this.prisma.application_step_states.updateMany({
-            where: {
-              application_id: applicationId,
-              step_id: { in: downstreamSteps.map((ds) => ds.id) },
-            },
-            data: { status: StepStatus.LOCKED },
-          });
-        }
-      }
+      await this.stepStateService.markRejectedFinal(applicationId, stepId);
     } else {
       // RESUBMIT_ALLOWED - mark as needs revision
       await this.stepStateService.markNeedsRevision(applicationId, stepId);

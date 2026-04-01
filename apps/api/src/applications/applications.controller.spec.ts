@@ -112,6 +112,21 @@ describe('ApplicationsController bulk step action permissions', () => {
     ).resolves.toEqual({ data: { updated: 1, skipped: 0 } });
     expect(applicationsService.bulkStepAction).toHaveBeenCalledTimes(1);
   });
+
+  it('rejects REJECT when actor only has unlock override permission', async () => {
+    const { controller, applicationsService } = createController([
+      'event.step.override.unlock',
+    ]);
+
+    await expect(
+      controller.bulkStepAction('event-1', {
+        applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
+        stepId: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
+        action: 'REJECT',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(applicationsService.bulkStepAction).not.toHaveBeenCalled();
+  });
 });
 
 describe('ApplicationsController export query validation', () => {

@@ -219,6 +219,13 @@ interface StepFieldDefinition {
   maxFileSizeMB?: number;
 }
 
+type StepStatusAction =
+  | "UNLOCK"
+  | "APPROVE"
+  | "NEEDS_REVISION"
+  | "REJECT"
+  | "LOCK";
+
 type FieldEditorKind =
   | "text"
   | "textarea"
@@ -855,6 +862,10 @@ export default function ApplicationDetailPage() {
   const [requestNotifyApplicant, setRequestNotifyApplicant] = useState(true);
   const [requestSendEmail, setRequestSendEmail] = useState(false);
   const [isSubmittingRequest, setIsSubmittingRequest] = useState(false);
+  const [stepActionInFlight, setStepActionInFlight] = useState<{
+    stepId: string;
+    action: StepStatusAction;
+  } | null>(null);
 
   // Audit state
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
@@ -872,6 +883,7 @@ export default function ApplicationDetailPage() {
   const canSendMessages = hasPermission(Permission.EVENT_MESSAGES_SEND);
   const canReadMessages = hasPermission(Permission.EVENT_MESSAGES_READ);
   const canReviewSteps = hasPermission(Permission.EVENT_STEP_REVIEW);
+  const canStepOverride = hasPermission(Permission.EVENT_STEP_OVERRIDE_UNLOCK);
   const canViewAudit = hasPermission(Permission.EVENT_APPLICATION_READ_BASIC);
   const canDraftDecision = hasPermission(Permission.EVENT_DECISION_DRAFT);
   const canPublishDecision = hasPermission(Permission.EVENT_DECISION_PUBLISH);
@@ -1382,6 +1394,56 @@ export default function ApplicationDetailPage() {
     setRequestNotifyApplicant(canSendMessages);
     setRequestSendEmail(false);
     setShowRequestInfo(true);
+  }
+
+  async function applyStepStatusAction(stepId: string, action: StepStatusAction) {
+    if (!app) return;
+
+    const isReviewAction =
+      action === "APPROVE" || action === "NEEDS_REVISION" || action === "REJECT";
+    if (isReviewAction && !canReviewSteps) {
+      toast.error("You do not have permission to review step statuses.");
+      return;
+    }
+    if (!isReviewAction && !canStepOverride) {
+      toast.error("You do not have permission to override step status.");
+      return;
+    }
+
+    setStepActionInFlight({ stepId, action });
+    try {
+      const res = await apiClient<{ data?: { updated: number; skipped: number } }>(
+        `/events/${eventId}/applications/bulk/step-action`,
+        {
+          method: "POST",
+          body: {
+            applicationIds: [app.id],
+            stepId,
+            action,
+          },
+          csrfToken: csrfToken ?? undefined,
+        },
+      );
+
+      if ((res?.data?.updated ?? 0) < 1) {
+        toast.error("Step status was not updated.");
+        return;
+      }
+
+      const actionMessage: Record<StepStatusAction, string> = {
+        UNLOCK: "Step unlocked",
+        APPROVE: "Step approved",
+        NEEDS_REVISION: "Step moved to needs revision",
+        REJECT: "Step rejected",
+        LOCK: "Step locked",
+      };
+      toast.success(actionMessage[action]);
+      await Promise.all([loadApplication(true), loadNeedsInfo(), loadAudit()]);
+    } catch {
+      /* handled */
+    } finally {
+      setStepActionInFlight(null);
+    }
   }
 
   async function sendApplicationMessage() {
@@ -2097,15 +2159,92 @@ export default function ApplicationDetailPage() {
                           ? "Ready for review actions"
                           : "No submission yet"}
                       </span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openRequestInfo(step.id)}
-                        disabled={!canReviewSteps || !step.latestSubmissionVersionId}
-                      >
-                        <AlertTriangle className="mr-1.5 h-3.5 w-3.5" />
-                        Request info
-                      </Button>
+                      <div className="flex flex-wrap gap-2">
+                        {canReviewSteps && (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => applyStepStatusAction(step.id, "APPROVE")}
+                              disabled={
+                                !step.latestSubmissionVersionId || stepActionInFlight !== null
+                              }
+                            >
+                              {stepActionInFlight?.stepId === step.id &&
+                              stepActionInFlight.action === "APPROVE"
+                                ? "Approving..."
+                                : "Approve"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                applyStepStatusAction(step.id, "NEEDS_REVISION")
+                              }
+                              disabled={
+                                !step.latestSubmissionVersionId || stepActionInFlight !== null
+                              }
+                            >
+                              {stepActionInFlight?.stepId === step.id &&
+                              stepActionInFlight.action === "NEEDS_REVISION"
+                                ? "Applying..."
+                                : "Needs revision"}
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => applyStepStatusAction(step.id, "REJECT")}
+                              disabled={
+                                !step.latestSubmissionVersionId || stepActionInFlight !== null
+                              }
+                            >
+                              {stepActionInFlight?.stepId === step.id &&
+                              stepActionInFlight.action === "REJECT"
+                                ? "Rejecting..."
+                                : "Reject"}
+                            </Button>
+                          </>
+                        )}
+                        {canStepOverride && (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => applyStepStatusAction(step.id, "UNLOCK")}
+                              disabled={stepActionInFlight !== null}
+                            >
+                              {stepActionInFlight?.stepId === step.id &&
+                              stepActionInFlight.action === "UNLOCK"
+                                ? "Unlocking..."
+                                : "Unlock"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => applyStepStatusAction(step.id, "LOCK")}
+                              disabled={stepActionInFlight !== null}
+                            >
+                              {stepActionInFlight?.stepId === step.id &&
+                              stepActionInFlight.action === "LOCK"
+                                ? "Locking..."
+                                : "Lock"}
+                            </Button>
+                          </>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openRequestInfo(step.id)}
+                          disabled={
+                            !canReviewSteps ||
+                            !step.latestSubmissionVersionId ||
+                            stepActionInFlight !== null
+                          }
+                        >
+                          <AlertTriangle className="mr-1.5 h-3.5 w-3.5" />
+                          Request info
+                        </Button>
+                      </div>
                     </CardFooter>
                   </Card>
                 );
