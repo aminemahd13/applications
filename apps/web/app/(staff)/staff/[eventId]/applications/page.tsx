@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEventBasePath } from "@/hooks/use-event-base-path";
 import {
   Search,
   Download,
-  Filter,
+  Save,
+  Plus,
+  X,
+  Pencil,
   ArrowUpDown,
   ChevronLeft,
   ChevronRight,
@@ -70,11 +73,28 @@ import {
 } from "@/components/shared";
 import { apiClient } from "@/lib/api";
 import {
-  buildApplicationsFilterSignature,
-  buildApplicationsListQuery,
+  buildApplicationsQueryRequest,
+  buildApplicationsQuerySignature,
+  createAdvancedConditionNode,
+  createEmptyAdvancedFilterTree,
+  createQuickFilters,
+  decodeFilterTreeFromUrl,
+  encodeFilterTreeForUrl,
+  fromApiFilterTree,
   formatProgressLabel,
+  getFilterTreeStats,
   parseTagFilterInput,
+  quickFiltersToApiFilterTree,
+  quickFiltersToAdvancedTree,
+  toApiFilterTree,
+  type ApplicationsApiFilterGroup,
+  type ApplicationsFilterConditionNode,
+  type ApplicationsFilterConditionType,
+  type ApplicationsFilterGroupNode,
+  type ApplicationsFilterNode,
   type ApplicationsAdvancedFilters,
+  type ApplicationsQuickFilters,
+  type ApplicationsSavedViewMode,
   type CompletionBucketValue,
   type DecisionStatusFilterValue,
   type DerivedStatusFilterValue,
@@ -182,6 +202,92 @@ const INITIAL_ADVANCED_FILTERS: ApplicationsAdvancedFilters = {
   needsRevisionOnly: false,
 };
 
+const APPLICATIONS_VIEW_QUERY_PARAM = "applicationsView";
+const APPLICATIONS_MODE_QUERY_PARAM = "applicationsMode";
+const APPLICATIONS_TREE_QUERY_PARAM = "applicationsTree";
+const NO_SAVED_VIEW_VALUE = "__none__";
+
+interface ApplicationSavedView {
+  id: string;
+  name: string;
+  mode: ApplicationsSavedViewMode;
+  filterTree: ApplicationsApiFilterGroup;
+  quickState?: Partial<ApplicationsQuickFilters>;
+  createdBy: string;
+  createdByEmail?: string;
+  createdByName?: string | null;
+}
+
+interface FilterChip {
+  id: string;
+  label: string;
+  onRemove: () => void;
+}
+
+function updateFilterNodeById(
+  tree: ApplicationsFilterGroupNode,
+  nodeId: string,
+  updater: (node: ApplicationsFilterNode) => ApplicationsFilterNode,
+): ApplicationsFilterGroupNode {
+  const walk = (node: ApplicationsFilterNode): ApplicationsFilterNode => {
+    if (node.id === nodeId) {
+      return updater(node);
+    }
+    if (node.type !== "group") {
+      return node;
+    }
+    return {
+      ...node,
+      children: node.children.map((child) => walk(child)),
+    };
+  };
+  return walk(tree) as ApplicationsFilterGroupNode;
+}
+
+function removeFilterNodeById(
+  tree: ApplicationsFilterGroupNode,
+  nodeId: string,
+): ApplicationsFilterGroupNode {
+  const walk = (group: ApplicationsFilterGroupNode): ApplicationsFilterGroupNode => ({
+    ...group,
+    children: group.children
+      .filter((child) => child.id !== nodeId)
+      .map((child) =>
+        child.type === "group" ? walk(child as ApplicationsFilterGroupNode) : child,
+      ),
+  });
+  return walk(tree);
+}
+
+function addChildFilterNode(
+  tree: ApplicationsFilterGroupNode,
+  groupId: string,
+  child: ApplicationsFilterNode,
+): ApplicationsFilterGroupNode {
+  return updateFilterNodeById(tree, groupId, (node) => {
+    if (node.type !== "group") return node;
+    return {
+      ...node,
+      children: [...node.children, child],
+    };
+  });
+}
+
+function collectAdvancedConditionNodes(
+  group: ApplicationsFilterGroupNode,
+): ApplicationsFilterConditionNode[] {
+  const nodes: ApplicationsFilterConditionNode[] = [];
+  const walk = (node: ApplicationsFilterNode) => {
+    if (node.type === "group") {
+      node.children.forEach(walk);
+      return;
+    }
+    nodes.push(node);
+  };
+  walk(group);
+  return nodes;
+}
+
 /** Normalise an API ApplicationSummary â†’ frontend Application */
 function normalizeApplication(raw: Record<string, unknown>): Application {
   const ss = raw.stepsSummary as
@@ -222,6 +328,8 @@ function filenameFromContentDisposition(
 export default function ApplicationsListPage() {
   const params = useParams();
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const eventId = params.eventId as string;
   const basePath = useEventBasePath();
   const { csrfToken } = useAuth();
@@ -255,8 +363,7 @@ export default function ApplicationsListPage() {
     pageSize: 20,
   });
   const [searchInput, setSearchInput] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [filterMode, setFilterMode] = useState<ApplicationsSavedViewMode>("quick");
   const [derivedStatusFilter, setDerivedStatusFilter] = useState<
     DerivedStatusFilterValue[]
   >([]);
@@ -272,6 +379,18 @@ export default function ApplicationsListPage() {
     CompletionBucketValue[]
   >([]);
   const [needsRevisionOnlyFilter, setNeedsRevisionOnlyFilter] = useState(false);
+  const [advancedFilterTree, setAdvancedFilterTree] = useState<ApplicationsFilterGroupNode>(
+    createEmptyAdvancedFilterTree()
+  );
+  const [savedViews, setSavedViews] = useState<ApplicationSavedView[]>([]);
+  const [selectedViewId, setSelectedViewId] = useState(NO_SAVED_VIEW_VALUE);
+  const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
+  const [showRenameViewDialog, setShowRenameViewDialog] = useState(false);
+  const [saveViewName, setSaveViewName] = useState("");
+  const [renameViewName, setRenameViewName] = useState("");
+  const [isSavingView, setIsSavingView] = useState(false);
+  const [isRenamingView, setIsRenamingView] = useState(false);
+  const [isDeletingView, setIsDeletingView] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Application | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showBulkTags, setShowBulkTags] = useState(false);
@@ -307,12 +426,18 @@ export default function ApplicationsListPage() {
   const [isSavingTemplate, setIsSavingTemplate] = useState(false);
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
   const applicationsRequestVersionRef = useRef(0);
+  const hasInitializedFiltersFromUrlRef = useRef(false);
+  const selectedViewIdRef = useRef(NO_SAVED_VIEW_VALUE);
   const hasMoreApplicationsRef = useRef(false);
   const nextCursorRef = useRef<string | null>(null);
   const isLoadingMoreApplicationsRef = useRef(false);
-  const searchQueryRef = useRef("");
-  const advancedFiltersRef = useRef<ApplicationsAdvancedFilters>(
-    INITIAL_ADVANCED_FILTERS
+  const applicationsQueryRef = useRef<ReturnType<typeof buildApplicationsQueryRequest>>(
+    buildApplicationsQueryRequest({
+      limit: APPLICATIONS_PAGE_SIZE,
+      mode: "quick",
+      quickFilters: createQuickFilters(),
+      advancedTree: createEmptyAdvancedFilterTree(),
+    })
   );
   const applicationsRef = useRef<Application[]>([]);
 
@@ -341,6 +466,31 @@ export default function ApplicationsListPage() {
     ]
   );
 
+  const quickFilters = useMemo<ApplicationsQuickFilters>(
+    () =>
+      createQuickFilters({
+        searchQuery: searchInput.trim(),
+        ...advancedFilters,
+      }),
+    [advancedFilters, searchInput]
+  );
+
+  const advancedFilterStats = useMemo(
+    () => getFilterTreeStats(advancedFilterTree),
+    [advancedFilterTree]
+  );
+
+  const applicationsQuery = useMemo(
+    () =>
+      buildApplicationsQueryRequest({
+        limit: APPLICATIONS_PAGE_SIZE,
+        mode: filterMode,
+        quickFilters,
+        advancedTree: advancedFilterTree,
+      }),
+    [advancedFilterTree, filterMode, quickFilters]
+  );
+
   useEffect(() => {
     hasMoreApplicationsRef.current = hasMoreApplications;
   }, [hasMoreApplications]);
@@ -354,38 +504,27 @@ export default function ApplicationsListPage() {
   }, [isLoadingMoreApplications]);
 
   useEffect(() => {
-    searchQueryRef.current = searchQuery;
-  }, [searchQuery]);
+    selectedViewIdRef.current = selectedViewId;
+  }, [selectedViewId]);
 
   useEffect(() => {
-    advancedFiltersRef.current = advancedFilters;
-  }, [advancedFilters]);
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setSearchQuery(searchInput.trim());
-    }, 250);
-    return () => window.clearTimeout(timeout);
-  }, [searchInput]);
+    applicationsQueryRef.current = applicationsQuery;
+  }, [applicationsQuery]);
 
   const fetchApplicationsPage = useCallback(
-    async (params?: {
-      cursor?: string | null;
-      query?: string;
-      filters?: ApplicationsAdvancedFilters;
-    }) => {
+    async (params?: { cursor?: string | null }) => {
       const cursor = params?.cursor ?? null;
-      const queryValue = params?.query?.trim() ?? "";
-      const filterValue = params?.filters ?? advancedFiltersRef.current;
-      const query = buildApplicationsListQuery({
-        limit: APPLICATIONS_PAGE_SIZE,
-        cursor,
-        searchQuery: queryValue,
-        filters: filterValue,
-      });
+      const body = {
+        ...applicationsQueryRef.current,
+        ...(cursor ? { cursor } : {}),
+      };
 
       const res = await apiClient<ApplicationsListResponse>(
-        `/events/${eventId}/applications?${query.toString()}`
+        `/events/${eventId}/applications/query`,
+        {
+          method: "POST",
+          body,
+        }
       );
 
       const raw = Array.isArray(res)
@@ -438,8 +577,6 @@ export default function ApplicationsListPage() {
     try {
       const page = await fetchApplicationsPage({
         cursor: isAppend ? nextCursorRef.current : null,
-        query: searchQueryRef.current,
-        filters: advancedFiltersRef.current,
       });
 
       if (requestVersion !== applicationsRequestVersionRef.current) {
@@ -512,6 +649,39 @@ export default function ApplicationsListPage() {
     setDecisionTemplates(Array.isArray(templateRes.data) ? templateRes.data : []);
   }, [canDraftDecisions, eventId]);
 
+  const loadSavedViews = useCallback(async () => {
+    const res = await apiClient<{ data?: ApplicationSavedView[] }>(
+      `/events/${eventId}/applications/views`
+    ).catch(() => ({ data: [] }));
+    setSavedViews(Array.isArray(res.data) ? res.data : []);
+  }, [eventId]);
+
+  const applyQuickFiltersState = useCallback((state?: Partial<ApplicationsQuickFilters>) => {
+    const normalized = createQuickFilters(state);
+    setSearchInput(normalized.searchQuery);
+    setDerivedStatusFilter(normalized.derivedStatus);
+    setDecisionStatusFilter(normalized.decisionStatus);
+    setStepFilterId(normalized.stepId);
+    setStepStatusFilter(normalized.stepStatus);
+    setReviewerFilterId(normalized.reviewerId);
+    setTagsFilterInput(normalized.tagsInput);
+    setHasDraftProgressFilter(normalized.hasDraftProgress);
+    setCompletionBucketFilter(normalized.completionBucket);
+    setNeedsRevisionOnlyFilter(normalized.needsRevisionOnly);
+  }, []);
+
+  const applySavedView = useCallback(
+    (view: ApplicationSavedView) => {
+      setFilterMode(view.mode);
+      if (view.mode === "advanced") {
+        setAdvancedFilterTree(fromApiFilterTree(view.filterTree));
+      } else {
+        applyQuickFiltersState(view.quickState);
+      }
+    },
+    [applyQuickFiltersState]
+  );
+
   function resetTemplateEditor() {
     setEditingTemplateId(null);
     setTemplateName("");
@@ -524,6 +694,7 @@ export default function ApplicationsListPage() {
   useEffect(() => {
     (async () => {
       try {
+        await loadSavedViews();
         if (canAssignReviewers) {
           const reviewerRes = await apiClient<{ data?: ReviewerOption[] }>(
             `/events/${eventId}/review-queue/reviewers`,
@@ -552,16 +723,83 @@ export default function ApplicationsListPage() {
     canAssignReviewers,
     canDraftDecisions,
     eventId,
+    loadSavedViews,
     refreshDecisionTemplates,
   ]);
 
+  useEffect(() => {
+    if (hasInitializedFiltersFromUrlRef.current) return;
+    const modeFromUrl = searchParams.get(APPLICATIONS_MODE_QUERY_PARAM);
+    const treeFromUrl = searchParams.get(APPLICATIONS_TREE_QUERY_PARAM);
+    const viewFromUrl = searchParams.get(APPLICATIONS_VIEW_QUERY_PARAM);
+
+    if (viewFromUrl) {
+      setSelectedViewId(viewFromUrl);
+    }
+
+    if (modeFromUrl === "advanced" && treeFromUrl) {
+      const decodedTree = decodeFilterTreeFromUrl(treeFromUrl);
+      if (decodedTree) {
+        setFilterMode("advanced");
+        setAdvancedFilterTree(fromApiFilterTree(decodedTree));
+      }
+    }
+    hasInitializedFiltersFromUrlRef.current = true;
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (selectedViewIdRef.current === NO_SAVED_VIEW_VALUE) return;
+    const selectedView = savedViews.find((view) => view.id === selectedViewIdRef.current);
+    if (!selectedView) return;
+    applySavedView(selectedView);
+  }, [applySavedView, savedViews]);
+
   const filterSignature = useMemo(
-    () => buildApplicationsFilterSignature(searchQuery, advancedFilters),
-    [advancedFilters, searchQuery]
+    () =>
+      buildApplicationsQuerySignature({
+        mode: filterMode,
+        quickFilters,
+        advancedTree: advancedFilterTree,
+      }),
+    [advancedFilterTree, filterMode, quickFilters]
   );
 
   useEffect(() => {
-    void refreshApplications({ resetPageIndex: true, clearSelection: true });
+    const nextParams = new URLSearchParams(searchParams.toString());
+    if (selectedViewId !== NO_SAVED_VIEW_VALUE) {
+      nextParams.set(APPLICATIONS_VIEW_QUERY_PARAM, selectedViewId);
+      nextParams.delete(APPLICATIONS_MODE_QUERY_PARAM);
+      nextParams.delete(APPLICATIONS_TREE_QUERY_PARAM);
+    } else {
+      nextParams.delete(APPLICATIONS_VIEW_QUERY_PARAM);
+      if (filterMode === "advanced") {
+        nextParams.set(APPLICATIONS_MODE_QUERY_PARAM, "advanced");
+        const encodedTree = encodeFilterTreeForUrl(toApiFilterTree(advancedFilterTree));
+        if (encodedTree) {
+          nextParams.set(APPLICATIONS_TREE_QUERY_PARAM, encodedTree);
+        } else {
+          nextParams.delete(APPLICATIONS_TREE_QUERY_PARAM);
+        }
+      } else {
+        nextParams.delete(APPLICATIONS_MODE_QUERY_PARAM);
+        nextParams.delete(APPLICATIONS_TREE_QUERY_PARAM);
+      }
+    }
+
+    const nextQuery = nextParams.toString();
+    const currentQuery = searchParams.toString();
+    if (nextQuery !== currentQuery) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, {
+        scroll: false,
+      });
+    }
+  }, [advancedFilterTree, filterMode, pathname, router, searchParams, selectedViewId]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void refreshApplications({ resetPageIndex: true, clearSelection: true });
+    }, 350);
+    return () => window.clearTimeout(timeout);
   }, [filterSignature, refreshApplications]);
 
   const filteredData = applications;
@@ -604,61 +842,171 @@ export default function ApplicationsListPage() {
     () => parseTagFilterInput(tagsFilterInput),
     [tagsFilterInput]
   );
+  const advancedConditionNodes = useMemo(
+    () => collectAdvancedConditionNodes(advancedFilterTree),
+    [advancedFilterTree]
+  );
+  const formatAdvancedConditionLabel = useCallback(
+    (condition: ApplicationsFilterConditionNode): string => {
+      const prefix = condition.negate ? "NOT " : "";
+      switch (condition.type) {
+        case "search_text":
+          return `${prefix}Search: ${condition.value || "(empty)"}`;
+        case "decision_status":
+          return `${prefix}Decision in: ${condition.values.join(", ")}`;
+        case "derived_status":
+          return `${prefix}Status in: ${condition.values.join(", ")}`;
+        case "step_status": {
+          const stepLabel =
+            sortedWorkflowSteps.find((step) => step.id === condition.stepId)?.title ??
+            (condition.stepId || "Step");
+          return `${prefix}Step ${stepLabel} in: ${condition.statuses.join(", ")}`;
+        }
+        case "assigned_reviewer":
+          if (condition.matcher === "any") return `${prefix}Reviewer: any`;
+          if (condition.matcher === "unassigned") return `${prefix}Reviewer: unassigned`;
+          return `${prefix}Reviewer: ${condition.reviewerId ?? "specific"}`;
+        case "tags_any":
+          return `${prefix}Any tags: ${condition.values.join(", ")}`;
+        case "tags_all":
+          return `${prefix}All tags: ${condition.values.join(", ")}`;
+        case "tags_none":
+          return `${prefix}No tags: ${condition.values.join(", ")}`;
+        case "completion_bucket":
+          return `${prefix}Completion in: ${condition.values.join(", ")}`;
+        case "has_draft_progress":
+          return `${prefix}Has draft progress: ${condition.value ? "yes" : "no"}`;
+        case "needs_revision":
+          return `${prefix}Needs revision: ${condition.value ? "yes" : "no"}`;
+        default:
+          return "Condition";
+      }
+    },
+    [sortedWorkflowSteps]
+  );
   const activeFilterChips = useMemo(() => {
-    const chips: string[] = [];
-    if (derivedStatusFilter.length > 0) {
-      const labels = DERIVED_STATUS_OPTIONS.filter((option) =>
-        derivedStatusFilter.includes(option.value)
-      ).map((option) => option.label);
-      chips.push(`Status: ${labels.join(", ")}`);
+    const chips: FilterChip[] = [];
+    if (filterMode === "quick") {
+      if (searchInput.trim().length > 0) {
+        chips.push({
+          id: "quick:search",
+          label: `Search: ${searchInput.trim()}`,
+          onRemove: () => setSearchInput(""),
+        });
+      }
+      derivedStatusFilter.forEach((value) => {
+        const label =
+          DERIVED_STATUS_OPTIONS.find((option) => option.value === value)?.label ?? value;
+        chips.push({
+          id: `quick:derived:${value}`,
+          label: `Status: ${label}`,
+          onRemove: () =>
+            setDerivedStatusFilter((previous) =>
+              previous.filter((entry) => entry !== value),
+            ),
+        });
+      });
+      if (decisionStatusFilter !== "all") {
+        const label =
+          DECISION_STATUS_OPTIONS.find((option) => option.value === decisionStatusFilter)
+            ?.label ?? decisionStatusFilter;
+        chips.push({
+          id: "quick:decision",
+          label: `Decision: ${label}`,
+          onRemove: () => setDecisionStatusFilter("all"),
+        });
+      }
+      if (stepFilterId !== "__any__" && stepStatusFilter !== "all") {
+        const stepLabel =
+          sortedWorkflowSteps.find((step) => step.id === stepFilterId)?.title ??
+          "Selected step";
+        const statusLabel =
+          STEP_STATUS_OPTIONS.find((option) => option.value === stepStatusFilter)
+            ?.label ?? stepStatusFilter;
+        chips.push({
+          id: "quick:step",
+          label: `Step: ${stepLabel} (${statusLabel})`,
+          onRemove: () => {
+            setStepFilterId("__any__");
+            setStepStatusFilter("all");
+          },
+        });
+      }
+      if (reviewerFilterId !== "__any__") {
+        const reviewerLabel =
+          reviewers.find((reviewer) => reviewer.userId === reviewerFilterId)?.fullName ??
+          reviewers.find((reviewer) => reviewer.userId === reviewerFilterId)?.email ??
+          "Assigned reviewer";
+        chips.push({
+          id: "quick:reviewer",
+          label: `Reviewer: ${reviewerLabel}`,
+          onRemove: () => setReviewerFilterId("__any__"),
+        });
+      }
+      parsedTagFilters.forEach((tag) => {
+        chips.push({
+          id: `quick:tag:${tag}`,
+          label: `Tag: ${tag}`,
+          onRemove: () => {
+            const next = parsedTagFilters.filter((value) => value !== tag);
+            setTagsFilterInput(next.join(", "));
+          },
+        });
+      });
+      if (hasDraftProgressFilter) {
+        chips.push({
+          id: "quick:draft",
+          label: "Has draft progress",
+          onRemove: () => setHasDraftProgressFilter(false),
+        });
+      }
+      completionBucketFilter.forEach((bucket) => {
+        const label =
+          COMPLETION_BUCKET_OPTIONS.find((option) => option.value === bucket)?.label ??
+          bucket;
+        chips.push({
+          id: `quick:completion:${bucket}`,
+          label: `Completion: ${label}`,
+          onRemove: () =>
+            setCompletionBucketFilter((previous) =>
+              previous.filter((entry) => entry !== bucket),
+            ),
+        });
+      });
+      if (needsRevisionOnlyFilter) {
+        chips.push({
+          id: "quick:needs-revision",
+          label: "Needs revision only",
+          onRemove: () => setNeedsRevisionOnlyFilter(false),
+        });
+      }
+      return chips;
     }
-    if (decisionStatusFilter !== "all") {
-      const label =
-        DECISION_STATUS_OPTIONS.find((option) => option.value === decisionStatusFilter)
-          ?.label ?? decisionStatusFilter;
-      chips.push(`Decision: ${label}`);
-    }
-    if (stepFilterId !== "__any__" && stepStatusFilter !== "all") {
-      const stepLabel =
-        sortedWorkflowSteps.find((step) => step.id === stepFilterId)?.title ??
-        "Selected step";
-      const statusLabel =
-        STEP_STATUS_OPTIONS.find((option) => option.value === stepStatusFilter)
-          ?.label ?? stepStatusFilter;
-      chips.push(`Step: ${stepLabel} (${statusLabel})`);
-    }
-    if (reviewerFilterId !== "__any__") {
-      const reviewerLabel =
-        reviewers.find((reviewer) => reviewer.userId === reviewerFilterId)?.fullName ??
-        reviewers.find((reviewer) => reviewer.userId === reviewerFilterId)?.email ??
-        "Assigned reviewer";
-      chips.push(`Reviewer: ${reviewerLabel}`);
-    }
-    if (parsedTagFilters.length > 0) {
-      chips.push(`Tags (all): ${parsedTagFilters.join(", ")}`);
-    }
-    if (hasDraftProgressFilter) {
-      chips.push("Has draft progress");
-    }
-    if (completionBucketFilter.length > 0) {
-      const labels = COMPLETION_BUCKET_OPTIONS.filter((option) =>
-        completionBucketFilter.includes(option.value)
-      ).map((option) => option.label);
-      chips.push(`Completion: ${labels.join(", ")}`);
-    }
-    if (needsRevisionOnlyFilter) {
-      chips.push("Needs revision only");
-    }
+
+    advancedConditionNodes.forEach((condition) => {
+      chips.push({
+        id: `advanced:${condition.id}`,
+        label: formatAdvancedConditionLabel(condition),
+        onRemove: () =>
+          setAdvancedFilterTree((previous) =>
+            removeFilterNodeById(previous, condition.id),
+          ),
+      });
+    });
     return chips;
   }, [
+    advancedConditionNodes,
     completionBucketFilter,
     decisionStatusFilter,
     derivedStatusFilter,
+    filterMode,
+    formatAdvancedConditionLabel,
     hasDraftProgressFilter,
     needsRevisionOnlyFilter,
     parsedTagFilters,
     reviewerFilterId,
     reviewers,
+    searchInput,
     sortedWorkflowSteps,
     stepFilterId,
     stepStatusFilter,
@@ -685,16 +1033,589 @@ export default function ApplicationsListPage() {
   );
 
   const clearAllFilters = useCallback(() => {
-    setDerivedStatusFilter([]);
-    setDecisionStatusFilter("all");
-    setStepFilterId("__any__");
-    setStepStatusFilter("all");
-    setReviewerFilterId("__any__");
-    setTagsFilterInput("");
-    setHasDraftProgressFilter(false);
-    setCompletionBucketFilter([]);
-    setNeedsRevisionOnlyFilter(false);
+    if (filterMode === "advanced") {
+      setAdvancedFilterTree(createEmptyAdvancedFilterTree());
+      setSelectedViewId(NO_SAVED_VIEW_VALUE);
+      return;
+    }
+    applyQuickFiltersState({
+      ...INITIAL_ADVANCED_FILTERS,
+      searchQuery: "",
+    });
+    setSelectedViewId(NO_SAVED_VIEW_VALUE);
+  }, [applyQuickFiltersState, filterMode]);
+
+  const switchToQuickMode = useCallback(() => {
+    setFilterMode("quick");
+    setSelectedViewId(NO_SAVED_VIEW_VALUE);
   }, []);
+
+  const switchToAdvancedMode = useCallback(() => {
+    setFilterMode("advanced");
+    setSelectedViewId(NO_SAVED_VIEW_VALUE);
+    setAdvancedFilterTree(quickFiltersToAdvancedTree(quickFilters));
+  }, [quickFilters]);
+
+  const addConditionToGroup = useCallback(
+    (groupId: string, type: ApplicationsFilterConditionType = "search_text") => {
+      if (advancedFilterStats.conditionCount >= 40) {
+        toast.error("Maximum 40 conditions reached");
+        return;
+      }
+      const newCondition = createAdvancedConditionNode(type, {
+        stepId: sortedWorkflowSteps[0]?.id,
+        reviewerId: reviewers[0]?.userId,
+      });
+      setAdvancedFilterTree((previous) =>
+        addChildFilterNode(previous, groupId, newCondition),
+      );
+      setSelectedViewId(NO_SAVED_VIEW_VALUE);
+    },
+    [advancedFilterStats.conditionCount, reviewers, sortedWorkflowSteps]
+  );
+
+  const addGroupToGroup = useCallback((groupId: string) => {
+    const newGroup = createEmptyAdvancedFilterTree();
+    setAdvancedFilterTree((previous) => addChildFilterNode(previous, groupId, newGroup));
+    setSelectedViewId(NO_SAVED_VIEW_VALUE);
+  }, []);
+
+  const removeAdvancedNode = useCallback((nodeId: string) => {
+    setAdvancedFilterTree((previous) => removeFilterNodeById(previous, nodeId));
+    setSelectedViewId(NO_SAVED_VIEW_VALUE);
+  }, []);
+
+  const selectSavedView = useCallback(
+    (viewId: string) => {
+      setSelectedViewId(viewId);
+      if (viewId === NO_SAVED_VIEW_VALUE) return;
+      const view = savedViews.find((entry) => entry.id === viewId);
+      if (!view) return;
+      applySavedView(view);
+    },
+    [applySavedView, savedViews]
+  );
+
+  const openRenameViewDialog = useCallback(() => {
+    const selected = savedViews.find((entry) => entry.id === selectedViewId);
+    if (!selected) return;
+    setRenameViewName(selected.name);
+    setShowRenameViewDialog(true);
+  }, [savedViews, selectedViewId]);
+
+  const currentSavedViewPayload = useMemo(
+    () => ({
+      mode: filterMode,
+      filterTree:
+        filterMode === "quick"
+          ? quickFiltersToApiFilterTree(quickFilters)
+          : toApiFilterTree(advancedFilterTree),
+      quickState: quickFilters,
+    }),
+    [advancedFilterTree, filterMode, quickFilters]
+  );
+
+  const saveCurrentView = useCallback(async () => {
+    const name = saveViewName.trim();
+    if (!name) {
+      toast.error("View name is required");
+      return;
+    }
+    setIsSavingView(true);
+    try {
+      const res = await apiClient<{ data?: ApplicationSavedView }>(
+        `/events/${eventId}/applications/views`,
+        {
+          method: "POST",
+          body: {
+            name,
+            ...currentSavedViewPayload,
+          },
+          csrfToken: csrfToken ?? undefined,
+        }
+      );
+      await loadSavedViews();
+      if (res?.data?.id) {
+        setSelectedViewId(res.data.id);
+      }
+      setShowSaveViewDialog(false);
+      setSaveViewName("");
+      toast.success("Saved view created");
+    } catch {
+      /* handled */
+    } finally {
+      setIsSavingView(false);
+    }
+  }, [
+    csrfToken,
+    currentSavedViewPayload,
+    eventId,
+    loadSavedViews,
+    saveViewName,
+  ]);
+
+  const renameSelectedView = useCallback(async () => {
+    if (selectedViewId === NO_SAVED_VIEW_VALUE) return;
+    const name = renameViewName.trim();
+    if (!name) {
+      toast.error("View name is required");
+      return;
+    }
+    setIsRenamingView(true);
+    try {
+      await apiClient(`/events/${eventId}/applications/views/${selectedViewId}`, {
+        method: "PATCH",
+        body: { name },
+        csrfToken: csrfToken ?? undefined,
+      });
+      await loadSavedViews();
+      setShowRenameViewDialog(false);
+      toast.success("Saved view renamed");
+    } catch {
+      /* handled */
+    } finally {
+      setIsRenamingView(false);
+    }
+  }, [
+    csrfToken,
+    eventId,
+    loadSavedViews,
+    renameViewName,
+    selectedViewId,
+  ]);
+
+  const deleteSelectedView = useCallback(async () => {
+    if (selectedViewId === NO_SAVED_VIEW_VALUE || isDeletingView) return;
+    setIsDeletingView(true);
+    try {
+      await apiClient(`/events/${eventId}/applications/views/${selectedViewId}`, {
+        method: "DELETE",
+        csrfToken: csrfToken ?? undefined,
+      });
+      await loadSavedViews();
+      setSelectedViewId(NO_SAVED_VIEW_VALUE);
+      toast.success("Saved view deleted");
+    } catch {
+      /* handled */
+    } finally {
+      setIsDeletingView(false);
+    }
+  }, [csrfToken, eventId, isDeletingView, loadSavedViews, selectedViewId]);
+
+  const updateAdvancedConditionNode = useCallback(
+    (
+      nodeId: string,
+      updater: (node: ApplicationsFilterConditionNode) => ApplicationsFilterConditionNode,
+    ) => {
+      setAdvancedFilterTree((previous) =>
+        updateFilterNodeById(previous, nodeId, (node) => {
+          if (node.type === "group") return node;
+          return updater(node);
+        }),
+      );
+      setSelectedViewId(NO_SAVED_VIEW_VALUE);
+    },
+    [],
+  );
+
+  function renderAdvancedConditionEditor(condition: ApplicationsFilterConditionNode) {
+    return (
+      <div
+        key={condition.id}
+        className="space-y-3 rounded-md border border-border/60 bg-background p-3"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={condition.type}
+            onValueChange={(value) => {
+              const next = createAdvancedConditionNode(
+                value as ApplicationsFilterConditionType,
+                {
+                  stepId: sortedWorkflowSteps[0]?.id,
+                  reviewerId: reviewers[0]?.userId,
+                },
+              );
+              updateAdvancedConditionNode(condition.id, () => ({
+                ...next,
+                id: condition.id,
+                negate: condition.negate,
+              }));
+            }}
+          >
+            <SelectTrigger className="h-8 w-[220px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="search_text">Search text</SelectItem>
+              <SelectItem value="decision_status">Decision status</SelectItem>
+              <SelectItem value="derived_status">Derived status</SelectItem>
+              <SelectItem value="step_status">Step status</SelectItem>
+              <SelectItem value="assigned_reviewer">Assigned reviewer</SelectItem>
+              <SelectItem value="tags_any">Tags any</SelectItem>
+              <SelectItem value="tags_all">Tags all</SelectItem>
+              <SelectItem value="tags_none">Tags none</SelectItem>
+              <SelectItem value="completion_bucket">Completion bucket</SelectItem>
+              <SelectItem value="has_draft_progress">Has draft progress</SelectItem>
+              <SelectItem value="needs_revision">Needs revision</SelectItem>
+            </SelectContent>
+          </Select>
+          <div className="ml-auto flex items-center gap-2">
+            <Label className="text-xs text-muted-foreground">NOT</Label>
+            <Switch
+              checked={Boolean(condition.negate)}
+              onCheckedChange={(checked) =>
+                updateAdvancedConditionNode(condition.id, () => ({
+                  ...condition,
+                  negate: checked,
+                }))
+              }
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={() => removeAdvancedNode(condition.id)}
+            >
+              Remove
+            </Button>
+          </div>
+        </div>
+
+        {condition.type === "search_text" && (
+          <Input
+            value={condition.value}
+            onChange={(event) =>
+              updateAdvancedConditionNode(condition.id, () => ({
+                ...condition,
+                value: event.target.value,
+              }))
+            }
+            placeholder="Name or email contains..."
+          />
+        )}
+
+        {condition.type === "decision_status" && (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {DECISION_STATUS_OPTIONS.filter((option) => option.value !== "all").map(
+              (option) => {
+                const decisionValue = option.value as Exclude<
+                  DecisionStatusFilterValue,
+                  "all"
+                >;
+                return (
+                  <label key={option.value} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={condition.values.includes(decisionValue)}
+                      onCheckedChange={() =>
+                        updateAdvancedConditionNode(condition.id, (node) => {
+                          const values = (node as any).values as string[];
+                          return {
+                            ...node,
+                            values: values.includes(decisionValue)
+                              ? values.filter((entry) => entry !== decisionValue)
+                              : [...values, decisionValue],
+                          } as ApplicationsFilterConditionNode;
+                        })
+                      }
+                    />
+                    <span>{option.label}</span>
+                  </label>
+                );
+              },
+            )}
+          </div>
+        )}
+
+        {condition.type === "derived_status" && (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {DERIVED_STATUS_OPTIONS.map((option) => (
+              <label key={option.value} className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={condition.values.includes(option.value)}
+                  onCheckedChange={() =>
+                    updateAdvancedConditionNode(condition.id, (node) => {
+                      const values = (node as any).values as string[];
+                      return {
+                        ...node,
+                        values: values.includes(option.value)
+                          ? values.filter((entry) => entry !== option.value)
+                          : [...values, option.value],
+                      } as ApplicationsFilterConditionNode;
+                    })
+                  }
+                />
+                <span>{option.label}</span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        {condition.type === "step_status" && (
+          <div className="space-y-3">
+            <Select
+              value={condition.stepId || "__none__"}
+              onValueChange={(value) =>
+                updateAdvancedConditionNode(condition.id, () => ({
+                  ...condition,
+                  stepId: value === "__none__" ? "" : value,
+                }))
+              }
+            >
+              <SelectTrigger className="h-8">
+                <SelectValue placeholder="Select step" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Select step</SelectItem>
+                {sortedWorkflowSteps.map((step) => (
+                  <SelectItem key={step.id} value={step.id}>
+                    {step.stepIndex + 1}. {step.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {STEP_STATUS_OPTIONS.filter((option) => option.value !== "all").map(
+                (option) => {
+                  const statusValue = option.value as Exclude<
+                    StepStatusFilterValue,
+                    "all"
+                  >;
+                  return (
+                    <label key={option.value} className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={condition.statuses.includes(statusValue)}
+                        onCheckedChange={() =>
+                          updateAdvancedConditionNode(condition.id, (node) => {
+                            const statuses = (node as any).statuses as string[];
+                            return {
+                              ...node,
+                              statuses: statuses.includes(statusValue)
+                                ? statuses.filter((entry) => entry !== statusValue)
+                                : [...statuses, statusValue],
+                            } as ApplicationsFilterConditionNode;
+                          })
+                        }
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  );
+                },
+              )}
+            </div>
+          </div>
+        )}
+
+        {condition.type === "assigned_reviewer" && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Select
+              value={condition.matcher}
+              onValueChange={(value) =>
+                updateAdvancedConditionNode(condition.id, () => ({
+                  ...condition,
+                  matcher: value as "any" | "unassigned" | "specific",
+                  ...(value === "specific"
+                    ? { reviewerId: condition.reviewerId ?? reviewers[0]?.userId ?? "" }
+                    : { reviewerId: undefined }),
+                }))
+              }
+            >
+              <SelectTrigger className="h-8">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="any">Any reviewer</SelectItem>
+                <SelectItem value="unassigned">Unassigned</SelectItem>
+                <SelectItem value="specific">Specific reviewer</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {condition.matcher === "specific" && (
+              <Select
+                value={condition.reviewerId ?? "__none__"}
+                onValueChange={(value) =>
+                  updateAdvancedConditionNode(condition.id, () => ({
+                    ...condition,
+                    reviewerId: value === "__none__" ? "" : value,
+                  }))
+                }
+              >
+                <SelectTrigger className="h-8">
+                  <SelectValue placeholder="Select reviewer" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Select reviewer</SelectItem>
+                  {reviewers.map((reviewer) => (
+                    <SelectItem key={reviewer.userId} value={reviewer.userId}>
+                      {reviewer.fullName ?? reviewer.email}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+        )}
+
+        {(condition.type === "tags_any" ||
+          condition.type === "tags_all" ||
+          condition.type === "tags_none") && (
+          <Input
+            value={condition.values.join(", ")}
+            onChange={(event) =>
+              updateAdvancedConditionNode(condition.id, () => ({
+                ...condition,
+                values: parseTagFilterInput(event.target.value),
+              }))
+            }
+            placeholder="vip, shortlisted"
+          />
+        )}
+
+        {condition.type === "completion_bucket" && (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {COMPLETION_BUCKET_OPTIONS.map((option) => (
+              <label key={option.value} className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={condition.values.includes(option.value)}
+                  onCheckedChange={() =>
+                    updateAdvancedConditionNode(condition.id, (node) => {
+                      const values = (node as any).values as string[];
+                      return {
+                        ...node,
+                        values: values.includes(option.value)
+                          ? values.filter((entry) => entry !== option.value)
+                          : [...values, option.value],
+                      } as ApplicationsFilterConditionNode;
+                    })
+                  }
+                />
+                <span>{option.label}</span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        {(condition.type === "has_draft_progress" ||
+          condition.type === "needs_revision") && (
+          <div className="flex items-center justify-between rounded-md border border-border/60 p-3">
+            <p className="text-sm">
+              {condition.type === "has_draft_progress"
+                ? "Require draft progress"
+                : "Require needs revision"}
+            </p>
+            <Switch
+              checked={condition.value}
+              onCheckedChange={(checked) =>
+                updateAdvancedConditionNode(condition.id, () => ({
+                  ...condition,
+                  value: checked,
+                }))
+              }
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderAdvancedGroupEditor(
+    group: ApplicationsFilterGroupNode,
+    depth: number,
+    isRoot = false,
+  ) {
+    const canAddNestedGroup = depth < 3;
+    return (
+      <Card key={group.id} className="border-dashed">
+        <CardContent className="space-y-3 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="text-[11px] uppercase">
+              Group depth {depth}
+            </Badge>
+            <Select
+              value={group.mode}
+              onValueChange={(value) => {
+                setAdvancedFilterTree((previous) =>
+                  updateFilterNodeById(previous, group.id, (node) =>
+                    node.type === "group"
+                      ? { ...node, mode: value as "all" | "any" }
+                      : node,
+                  ),
+                );
+                setSelectedViewId(NO_SAVED_VIEW_VALUE);
+              }}
+            >
+              <SelectTrigger className="h-8 w-[210px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Match ALL conditions (AND)</SelectItem>
+                <SelectItem value="any">Match ANY condition (OR)</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <div className="ml-auto flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground">NOT</Label>
+              <Switch
+                checked={Boolean(group.negate)}
+                onCheckedChange={(checked) => {
+                  setAdvancedFilterTree((previous) =>
+                    updateFilterNodeById(previous, group.id, (node) =>
+                      node.type === "group" ? { ...node, negate: checked } : node,
+                    ),
+                  );
+                  setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                }}
+              />
+              {!isRoot && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => removeAdvancedNode(group.id)}
+                >
+                  Remove group
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => addConditionToGroup(group.id)}
+              disabled={advancedFilterStats.conditionCount >= 40}
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Add condition
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => addGroupToGroup(group.id)}
+              disabled={!canAddNestedGroup}
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Add group
+            </Button>
+          </div>
+
+          <div className="space-y-2">
+            {group.children.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Empty group. Add at least one condition.
+              </p>
+            ) : (
+              group.children.map((child) =>
+                child.type === "group"
+                  ? renderAdvancedGroupEditor(child, depth + 1, false)
+                  : renderAdvancedConditionEditor(child),
+              )
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   const handleNextPage = useCallback(async () => {
     const targetPageIndex = pagination.pageIndex + 1;
@@ -1362,41 +2283,102 @@ export default function ApplicationsListPage() {
 
       {/* Filters */}
       <div className="space-y-3">
-        <div className="flex flex-col gap-3 sm:flex-row">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by name or email..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              className="pl-9"
-            />
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
           <Button
-            variant="outline"
-            onClick={() => setShowAdvancedFilters((previous) => !previous)}
+            variant={filterMode === "quick" ? "default" : "outline"}
+            size="sm"
+            onClick={switchToQuickMode}
           >
-            <Filter className="mr-1.5 h-3.5 w-3.5" />
-            {showAdvancedFilters ? "Hide advanced filters" : "Advanced filters"}
+            Quick filters
+          </Button>
+          <Button
+            variant={filterMode === "advanced" ? "default" : "outline"}
+            size="sm"
+            onClick={switchToAdvancedMode}
+          >
+            Advanced builder
+          </Button>
+          <Select value={selectedViewId} onValueChange={selectSavedView}>
+            <SelectTrigger className="w-[240px]">
+              <SelectValue placeholder="Shared saved view" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_SAVED_VIEW_VALUE}>No saved view</SelectItem>
+              {savedViews.map((view) => (
+                <SelectItem key={view.id} value={view.id}>
+                  {view.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="outline" onClick={() => setShowSaveViewDialog(true)}>
+            <Save className="mr-1.5 h-3.5 w-3.5" />
+            Save view
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={openRenameViewDialog}
+            disabled={selectedViewId === NO_SAVED_VIEW_VALUE}
+          >
+            <Pencil className="mr-1.5 h-3.5 w-3.5" />
+            Rename
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-destructive hover:text-destructive"
+            onClick={deleteSelectedView}
+            disabled={selectedViewId === NO_SAVED_VIEW_VALUE || isDeletingView}
+          >
+            <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+            {isDeletingView ? "Deleting..." : "Delete view"}
           </Button>
           {hasActiveFilters && (
-            <Button variant="ghost" onClick={clearAllFilters}>
+            <Button size="sm" variant="ghost" onClick={clearAllFilters}>
               Clear all
             </Button>
           )}
         </div>
 
+        {filterMode === "quick" && (
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by name or email..."
+              value={searchInput}
+              onChange={(e) => {
+                setSearchInput(e.target.value);
+                setSelectedViewId(NO_SAVED_VIEW_VALUE);
+              }}
+              className="pl-9"
+            />
+          </div>
+        )}
+
         {hasActiveFilters && (
           <div className="flex flex-wrap gap-2">
             {activeFilterChips.map((chip) => (
-              <Badge key={chip} variant="secondary" className="text-xs">
-                {chip}
+              <Badge
+                key={chip.id}
+                variant="secondary"
+                className="inline-flex items-center gap-1 text-xs"
+              >
+                <span>{chip.label}</span>
+                <button
+                  type="button"
+                  onClick={chip.onRemove}
+                  className="rounded p-0.5 hover:bg-muted"
+                  aria-label={`Remove ${chip.label}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
               </Badge>
             ))}
           </div>
         )}
 
-        {showAdvancedFilters && (
+        {filterMode === "quick" && (
           <Card>
             <CardContent className="space-y-4 p-4">
               <div className="grid gap-4 lg:grid-cols-2">
@@ -1410,9 +2392,10 @@ export default function ApplicationsListPage() {
                       >
                         <Checkbox
                           checked={derivedStatusFilter.includes(option.value)}
-                          onCheckedChange={() =>
-                            toggleDerivedStatusFilter(option.value)
-                          }
+                          onCheckedChange={() => {
+                            toggleDerivedStatusFilter(option.value);
+                            setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                          }}
                         />
                         <span>{option.label}</span>
                       </label>
@@ -1424,9 +2407,10 @@ export default function ApplicationsListPage() {
                   <Label className="text-sm">Decision</Label>
                   <Select
                     value={decisionStatusFilter}
-                    onValueChange={(value) =>
-                      setDecisionStatusFilter(value as DecisionStatusFilterValue)
-                    }
+                    onValueChange={(value) => {
+                      setDecisionStatusFilter(value as DecisionStatusFilterValue);
+                      setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -1445,7 +2429,13 @@ export default function ApplicationsListPage() {
               <div className="grid gap-4 lg:grid-cols-3">
                 <div className="space-y-2">
                   <Label className="text-sm">Step</Label>
-                  <Select value={stepFilterId} onValueChange={setStepFilterId}>
+                  <Select
+                    value={stepFilterId}
+                    onValueChange={(value) => {
+                      setStepFilterId(value);
+                      setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                    }}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -1464,9 +2454,10 @@ export default function ApplicationsListPage() {
                   <Label className="text-sm">Step status</Label>
                   <Select
                     value={stepStatusFilter}
-                    onValueChange={(value) =>
-                      setStepStatusFilter(value as StepStatusFilterValue)
-                    }
+                    onValueChange={(value) => {
+                      setStepStatusFilter(value as StepStatusFilterValue);
+                      setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -1485,7 +2476,10 @@ export default function ApplicationsListPage() {
                   <Label className="text-sm">Assigned reviewer</Label>
                   <Select
                     value={reviewerFilterId}
-                    onValueChange={setReviewerFilterId}
+                    onValueChange={(value) => {
+                      setReviewerFilterId(value);
+                      setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -1506,7 +2500,10 @@ export default function ApplicationsListPage() {
                 <Label className="text-sm">Tags (match all)</Label>
                 <Input
                   value={tagsFilterInput}
-                  onChange={(event) => setTagsFilterInput(event.target.value)}
+                  onChange={(event) => {
+                    setTagsFilterInput(event.target.value);
+                    setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                  }}
                   placeholder="vip, shortlist"
                 />
               </div>
@@ -1522,9 +2519,10 @@ export default function ApplicationsListPage() {
                       >
                         <Checkbox
                           checked={completionBucketFilter.includes(option.value)}
-                          onCheckedChange={() =>
-                            toggleCompletionBucketFilter(option.value)
-                          }
+                          onCheckedChange={() => {
+                            toggleCompletionBucketFilter(option.value);
+                            setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                          }}
                         />
                         <span>{option.label}</span>
                       </label>
@@ -1542,7 +2540,10 @@ export default function ApplicationsListPage() {
                     </div>
                     <Switch
                       checked={hasDraftProgressFilter}
-                      onCheckedChange={setHasDraftProgressFilter}
+                      onCheckedChange={(checked) => {
+                        setHasDraftProgressFilter(checked);
+                        setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                      }}
                     />
                   </div>
 
@@ -1555,7 +2556,10 @@ export default function ApplicationsListPage() {
                     </div>
                     <Switch
                       checked={needsRevisionOnlyFilter}
-                      onCheckedChange={setNeedsRevisionOnlyFilter}
+                      onCheckedChange={(checked) => {
+                        setNeedsRevisionOnlyFilter(checked);
+                        setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                      }}
                     />
                   </div>
                 </div>
@@ -1563,7 +2567,72 @@ export default function ApplicationsListPage() {
             </CardContent>
           </Card>
         )}
+
+        {filterMode === "advanced" && (
+          <Card>
+            <CardContent className="space-y-4 p-4">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                <span>
+                  Conditions: {advancedFilterStats.conditionCount}/40
+                </span>
+                <span>Max depth: {advancedFilterStats.maxDepth}/3</span>
+              </div>
+              {renderAdvancedGroupEditor(advancedFilterTree, 1, true)}
+            </CardContent>
+          </Card>
+        )}
       </div>
+
+      <Dialog open={showSaveViewDialog} onOpenChange={setShowSaveViewDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save shared view</DialogTitle>
+            <DialogDescription>
+              Save the current filter setup so your team can reuse it.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Name</Label>
+            <Input
+              value={saveViewName}
+              onChange={(event) => setSaveViewName(event.target.value)}
+              placeholder="High priority revisions"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSaveViewDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={saveCurrentView} disabled={isSavingView}>
+              {isSavingView ? "Saving..." : "Save view"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showRenameViewDialog} onOpenChange={setShowRenameViewDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename saved view</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Name</Label>
+            <Input
+              value={renameViewName}
+              onChange={(event) => setRenameViewName(event.target.value)}
+              placeholder="View name"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowRenameViewDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={renameSelectedView} disabled={isRenamingView}>
+              {isRenamingView ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {selectedCount > 0 && (
         <Card>

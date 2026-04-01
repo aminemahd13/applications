@@ -284,7 +284,7 @@ describe('ApplicationsService advanced filters and progress summary', () => {
     expect(mockPrisma.applications.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          tags: { hasEvery: ['vip', 'intl'] },
+          AND: expect.arrayContaining([{ tags: { hasEvery: ['vip', 'intl'] } }]),
         }),
       }),
     );
@@ -1109,5 +1109,281 @@ describe('ApplicationsService CSV export', () => {
     await expect(
       service.exportEventApplicationsCsv('missing-event'),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('ApplicationsService boolean query semantics', () => {
+  const now = new Date('2026-03-10T10:00:00.000Z');
+
+  function createApplicationRecord(input: {
+    id: string;
+    decisionStatus: string;
+    stepStatus: string;
+    tags?: string[];
+  }) {
+    return {
+      id: input.id,
+      event_id: 'event-1',
+      applicant_user_id: `${input.id}-user`,
+      decision_status: input.decisionStatus,
+      decision_published_at: null,
+      tags: input.tags ?? [],
+      created_at: now,
+      updated_at: now,
+      assigned_reviewer_id: null,
+      users_applications_applicant_user_idTousers: {
+        email: `${input.id}@example.com`,
+        applicant_profiles: {
+          first_name: 'Ada',
+          last_name: 'Lovelace',
+          full_name: 'Ada Lovelace',
+        },
+      },
+      application_step_states: [
+        {
+          step_id: 'step-1',
+          status: input.stepStatus,
+          current_draft_id: null,
+          latest_submission_version_id: null,
+          workflow_steps: { step_index: 0 },
+        },
+      ],
+      attendance_records: null,
+    };
+  }
+
+  it('combines DB-supported and computed conditions with AND', async () => {
+    const match = createApplicationRecord({
+      id: 'app-match',
+      decisionStatus: 'ACCEPTED',
+      stepStatus: 'NEEDS_REVISION',
+    });
+    const dbOnly = createApplicationRecord({
+      id: 'app-db-only',
+      decisionStatus: 'ACCEPTED',
+      stepStatus: 'SUBMITTED',
+    });
+    const computedOnly = createApplicationRecord({
+      id: 'app-computed-only',
+      decisionStatus: 'NONE',
+      stepStatus: 'NEEDS_REVISION',
+    });
+
+    const mockPrisma = {
+      applications: {
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([match, dbOnly, computedOnly]),
+      },
+    };
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+
+    const result = await service.query('event-1', {
+      limit: 50,
+      order: 'desc',
+      filterTree: {
+        type: 'group',
+        mode: 'all',
+        children: [
+          { type: 'decision_status', values: ['ACCEPTED'] },
+          { type: 'needs_revision', value: true },
+        ],
+      },
+    } as any);
+
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0]?.id).toBe('app-match');
+  });
+
+  it('keeps nextCursor stable for selective computed filters', async () => {
+    const firstMatch = createApplicationRecord({
+      id: 'app-z',
+      decisionStatus: 'NONE',
+      stepStatus: 'NEEDS_REVISION',
+    });
+    const nonMatch = createApplicationRecord({
+      id: 'app-y',
+      decisionStatus: 'NONE',
+      stepStatus: 'SUBMITTED',
+    });
+    const secondMatch = createApplicationRecord({
+      id: 'app-x',
+      decisionStatus: 'NONE',
+      stepStatus: 'NEEDS_REVISION',
+    });
+
+    const mockPrisma = {
+      applications: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'app-z',
+          updated_at: now,
+        }),
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce([firstMatch, nonMatch, secondMatch])
+          .mockResolvedValueOnce([nonMatch, secondMatch]),
+      },
+    };
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+
+    const first = await service.query('event-1', {
+      limit: 1,
+      order: 'desc',
+      filterTree: {
+        type: 'group',
+        mode: 'all',
+        children: [{ type: 'needs_revision', value: true }],
+      },
+    } as any);
+
+    expect(first.data).toHaveLength(1);
+    expect(first.data[0]?.id).toBe('app-z');
+    expect(first.meta.hasMore).toBe(true);
+    expect(first.meta.nextCursor).toBe('app-z');
+
+    const second = await service.query('event-1', {
+      limit: 1,
+      order: 'desc',
+      cursor: first.meta.nextCursor ?? undefined,
+      filterTree: {
+        type: 'group',
+        mode: 'all',
+        children: [{ type: 'needs_revision', value: true }],
+      },
+    } as any);
+
+    expect(second.data).toHaveLength(1);
+    expect(second.data[0]?.id).toBe('app-x');
+    expect(second.meta.hasMore).toBe(false);
+    expect(second.meta.nextCursor).toBeNull();
+  });
+});
+
+describe('ApplicationsService saved view authorization', () => {
+  const defaultPayload = {
+    kind: 'applications',
+    version: 1,
+    mode: 'advanced',
+    filterTree: {
+      type: 'group',
+      mode: 'all',
+      children: [],
+    },
+  };
+
+  function createServiceWithContext(params: {
+    actorId: string;
+    isGlobalAdmin?: boolean;
+    organizerRole?: boolean;
+    ownerId: string;
+  }) {
+    const mockPrisma = {
+      review_queue_saved_views: {
+        findFirst: jest.fn(),
+        update: jest.fn(),
+        delete: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      event_role_assignments: {
+        findFirst: jest.fn().mockResolvedValue(
+          params.organizerRole ? { id: 'role-1' } : null,
+        ),
+      },
+    };
+    const mockCls = {
+      get: jest.fn((key: string) => {
+        if (key === 'actorId') return params.actorId;
+        if (key === 'isGlobalAdmin') return Boolean(params.isGlobalAdmin);
+        return undefined;
+      }),
+    };
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      mockCls as any,
+      {} as any,
+    );
+
+    const existing = {
+      id: 'view-1',
+      event_id: 'event-1',
+      user_id: params.ownerId,
+      name: 'My View',
+      filters: defaultPayload,
+      created_at: new Date('2026-03-10T10:00:00.000Z'),
+      updated_at: new Date('2026-03-10T10:00:00.000Z'),
+      users: {
+        id: params.ownerId,
+        email: 'owner@example.com',
+        applicant_profiles: { full_name: 'Owner' },
+      },
+    };
+    mockPrisma.review_queue_saved_views.findFirst.mockResolvedValue(existing);
+    mockPrisma.review_queue_saved_views.update.mockResolvedValue(existing);
+    return { service, mockPrisma };
+  }
+
+  it('allows the creator to update their saved view', async () => {
+    const { service, mockPrisma } = createServiceWithContext({
+      actorId: 'owner-1',
+      ownerId: 'owner-1',
+      organizerRole: false,
+    });
+
+    const result = await service.updateSavedView('event-1', 'view-1', {
+      mode: 'advanced',
+      filterTree: {
+        type: 'group',
+        mode: 'all',
+        children: [],
+      },
+    } as any);
+
+    expect(result.id).toBe('view-1');
+    expect(mockPrisma.event_role_assignments.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('blocks non-creator non-organizer edits', async () => {
+    const { service } = createServiceWithContext({
+      actorId: 'reviewer-1',
+      ownerId: 'owner-1',
+      organizerRole: false,
+    });
+
+    await expect(
+      service.updateSavedView('event-1', 'view-1', {
+        mode: 'advanced',
+        filterTree: {
+          type: 'group',
+          mode: 'all',
+          children: [],
+        },
+      } as any),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('allows organizers to delete another user view', async () => {
+    const { service, mockPrisma } = createServiceWithContext({
+      actorId: 'organizer-1',
+      ownerId: 'owner-1',
+      organizerRole: true,
+    });
+    mockPrisma.review_queue_saved_views.findFirst.mockResolvedValue({
+      id: 'view-1',
+      user_id: 'owner-1',
+      filters: defaultPayload,
+    });
+
+    await service.deleteSavedView('event-1', 'view-1');
+
+    expect(mockPrisma.review_queue_saved_views.delete).toHaveBeenCalledWith({
+      where: { id: 'view-1' },
+    });
   });
 });

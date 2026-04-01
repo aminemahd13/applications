@@ -101,6 +101,302 @@ export const ApplicationFilterSchema = z.object({
 
 export type ApplicationFilterDto = z.infer<typeof ApplicationFilterSchema>;
 
+// ============================================================
+// ADVANCED APPLICATION FILTER TREE DTOs
+// ============================================================
+
+export const ApplicationsFilterModeSchema = z.enum(['all', 'any']);
+export type ApplicationsFilterMode = z.infer<typeof ApplicationsFilterModeSchema>;
+
+export const ApplicationsFilterConditionTypeSchema = z.enum([
+    'search_text',
+    'decision_status',
+    'derived_status',
+    'step_status',
+    'assigned_reviewer',
+    'tags_any',
+    'tags_all',
+    'tags_none',
+    'completion_bucket',
+    'has_draft_progress',
+    'needs_revision',
+]);
+
+export type ApplicationsFilterConditionType = z.infer<
+    typeof ApplicationsFilterConditionTypeSchema
+>;
+
+const ApplicationsFilterConditionBaseSchema = z.object({
+    negate: z.boolean().optional(),
+});
+
+export const ApplicationsSearchTextConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('search_text'),
+        value: z.string().trim().min(1).max(200),
+    });
+
+export const ApplicationsDecisionStatusConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('decision_status'),
+        values: z.array(z.nativeEnum(DecisionStatus)).min(1).max(10),
+    });
+
+export const ApplicationsDerivedStatusConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('derived_status'),
+        values: z.array(DerivedStatusFilterSchema).min(1).max(20),
+    });
+
+export const ApplicationsStepStatusConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('step_status'),
+        stepId: z.string().uuid(),
+        statuses: z.array(z.nativeEnum(StepStatus)).min(1).max(10),
+    });
+
+export const ApplicationsAssignedReviewerMatcherSchema = z.enum([
+    'any',
+    'unassigned',
+    'specific',
+]);
+
+export type ApplicationsAssignedReviewerMatcher = z.infer<
+    typeof ApplicationsAssignedReviewerMatcherSchema
+>;
+
+export const ApplicationsAssignedReviewerConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('assigned_reviewer'),
+        matcher: ApplicationsAssignedReviewerMatcherSchema,
+        reviewerId: z.string().uuid().optional(),
+    }).superRefine((value, ctx) => {
+        if (value.matcher === 'specific' && !value.reviewerId) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'reviewerId is required when matcher is "specific"',
+                path: ['reviewerId'],
+            });
+        }
+        if (value.matcher !== 'specific' && value.reviewerId) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'reviewerId is only allowed when matcher is "specific"',
+                path: ['reviewerId'],
+            });
+        }
+    });
+
+const ApplicationsTagsValueSchema = z.array(z.string().trim().min(1)).min(1).max(50);
+
+export const ApplicationsTagsAnyConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('tags_any'),
+        values: ApplicationsTagsValueSchema,
+    });
+
+export const ApplicationsTagsAllConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('tags_all'),
+        values: ApplicationsTagsValueSchema,
+    });
+
+export const ApplicationsTagsNoneConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('tags_none'),
+        values: ApplicationsTagsValueSchema,
+    });
+
+export const ApplicationsCompletionBucketConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('completion_bucket'),
+        values: z.array(CompletionBucketSchema).min(1).max(4),
+    });
+
+export const ApplicationsHasDraftProgressConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('has_draft_progress'),
+        value: z.boolean(),
+    });
+
+export const ApplicationsNeedsRevisionConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('needs_revision'),
+        value: z.boolean(),
+    });
+
+export const ApplicationsFilterConditionSchema = z.discriminatedUnion('type', [
+    ApplicationsSearchTextConditionSchema,
+    ApplicationsDecisionStatusConditionSchema,
+    ApplicationsDerivedStatusConditionSchema,
+    ApplicationsStepStatusConditionSchema,
+    ApplicationsAssignedReviewerConditionSchema,
+    ApplicationsTagsAnyConditionSchema,
+    ApplicationsTagsAllConditionSchema,
+    ApplicationsTagsNoneConditionSchema,
+    ApplicationsCompletionBucketConditionSchema,
+    ApplicationsHasDraftProgressConditionSchema,
+    ApplicationsNeedsRevisionConditionSchema,
+]);
+
+export type ApplicationsFilterCondition = z.infer<
+    typeof ApplicationsFilterConditionSchema
+>;
+
+export interface ApplicationsFilterGroup {
+    type: 'group';
+    mode: ApplicationsFilterMode;
+    negate?: boolean;
+    children: ApplicationsFilterTreeNode[];
+}
+
+export type ApplicationsFilterTreeNode =
+    | ApplicationsFilterGroup
+    | ApplicationsFilterCondition;
+
+export const ApplicationsFilterTreeNodeSchema: z.ZodType<ApplicationsFilterTreeNode> =
+    z.lazy(() =>
+        z.union([
+            z.object({
+                type: z.literal('group'),
+                mode: ApplicationsFilterModeSchema.default('all'),
+                negate: z.boolean().optional(),
+                children: z.array(ApplicationsFilterTreeNodeSchema).max(40).default([]),
+            }),
+            ApplicationsFilterConditionSchema,
+        ]),
+    );
+
+export const ApplicationsFilterGroupSchema = ApplicationsFilterTreeNodeSchema.refine(
+    (value): value is ApplicationsFilterGroup => value.type === 'group',
+    {
+        message: 'Root filterTree node must be a group',
+    },
+);
+
+function analyzeApplicationsFilterTree(
+    node: ApplicationsFilterTreeNode,
+    depth = 1,
+): { maxDepth: number; conditionCount: number } {
+    if (node.type !== 'group') {
+        return { maxDepth: depth, conditionCount: 1 };
+    }
+
+    let maxDepth = depth;
+    let conditionCount = 0;
+    for (const child of node.children ?? []) {
+        const childStats = analyzeApplicationsFilterTree(child, depth + 1);
+        maxDepth = Math.max(maxDepth, childStats.maxDepth);
+        conditionCount += childStats.conditionCount;
+    }
+    return { maxDepth, conditionCount };
+}
+
+export const ApplicationsQueryRequestSchema = z
+    .object({
+        cursor: z.string().optional(),
+        limit: z.coerce.number().min(1).max(100).default(50),
+        order: z.enum(['asc', 'desc']).default('desc'),
+        filterTree: ApplicationsFilterGroupSchema.default({
+            type: 'group',
+            mode: 'all',
+            negate: false,
+            children: [],
+        }),
+    })
+    .superRefine((value, ctx) => {
+        const stats = analyzeApplicationsFilterTree(value.filterTree);
+        // Root group depth is 1. Maximum accepted depth is 3.
+        if (stats.maxDepth > 3) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'filterTree nesting depth cannot exceed 3',
+                path: ['filterTree'],
+            });
+        }
+        if (stats.conditionCount > 40) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'filterTree cannot contain more than 40 conditions',
+                path: ['filterTree'],
+            });
+        }
+    });
+
+export type ApplicationsQueryRequestDto = z.infer<
+    typeof ApplicationsQueryRequestSchema
+>;
+
+export const ApplicationsQuickFilterStateSchema = z.object({
+    searchQuery: z.string().max(200).optional(),
+    derivedStatus: z.array(DerivedStatusFilterSchema).max(20).optional(),
+    decisionStatus: z.union([z.literal('all'), z.nativeEnum(DecisionStatus)]).optional(),
+    stepId: z.string().uuid().optional(),
+    stepStatus: z.union([z.literal('all'), z.nativeEnum(StepStatus)]).optional(),
+    reviewerId: z.union([z.literal('__any__'), z.string().uuid()]).optional(),
+    tagsInput: z.string().max(500).optional(),
+    hasDraftProgress: z.boolean().optional(),
+    completionBucket: z.array(CompletionBucketSchema).max(4).optional(),
+    needsRevisionOnly: z.boolean().optional(),
+});
+
+export type ApplicationsQuickFilterState = z.infer<
+    typeof ApplicationsQuickFilterStateSchema
+>;
+
+export const ApplicationsSavedViewModeSchema = z.enum(['quick', 'advanced']);
+export type ApplicationsSavedViewMode = z.infer<
+    typeof ApplicationsSavedViewModeSchema
+>;
+
+export const ApplicationsSavedViewPayloadSchema = z.object({
+    kind: z.literal('applications').default('applications'),
+    version: z.number().int().min(1).default(1),
+    mode: ApplicationsSavedViewModeSchema.default('advanced'),
+    filterTree: ApplicationsFilterGroupSchema,
+    quickState: ApplicationsQuickFilterStateSchema.optional(),
+});
+
+export type ApplicationsSavedViewPayload = z.infer<
+    typeof ApplicationsSavedViewPayloadSchema
+>;
+
+export const CreateApplicationSavedViewSchema = z.object({
+    name: z.string().trim().min(1).max(100),
+    mode: ApplicationsSavedViewModeSchema.default('advanced'),
+    filterTree: ApplicationsFilterGroupSchema,
+    quickState: ApplicationsQuickFilterStateSchema.optional(),
+});
+
+export type CreateApplicationSavedViewDto = z.infer<
+    typeof CreateApplicationSavedViewSchema
+>;
+
+export const UpdateApplicationSavedViewSchema = z.object({
+    name: z.string().trim().min(1).max(100).optional(),
+    mode: ApplicationsSavedViewModeSchema.optional(),
+    filterTree: ApplicationsFilterGroupSchema.optional(),
+    quickState: ApplicationsQuickFilterStateSchema.optional(),
+});
+
+export type UpdateApplicationSavedViewDto = z.infer<
+    typeof UpdateApplicationSavedViewSchema
+>;
+
+export interface ApplicationSavedView {
+    id: string;
+    eventId: string;
+    name: string;
+    mode: ApplicationsSavedViewMode;
+    filterTree: ApplicationsFilterGroup;
+    quickState?: ApplicationsQuickFilterState;
+    createdBy: string;
+    createdByEmail?: string;
+    createdByName?: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
 export const SetDecisionSchema = z.object({
     status: z.nativeEnum(DecisionStatus),
     draft: z.boolean().default(true), // If true, only updates decision_status, not published_at

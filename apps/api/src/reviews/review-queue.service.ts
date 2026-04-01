@@ -457,15 +457,21 @@ export class ReviewQueueService {
       orderBy: [{ is_default: 'desc' }, { created_at: 'desc' }],
     });
 
-    return views.map((view) => ({
-      id: view.id,
-      eventId: view.event_id,
-      name: view.name,
-      isDefault: view.is_default,
-      filters: (view.filters as ReviewQueueSavedViewFilterDto) ?? {},
-      createdAt: view.created_at,
-      updatedAt: view.updated_at,
-    }));
+    return views
+      .map((view) => {
+        const filters = this.parseReviewQueueSavedViewFilters(view.filters);
+        if (!filters) return null;
+        return {
+          id: view.id,
+          eventId: view.event_id,
+          name: view.name,
+          isDefault: view.is_default,
+          filters,
+          createdAt: view.created_at,
+          updatedAt: view.updated_at,
+        };
+      })
+      .filter((entry): entry is ReviewQueueSavedView => entry !== null);
   }
 
   async createSavedView(
@@ -488,17 +494,24 @@ export class ReviewQueueService {
           event_id: eventId,
           user_id: actorId,
           name: dto.name,
-          filters: dto.filters ?? {},
+          filters: {
+            kind: 'review_queue',
+            version: 1,
+            filters: dto.filters ?? {},
+          },
           is_default: dto.isDefault ?? false,
         },
       });
+
+      const normalizedFilters =
+        this.parseReviewQueueSavedViewFilters(created.filters) ?? {};
 
       return {
         id: created.id,
         eventId: created.event_id,
         name: created.name,
         isDefault: created.is_default,
-        filters: (created.filters as ReviewQueueSavedViewFilterDto) ?? {},
+        filters: normalizedFilters,
         createdAt: created.created_at,
         updatedAt: created.updated_at,
       };
@@ -519,6 +532,12 @@ export class ReviewQueueService {
       if (!existing) {
         throw new NotFoundException('Saved view not found');
       }
+      const existingFilters = this.parseReviewQueueSavedViewFilters(
+        existing.filters,
+      );
+      if (!existingFilters) {
+        throw new NotFoundException('Saved view not found');
+      }
 
       if (dto.isDefault) {
         await tx.review_queue_saved_views.updateMany({
@@ -531,7 +550,15 @@ export class ReviewQueueService {
         where: { id: viewId },
         data: {
           ...(dto.name !== undefined ? { name: dto.name } : {}),
-          ...(dto.filters !== undefined ? { filters: dto.filters } : {}),
+          ...(dto.filters !== undefined
+            ? {
+                filters: {
+                  kind: 'review_queue',
+                  version: 1,
+                  filters: dto.filters,
+                },
+              }
+            : {}),
           ...(dto.isDefault !== undefined
             ? { is_default: dto.isDefault }
             : {}),
@@ -539,12 +566,15 @@ export class ReviewQueueService {
         },
       });
 
+      const normalizedFilters =
+        this.parseReviewQueueSavedViewFilters(updated.filters) ?? {};
+
       return {
         id: updated.id,
         eventId: updated.event_id,
         name: updated.name,
         isDefault: updated.is_default,
-        filters: (updated.filters as ReviewQueueSavedViewFilterDto) ?? {},
+        filters: normalizedFilters,
         createdAt: updated.created_at,
         updatedAt: updated.updated_at,
       };
@@ -553,12 +583,34 @@ export class ReviewQueueService {
 
   async deleteSavedView(eventId: string, viewId: string): Promise<void> {
     const actorId = this.cls.get('actorId');
-    const result = await this.prisma.review_queue_saved_views.deleteMany({
+    const existing = await this.prisma.review_queue_saved_views.findFirst({
       where: { id: viewId, event_id: eventId, user_id: actorId },
+      select: { id: true, filters: true },
     });
-    if (result.count === 0) {
+    if (!existing || !this.parseReviewQueueSavedViewFilters(existing.filters)) {
       throw new NotFoundException('Saved view not found');
     }
+    await this.prisma.review_queue_saved_views.delete({ where: { id: viewId } });
+  }
+
+  private parseReviewQueueSavedViewFilters(
+    raw: unknown,
+  ): ReviewQueueSavedViewFilterDto | null {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return {};
+    }
+    const payload = raw as {
+      kind?: unknown;
+      filters?: unknown;
+    };
+    if (payload.kind === 'applications') {
+      return null;
+    }
+    if (payload.kind === 'review_queue') {
+      return (payload.filters as ReviewQueueSavedViewFilterDto) ?? {};
+    }
+    // Backward compatibility: legacy review queue rows stored filters directly.
+    return payload as unknown as ReviewQueueSavedViewFilterDto;
   }
 
   async listAvailableReviewers(eventId: string): Promise<

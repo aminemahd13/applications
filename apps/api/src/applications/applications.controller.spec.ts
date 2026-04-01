@@ -207,3 +207,87 @@ describe('ApplicationsController export query validation', () => {
     expect(applicationsService.exportEventApplicationsCsv).not.toHaveBeenCalled();
   });
 });
+
+describe('ApplicationsController advanced query and saved views', () => {
+  function createController() {
+    const applicationsService = {
+      query: jest.fn().mockResolvedValue({ data: [], meta: { hasMore: false } }),
+      listSavedViews: jest.fn().mockResolvedValue([]),
+      createSavedView: jest.fn().mockResolvedValue({ id: 'view-1' }),
+      updateSavedView: jest.fn().mockResolvedValue({ id: 'view-1' }),
+      deleteSavedView: jest.fn().mockResolvedValue(undefined),
+    };
+    const controller = new ApplicationsController(
+      applicationsService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    return { controller, applicationsService };
+  }
+
+  it('forwards parsed advanced query payload', async () => {
+    const { controller, applicationsService } = createController();
+    await controller.query('event-1', {
+      filterTree: {
+        type: 'group',
+        mode: 'all',
+        children: [{ type: 'search_text', value: 'ada' }],
+      },
+    });
+
+    expect(applicationsService.query).toHaveBeenCalledWith(
+      'event-1',
+      expect.objectContaining({
+        limit: 50,
+        order: 'desc',
+        filterTree: expect.objectContaining({
+          type: 'group',
+          mode: 'all',
+        }),
+      }),
+    );
+  });
+
+  it('lists shared application saved views', async () => {
+    const { controller, applicationsService } = createController();
+    const result = await controller.listSavedViews('event-1');
+    expect(result).toEqual({ data: [] });
+    expect(applicationsService.listSavedViews).toHaveBeenCalledWith('event-1');
+  });
+
+  it('creates, updates and deletes shared saved views', async () => {
+    const { controller, applicationsService } = createController();
+    const createResult = await controller.createSavedView('event-1', {
+      name: 'My View',
+      mode: 'advanced',
+      filterTree: {
+        type: 'group',
+        mode: 'all',
+        children: [],
+      },
+    });
+    expect(createResult).toEqual({ data: { id: 'view-1' } });
+    expect(applicationsService.createSavedView).toHaveBeenCalled();
+
+    const updateResult = await controller.updateSavedView(
+      'event-1',
+      'view-1',
+      { name: 'Updated' },
+    );
+    expect(updateResult).toEqual({ data: { id: 'view-1' } });
+    expect(applicationsService.updateSavedView).toHaveBeenCalledWith(
+      'event-1',
+      'view-1',
+      expect.objectContaining({ name: 'Updated' }),
+    );
+
+    const deleteResult = await controller.deleteSavedView('event-1', 'view-1');
+    expect(deleteResult).toEqual({ success: true });
+    expect(applicationsService.deleteSavedView).toHaveBeenCalledWith(
+      'event-1',
+      'view-1',
+    );
+  });
+});

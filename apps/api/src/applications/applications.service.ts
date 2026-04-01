@@ -9,6 +9,19 @@ import { ClsService } from 'nestjs-cls';
 import { Prisma } from '@event-platform/db';
 import {
   ApplicationFilterDto,
+  ApplicationsFilterCondition,
+  ApplicationsFilterGroup,
+  ApplicationsFilterTreeNode,
+  ApplicationsQuickFilterState,
+  ApplicationsQueryRequestDto,
+  ApplicationsSavedViewPayload,
+  ApplicationsSavedViewPayloadSchema,
+  ApplicationsSavedViewMode,
+  ApplicationsSavedViewModeSchema,
+  ApplicationsFilterGroupSchema,
+  ApplicationSavedView,
+  CreateApplicationSavedViewDto,
+  UpdateApplicationSavedViewDto,
   ApplicationSummary,
   ApplicationDetail,
   ApplicantProfile,
@@ -29,6 +42,48 @@ import {
 import { StepStateService } from './step-state.service';
 import * as jwt from 'jsonwebtoken';
 import { createHmac } from 'node:crypto';
+
+type ApplicationsListRecord = {
+  id: string;
+  event_id: string;
+  applicant_user_id: string;
+  decision_status: string;
+  decision_published_at: Date | null;
+  tags: string[];
+  created_at: Date;
+  updated_at: Date;
+  assigned_reviewer_id?: string | null;
+  users_applications_applicant_user_idTousers?: {
+    email?: string | null;
+    applicant_profiles?: {
+      full_name?: string | null;
+      first_name?: string | null;
+      last_name?: string | null;
+    } | null;
+  } | null;
+  application_step_states?: Array<{
+    step_id: string;
+    status: string;
+    current_draft_id?: string | null;
+    latest_submission_version_id?: string | null;
+    workflow_steps?: { step_index?: number | null } | null;
+  }>;
+  attendance_records?: {
+    status?: string | null;
+  } | null;
+};
+
+interface CompiledApplicationsFilter {
+  dbWhere: Prisma.applicationsWhereInput | null;
+  evaluate: (application: ApplicationsListRecord, summary: ApplicationSummary) => boolean;
+}
+
+interface QueryBatchOptions {
+  cursor?: string | null;
+  take: number;
+  order: 'asc' | 'desc';
+  baseWhere: Prisma.applicationsWhereInput | null;
+}
 
 @Injectable()
 export class ApplicationsService {
@@ -79,81 +134,101 @@ export class ApplicationsService {
     eventId: string,
     filter: ApplicationFilterDto,
   ): Promise<PaginatedResponse<ApplicationSummary>> {
-    const {
-      cursor,
-      limit,
-      order,
-      decisionStatus,
-      stepId,
-      stepStatus,
-      assignedReviewerId,
-      tags,
-      derivedStatus,
-      hasDraftProgress,
-      completionBucket,
-      needsRevisionOnly,
-      q,
-    } = filter;
+    const request = this.mapLegacyFilterToQuery(filter);
+    return this.executeApplicationsQuery(eventId, request);
+  }
 
-    const where: any = { event_id: eventId };
+  async query(
+    eventId: string,
+    request: ApplicationsQueryRequestDto,
+  ): Promise<PaginatedResponse<ApplicationSummary>> {
+    return this.executeApplicationsQuery(eventId, request);
+  }
 
-    if (decisionStatus) where.decision_status = decisionStatus;
-    if (assignedReviewerId) where.assigned_reviewer_id = assignedReviewerId;
-    if (tags && tags.length > 0) where.tags = { hasEvery: tags };
+  private async executeApplicationsQuery(
+    eventId: string,
+    request: ApplicationsQueryRequestDto,
+  ): Promise<PaginatedResponse<ApplicationSummary>> {
+    const limit = Math.min(Math.max(request.limit ?? 50, 1), 100);
+    const order = request.order === 'asc' ? 'asc' : 'desc';
+    const compiled = this.compileApplicationsFilterTree(request.filterTree);
 
-    if (q && q.trim().length > 0) {
-      const query = q.trim();
-      where.OR = [
-        {
-          users_applications_applicant_user_idTousers: {
-            is: {
-              email: { contains: query, mode: 'insensitive' },
-            },
-          },
-        },
-        {
-          users_applications_applicant_user_idTousers: {
-            is: {
-              applicant_profiles: {
-                is: {
-                  first_name: { contains: query, mode: 'insensitive' },
-                },
-              },
-            },
-          },
-        },
-        {
-          users_applications_applicant_user_idTousers: {
-            is: {
-              applicant_profiles: {
-                is: {
-                  last_name: { contains: query, mode: 'insensitive' },
-                },
-              },
-            },
-          },
-        },
-      ];
+    // Use larger scan windows to avoid missing sparse matches while preserving stable cursor pagination.
+    const batchSize = Math.min(400, Math.max(limit * 4, 100));
+    const maxMatchesToCollect = limit + 1;
+    const matched: Array<{ application: ApplicationsListRecord; summary: ApplicationSummary }> =
+      [];
+
+    let scanCursor: string | null = request.cursor ?? null;
+    let hasMoreSourceRows = true;
+    let safetyCounter = 0;
+
+    while (
+      matched.length < maxMatchesToCollect &&
+      hasMoreSourceRows &&
+      safetyCounter < 200
+    ) {
+      const batch = await this.fetchApplicationsBatch(eventId, {
+        cursor: scanCursor,
+        take: batchSize,
+        order,
+        baseWhere: compiled.dbWhere,
+      });
+
+      if (batch.length === 0) {
+        hasMoreSourceRows = false;
+        break;
+      }
+
+      for (const application of batch) {
+        const summary = this.toSummary(application);
+        if (compiled.evaluate(application, summary)) {
+          matched.push({ application, summary });
+        }
+        if (matched.length >= maxMatchesToCollect) {
+          break;
+        }
+      }
+
+      scanCursor = batch[batch.length - 1]?.id ?? null;
+      if (batch.length < batchSize) {
+        hasMoreSourceRows = false;
+      }
+      safetyCounter += 1;
     }
 
-    // Filter by step status requires a join
-    if (stepId && stepStatus) {
-      where.application_step_states = {
-        some: {
-          step_id: stepId,
-          status: stepStatus,
-        },
-      };
+    const hasMore = matched.length > limit;
+    const page = hasMore ? matched.slice(0, limit) : matched;
+
+    return {
+      data: page.map((entry) => entry.summary),
+      meta: {
+        nextCursor: hasMore ? page[page.length - 1]?.application.id ?? null : null,
+        hasMore,
+      },
+    };
+  }
+
+  private async fetchApplicationsBatch(
+    eventId: string,
+    options: QueryBatchOptions,
+  ): Promise<ApplicationsListRecord[]> {
+    const { cursor, take, order, baseWhere } = options;
+    const where: Prisma.applicationsWhereInput = { event_id: eventId };
+    const andConditions: Prisma.applicationsWhereInput[] = [];
+
+    if (baseWhere) {
+      andConditions.push(baseWhere);
     }
 
-    let cursorAnchor: { id: string; updated_at: Date } | null = null;
     if (cursor) {
-      cursorAnchor = await this.prisma.applications.findFirst({
+      const cursorAnchor = await this.prisma.applications.findFirst({
         where: { id: cursor, event_id: eventId },
         select: { id: true, updated_at: true },
       });
+
       if (cursorAnchor) {
-        const cursorCondition: Prisma.applicationsWhereInput =
+        andConditions.push(
           order === 'asc'
             ? {
                 OR: [
@@ -172,17 +247,23 @@ export class ApplicationsService {
                     id: { lt: cursorAnchor.id },
                   },
                 ],
-              };
-        where.AND = [...(where.AND ?? []), cursorCondition];
+              },
+        );
       } else {
-        // Fallback for stale cursors that no longer resolve.
-        where.id = order === 'asc' ? { gt: cursor } : { lt: cursor };
+        andConditions.push({
+          id: order === 'asc' ? { gt: cursor } : { lt: cursor },
+        });
       }
     }
 
-    const applications = await this.prisma.applications.findMany({
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
+    }
+
+    return (await this.prisma.applications.findMany({
       where,
       orderBy: [{ updated_at: order }, { id: order }],
+      take,
       select: {
         id: true,
         event_id: true,
@@ -192,6 +273,7 @@ export class ApplicationsService {
         tags: true,
         created_at: true,
         updated_at: true,
+        assigned_reviewer_id: true,
         users_applications_applicant_user_idTousers: {
           select: {
             email: true,
@@ -217,36 +299,625 @@ export class ApplicationsService {
           select: { status: true },
         },
       },
-    });
+    })) as unknown as ApplicationsListRecord[];
+  }
 
-    const summaries = applications.map((application) => ({
-      application,
-      summary: this.toSummary(application),
-    }));
+  private mapLegacyFilterToQuery(
+    filter: ApplicationFilterDto,
+  ): ApplicationsQueryRequestDto {
+    const children: ApplicationsFilterTreeNode[] = [];
 
-    const filtered = summaries.filter(({ application, summary }) =>
-      this.matchesComputedApplicationFilters(
-        application,
-        summary,
-        {
-          derivedStatus,
-          hasDraftProgress,
-          completionBucket,
-          needsRevisionOnly,
-        },
-      ),
-    );
+    if (filter.q && filter.q.trim().length > 0) {
+      children.push({
+        type: 'search_text',
+        value: filter.q.trim(),
+      });
+    }
 
-    const hasMore = filtered.length > limit;
-    const data = hasMore ? filtered.slice(0, limit) : filtered;
+    if (filter.decisionStatus) {
+      children.push({
+        type: 'decision_status',
+        values: [filter.decisionStatus],
+      });
+    }
+
+    if (filter.stepId && filter.stepStatus) {
+      children.push({
+        type: 'step_status',
+        stepId: filter.stepId,
+        statuses: [filter.stepStatus],
+      });
+    }
+
+    if (filter.assignedReviewerId) {
+      children.push({
+        type: 'assigned_reviewer',
+        matcher: 'specific',
+        reviewerId: filter.assignedReviewerId,
+      });
+    }
+
+    if (Array.isArray(filter.tags) && filter.tags.length > 0) {
+      children.push({
+        type: 'tags_all',
+        values: filter.tags,
+      });
+    }
+
+    if (Array.isArray(filter.derivedStatus) && filter.derivedStatus.length > 0) {
+      children.push({
+        type: 'derived_status',
+        values: filter.derivedStatus,
+      });
+    }
+
+    if (filter.hasDraftProgress === true) {
+      children.push({
+        type: 'has_draft_progress',
+        value: true,
+      });
+    }
+
+    if (
+      Array.isArray(filter.completionBucket) &&
+      filter.completionBucket.length > 0
+    ) {
+      children.push({
+        type: 'completion_bucket',
+        values: filter.completionBucket,
+      });
+    }
+
+    if (filter.needsRevisionOnly === true) {
+      children.push({
+        type: 'needs_revision',
+        value: true,
+      });
+    }
 
     return {
-      data: data.map((entry) => entry.summary),
-      meta: {
-        nextCursor: hasMore ? data[data.length - 1]?.application.id ?? null : null,
-        hasMore,
+      cursor: filter.cursor,
+      limit: filter.limit,
+      order: filter.order,
+      filterTree: {
+        type: 'group',
+        mode: 'all',
+        negate: false,
+        children,
       },
     };
+  }
+
+  private compileApplicationsFilterTree(
+    tree: ApplicationsFilterGroup,
+  ): CompiledApplicationsFilter {
+    const normalizedTree = ApplicationsFilterGroupSchema.parse(tree);
+    const compiledNode = this.compileApplicationsFilterNode(normalizedTree);
+    return {
+      dbWhere: compiledNode.dbWhere,
+      evaluate: (application, summary) =>
+        compiledNode.evaluate(application, summary),
+    };
+  }
+
+  private compileApplicationsFilterNode(
+    node: ApplicationsFilterTreeNode,
+  ): {
+    dbWhere: Prisma.applicationsWhereInput | null;
+    evaluate: (application: ApplicationsListRecord, summary: ApplicationSummary) => boolean;
+  } {
+    if (node.type !== 'group') {
+      const conditionWhere = this.compileDbWhereForCondition(node);
+      const dbWhere = node.negate
+        ? conditionWhere
+          ? ({ NOT: conditionWhere } as Prisma.applicationsWhereInput)
+          : null
+        : conditionWhere;
+      return {
+        dbWhere,
+        evaluate: (application, summary) =>
+          this.evaluateApplicationsFilterCondition(node, application, summary),
+      };
+    }
+
+    const compiledChildren = (node.children ?? []).map((child) =>
+      this.compileApplicationsFilterNode(child),
+    );
+    const mode = node.mode === 'any' ? 'any' : 'all';
+
+    let dbWhere: Prisma.applicationsWhereInput | null = null;
+    if (!node.negate) {
+      if (mode === 'all') {
+        const childWheres = compiledChildren
+          .map((entry) => entry.dbWhere)
+          .filter(
+            (entry): entry is Prisma.applicationsWhereInput => Boolean(entry),
+          );
+        if (childWheres.length === 1) {
+          dbWhere = childWheres[0];
+        } else if (childWheres.length > 1) {
+          dbWhere = { AND: childWheres };
+        }
+      } else {
+        const childWheres = compiledChildren.map((entry) => entry.dbWhere);
+        if (childWheres.every((entry): entry is Prisma.applicationsWhereInput => Boolean(entry))) {
+          dbWhere =
+            childWheres.length === 1
+              ? childWheres[0]
+              : { OR: childWheres };
+        }
+      }
+    }
+
+    return {
+      dbWhere,
+      evaluate: (application, summary) => {
+        const evaluations = compiledChildren.map((entry) =>
+          entry.evaluate(application, summary),
+        );
+        const value =
+          evaluations.length === 0
+            ? true
+            : mode === 'all'
+            ? evaluations.every(Boolean)
+            : evaluations.some(Boolean);
+        return node.negate ? !value : value;
+      },
+    };
+  }
+
+  private compileDbWhereForCondition(
+    condition: ApplicationsFilterCondition,
+  ): Prisma.applicationsWhereInput | null {
+    switch (condition.type) {
+      case 'search_text': {
+        const query = condition.value.trim();
+        if (query.length === 0) return null;
+        return {
+          OR: [
+            {
+              users_applications_applicant_user_idTousers: {
+                is: {
+                  email: { contains: query, mode: 'insensitive' },
+                },
+              },
+            },
+            {
+              users_applications_applicant_user_idTousers: {
+                is: {
+                  applicant_profiles: {
+                    is: {
+                      first_name: { contains: query, mode: 'insensitive' },
+                    },
+                  },
+                },
+              },
+            },
+            {
+              users_applications_applicant_user_idTousers: {
+                is: {
+                  applicant_profiles: {
+                    is: {
+                      last_name: { contains: query, mode: 'insensitive' },
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        };
+      }
+      case 'decision_status':
+        return {
+          decision_status: { in: condition.values },
+        };
+      case 'step_status':
+        return {
+          application_step_states: {
+            some: {
+              step_id: condition.stepId,
+              status: { in: condition.statuses },
+            },
+          },
+        };
+      case 'assigned_reviewer':
+        if (condition.matcher === 'specific' && condition.reviewerId) {
+          return { assigned_reviewer_id: condition.reviewerId };
+        }
+        if (condition.matcher === 'unassigned') {
+          return { assigned_reviewer_id: null };
+        }
+        return null;
+      case 'tags_any':
+        return { tags: { hasSome: condition.values } };
+      case 'tags_all':
+        return { tags: { hasEvery: condition.values } };
+      case 'tags_none':
+        return { NOT: { tags: { hasSome: condition.values } } };
+      default:
+        return null;
+    }
+  }
+
+  private evaluateApplicationsFilterCondition(
+    condition: ApplicationsFilterCondition,
+    application: ApplicationsListRecord,
+    summary: ApplicationSummary,
+  ): boolean {
+    let value = false;
+    switch (condition.type) {
+      case 'search_text': {
+        const query = condition.value.trim().toLowerCase();
+        const email =
+          application.users_applications_applicant_user_idTousers?.email?.toLowerCase() ??
+          '';
+        const firstName =
+          application.users_applications_applicant_user_idTousers?.applicant_profiles?.first_name
+            ?.toLowerCase() ?? '';
+        const lastName =
+          application.users_applications_applicant_user_idTousers?.applicant_profiles?.last_name
+            ?.toLowerCase() ?? '';
+        const fullName =
+          application.users_applications_applicant_user_idTousers?.applicant_profiles?.full_name
+            ?.toLowerCase() ?? '';
+        value =
+          query.length === 0 ||
+          email.includes(query) ||
+          firstName.includes(query) ||
+          lastName.includes(query) ||
+          fullName.includes(query);
+        break;
+      }
+      case 'decision_status':
+        value = condition.values.includes(summary.decisionStatus);
+        break;
+      case 'derived_status': {
+        const mapped = this.mapDerivedStatusToFilterValue(summary.derivedStatus);
+        value = Boolean(mapped && condition.values.includes(mapped));
+        break;
+      }
+      case 'step_status':
+        value = (application.application_step_states ?? []).some(
+          (stepState) =>
+            stepState.step_id === condition.stepId &&
+            condition.statuses.includes(stepState.status as StepStatus),
+        );
+        break;
+      case 'assigned_reviewer': {
+        const reviewerId = application.assigned_reviewer_id ?? null;
+        if (condition.matcher === 'any') value = true;
+        if (condition.matcher === 'unassigned') value = reviewerId === null;
+        if (condition.matcher === 'specific') {
+          value =
+            Boolean(condition.reviewerId) && reviewerId === condition.reviewerId;
+        }
+        break;
+      }
+      case 'tags_any':
+        value = condition.values.some((tag) => application.tags?.includes(tag));
+        break;
+      case 'tags_all':
+        value = condition.values.every((tag) => application.tags?.includes(tag));
+        break;
+      case 'tags_none':
+        value = condition.values.every((tag) => !application.tags?.includes(tag));
+        break;
+      case 'completion_bucket': {
+        const progressPercent = summary.stepsSummary?.progressPercent ?? 0;
+        value = condition.values.some((bucket) =>
+          this.matchesCompletionBucket(progressPercent, bucket),
+        );
+        break;
+      }
+      case 'has_draft_progress': {
+        const hasAnyDraft = (application.application_step_states ?? []).some(
+          (state) => Boolean(state.current_draft_id),
+        );
+        value = condition.value ? hasAnyDraft : !hasAnyDraft;
+        break;
+      }
+      case 'needs_revision': {
+        const hasNeedsRevision = (application.application_step_states ?? []).some(
+          (state) => state.status === StepStatus.NEEDS_REVISION,
+        );
+        value = condition.value ? hasNeedsRevision : !hasNeedsRevision;
+        break;
+      }
+      default:
+        value = true;
+        break;
+    }
+
+    return condition.negate ? !value : value;
+  }
+
+  async listSavedViews(eventId: string): Promise<ApplicationSavedView[]> {
+    const views = await this.prisma.review_queue_saved_views.findMany({
+      where: { event_id: eventId },
+      include: {
+        users: {
+          select: {
+            id: true,
+            email: true,
+            applicant_profiles: {
+              select: {
+                full_name: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+    });
+
+    const parsedViews: ApplicationSavedView[] = [];
+    for (const view of views) {
+      const payload = this.parseApplicationsSavedViewPayload(view.filters);
+      if (!payload) continue;
+      parsedViews.push(
+        this.toApplicationSavedView(view, payload, {
+          id: view.users.id,
+          email: view.users.email,
+          fullName: view.users.applicant_profiles?.full_name ?? null,
+        }),
+      );
+    }
+
+    return parsedViews;
+  }
+
+  async createSavedView(
+    eventId: string,
+    dto: CreateApplicationSavedViewDto,
+  ): Promise<ApplicationSavedView> {
+    const actorId = this.cls.get('actorId');
+    if (!actorId) throw new ForbiddenException('Authentication required');
+
+    await this.ensureSavedViewNameAvailable(eventId, dto.name);
+
+    const payload: ApplicationsSavedViewPayload = {
+      kind: 'applications' as const,
+      version: 1,
+      mode: dto.mode,
+      filterTree: dto.filterTree,
+      ...(dto.quickState ? { quickState: dto.quickState } : {}),
+    };
+
+    const created = await this.prisma.review_queue_saved_views.create({
+      data: {
+        id: crypto.randomUUID(),
+        event_id: eventId,
+        user_id: actorId,
+        name: dto.name,
+        filters: payload as unknown as Prisma.InputJsonValue,
+        is_default: false,
+      },
+      include: {
+        users: {
+          select: {
+            id: true,
+            email: true,
+            applicant_profiles: { select: { full_name: true } },
+          },
+        },
+      },
+    });
+
+    const normalized = this.parseApplicationsSavedViewPayload(created.filters);
+    if (!normalized) {
+      throw new Error('Invalid saved view payload');
+    }
+
+    return this.toApplicationSavedView(created, normalized, {
+      id: created.users.id,
+      email: created.users.email,
+      fullName: created.users.applicant_profiles?.full_name ?? null,
+    });
+  }
+
+  async updateSavedView(
+    eventId: string,
+    viewId: string,
+    dto: UpdateApplicationSavedViewDto,
+  ): Promise<ApplicationSavedView> {
+    const actorId = this.cls.get('actorId');
+    if (!actorId) throw new ForbiddenException('Authentication required');
+
+    const existing = await this.prisma.review_queue_saved_views.findFirst({
+      where: { id: viewId, event_id: eventId },
+      include: {
+        users: {
+          select: {
+            id: true,
+            email: true,
+            applicant_profiles: {
+              select: { full_name: true },
+            },
+          },
+        },
+      },
+    });
+    if (!existing) throw new NotFoundException('Saved view not found');
+
+    const existingPayload = this.parseApplicationsSavedViewPayload(existing.filters);
+    if (!existingPayload) {
+      throw new NotFoundException('Saved view not found');
+    }
+
+    await this.assertSavedViewWritePermission(eventId, existing.user_id);
+
+    const nextName =
+      dto.name !== undefined && dto.name.trim().length > 0
+        ? dto.name.trim()
+        : existing.name;
+    if (nextName !== existing.name) {
+      await this.ensureSavedViewNameAvailable(eventId, nextName, existing.id);
+    }
+
+    const nextMode = dto.mode ?? existingPayload.mode;
+    const normalizedMode = ApplicationsSavedViewModeSchema.parse(nextMode);
+    const nextFilterTree =
+      (dto.filterTree as ApplicationsFilterGroup | undefined) ??
+      existingPayload.filterTree;
+    const normalizedFilterTree = ApplicationsFilterGroupSchema.parse(nextFilterTree);
+    const nextQuickState = dto.quickState ?? existingPayload.quickState;
+
+    const nextPayload: ApplicationsSavedViewPayload = {
+      kind: 'applications' as const,
+      version: existingPayload.version ?? 1,
+      mode: normalizedMode,
+      filterTree: normalizedFilterTree,
+      ...(nextQuickState ? { quickState: nextQuickState } : {}),
+    };
+
+    const updated = await this.prisma.review_queue_saved_views.update({
+      where: { id: viewId },
+      data: {
+        name: nextName,
+        filters: nextPayload as unknown as Prisma.InputJsonValue,
+        updated_at: new Date(),
+      },
+      include: {
+        users: {
+          select: {
+            id: true,
+            email: true,
+            applicant_profiles: {
+              select: { full_name: true },
+            },
+          },
+        },
+      },
+    });
+
+    const payload = this.parseApplicationsSavedViewPayload(updated.filters);
+    if (!payload) {
+      throw new Error('Invalid saved view payload');
+    }
+    return this.toApplicationSavedView(updated, payload, {
+      id: updated.users.id,
+      email: updated.users.email,
+      fullName: updated.users.applicant_profiles?.full_name ?? null,
+    });
+  }
+
+  async deleteSavedView(eventId: string, viewId: string): Promise<void> {
+    const actorId = this.cls.get('actorId');
+    if (!actorId) throw new ForbiddenException('Authentication required');
+
+    const existing = await this.prisma.review_queue_saved_views.findFirst({
+      where: { id: viewId, event_id: eventId },
+      select: {
+        id: true,
+        user_id: true,
+        filters: true,
+      },
+    });
+    if (!existing) throw new NotFoundException('Saved view not found');
+    const payload = this.parseApplicationsSavedViewPayload(existing.filters);
+    if (!payload) {
+      throw new NotFoundException('Saved view not found');
+    }
+
+    await this.assertSavedViewWritePermission(eventId, existing.user_id);
+    await this.prisma.review_queue_saved_views.delete({ where: { id: viewId } });
+  }
+
+  private parseApplicationsSavedViewPayload(
+    raw: unknown,
+  ): ApplicationsSavedViewPayload | null {
+    const parsed = ApplicationsSavedViewPayloadSchema.safeParse(raw);
+    if (!parsed.success) return null;
+    return parsed.data;
+  }
+
+  private toApplicationSavedView(
+    row: {
+      id: string;
+      event_id: string;
+      user_id: string;
+      name: string;
+      created_at: Date;
+      updated_at: Date;
+    },
+    payload: {
+      mode: ApplicationsSavedViewMode;
+      filterTree: ApplicationsFilterGroup;
+      quickState?: ApplicationsQuickFilterState;
+    },
+    creator?: { id: string; email: string; fullName: string | null },
+  ): ApplicationSavedView {
+    return {
+      id: row.id,
+      eventId: row.event_id,
+      name: row.name,
+      mode: payload.mode,
+      filterTree: payload.filterTree,
+      ...(payload.quickState ? { quickState: payload.quickState } : {}),
+      createdBy: row.user_id,
+      ...(creator?.email ? { createdByEmail: creator.email } : {}),
+      ...(creator ? { createdByName: creator.fullName } : {}),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private async ensureSavedViewNameAvailable(
+    eventId: string,
+    name: string,
+    excludeId?: string,
+  ): Promise<void> {
+    const normalized = name.trim().toLowerCase();
+    const existing = await this.prisma.review_queue_saved_views.findMany({
+      where: {
+        event_id: eventId,
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        filters: true,
+      },
+    });
+    const hasCollision = existing.some((entry) => {
+      const payload = this.parseApplicationsSavedViewPayload(entry.filters);
+      if (!payload) return false;
+      return entry.name.trim().toLowerCase() === normalized;
+    });
+    if (hasCollision) {
+      throw new BadRequestException('A saved view with this name already exists');
+    }
+  }
+
+  private async assertSavedViewWritePermission(
+    eventId: string,
+    ownerUserId: string,
+  ): Promise<void> {
+    const actorId = this.cls.get('actorId');
+    const isGlobalAdmin = Boolean(this.cls.get('isGlobalAdmin'));
+    if (!actorId) throw new ForbiddenException('Authentication required');
+    if (isGlobalAdmin || ownerUserId === actorId) return;
+
+    const now = new Date();
+    const organizer = await this.prisma.event_role_assignments.findFirst({
+      where: {
+        event_id: eventId,
+        user_id: actorId,
+        role: 'organizer',
+        AND: [
+          {
+            OR: [{ access_start_at: null }, { access_start_at: { lte: now } }],
+          },
+          {
+            OR: [{ access_end_at: null }, { access_end_at: { gte: now } }],
+          },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!organizer) {
+      throw new ForbiddenException('Only the creator or an organizer can modify this saved view');
+    }
   }
 
   /**

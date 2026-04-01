@@ -21,15 +21,18 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { Permission } from '@event-platform/shared';
 import {
   ApplicationFilterSchema,
+  ApplicationsQueryRequestSchema,
   BulkApplicationIdsSchema,
   BulkApplicationTagsSchema,
   BulkAssignReviewerSchema,
   BulkDecisionDraftSchema,
   BulkStepActionSchema,
+  CreateApplicationSavedViewSchema,
   SaveDraftSchema,
   SubmitStepSchema,
   SetDecisionSchema,
   PublishDecisionsSchema,
+  UpdateApplicationSavedViewSchema,
 } from '@event-platform/shared';
 import { ClsService } from 'nestjs-cls';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -81,6 +84,75 @@ export class ApplicationsController {
   async findAll(@Param('eventId') eventId: string, @Query() query: any) {
     const filter = ApplicationFilterSchema.parse(query);
     return await this.applicationsService.findAll(eventId, filter);
+  }
+
+  /**
+   * Advanced applications query with nested boolean filter tree
+   */
+  @Post('query')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async query(
+    @Param('eventId') eventId: string,
+    @Body() body: unknown,
+  ) {
+    const dto = ApplicationsQueryRequestSchema.parse(body ?? {});
+    return await this.applicationsService.query(eventId, dto);
+  }
+
+  /**
+   * List shared saved application filter views for this event
+   */
+  @Get('views')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async listSavedViews(@Param('eventId') eventId: string) {
+    const views = await this.applicationsService.listSavedViews(eventId);
+    return { data: views };
+  }
+
+  /**
+   * Create a shared saved application filter view
+   */
+  @Post('views')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async createSavedView(
+    @Param('eventId') eventId: string,
+    @Body() body: unknown,
+  ) {
+    const dto = CreateApplicationSavedViewSchema.parse(body ?? {});
+    const view = await this.applicationsService.createSavedView(eventId, dto);
+    return { data: view };
+  }
+
+  /**
+   * Update a shared saved application filter view
+   */
+  @Patch('views/:viewId')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async updateSavedView(
+    @Param('eventId') eventId: string,
+    @Param('viewId') viewId: string,
+    @Body() body: unknown,
+  ) {
+    const dto = UpdateApplicationSavedViewSchema.parse(body ?? {});
+    const view = await this.applicationsService.updateSavedView(
+      eventId,
+      viewId,
+      dto,
+    );
+    return { data: view };
+  }
+
+  /**
+   * Delete a shared saved application filter view
+   */
+  @Delete('views/:viewId')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async deleteSavedView(
+    @Param('eventId') eventId: string,
+    @Param('viewId') viewId: string,
+  ) {
+    await this.applicationsService.deleteSavedView(eventId, viewId);
+    return { success: true };
   }
 
   /**

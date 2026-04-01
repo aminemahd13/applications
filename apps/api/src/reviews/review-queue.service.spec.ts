@@ -57,6 +57,9 @@ describe('ReviewQueueService', () => {
       form_versions: {
         findMany: jest.fn(),
       },
+      review_queue_saved_views: {
+        findMany: jest.fn(),
+      },
     };
     mockCls = {
       get: jest.fn().mockReturnValue('reviewer-1'),
@@ -178,5 +181,42 @@ describe('ReviewQueueService', () => {
     expect(result.data).toHaveLength(1);
     expect(result.data[0].applicationId).toBe('app-older');
   });
-});
 
+  it('ignores application-filter saved view payloads in review queue list', async () => {
+    mockPrisma.review_queue_saved_views.findMany.mockResolvedValue([
+      {
+        id: 'rv-1',
+        event_id: 'event-1',
+        name: 'Review',
+        user_id: 'reviewer-1',
+        is_default: false,
+        created_at: new Date('2026-03-10T10:00:00.000Z'),
+        updated_at: new Date('2026-03-10T10:00:00.000Z'),
+        filters: {
+          kind: 'review_queue',
+          version: 1,
+          filters: { status: 'pending' },
+        },
+      },
+      {
+        id: 'rv-2',
+        event_id: 'event-1',
+        name: 'Applications view',
+        user_id: 'reviewer-1',
+        is_default: false,
+        created_at: new Date('2026-03-10T10:00:00.000Z'),
+        updated_at: new Date('2026-03-10T10:00:00.000Z'),
+        filters: {
+          kind: 'applications',
+          version: 1,
+          mode: 'advanced',
+          filterTree: { type: 'group', mode: 'all', children: [] },
+        },
+      },
+    ]);
+
+    const views = await service.listSavedViews('event-1');
+    expect(views).toHaveLength(1);
+    expect(views[0].id).toBe('rv-1');
+  });
+});
