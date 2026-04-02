@@ -139,7 +139,7 @@ type ApplicationsListResponse =
   | Application[]
   | {
       data: Array<Record<string, unknown>>;
-      meta?: { hasMore?: boolean; nextCursor?: string | null };
+      meta?: { hasMore?: boolean; nextCursor?: string | null; total?: number };
     };
 
 const DERIVED_STATUS_OPTIONS: Array<{
@@ -353,6 +353,7 @@ export default function ApplicationsListPage() {
   const [isLoadingMoreApplications, setIsLoadingMoreApplications] = useState(false);
   const [hasMoreApplications, setHasMoreApplications] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [totalMatchingApplications, setTotalMatchingApplications] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
   const [isIssuingCredentials, setIsIssuingCredentials] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -363,6 +364,7 @@ export default function ApplicationsListPage() {
     pageSize: 20,
   });
   const [searchInput, setSearchInput] = useState("");
+  const [showFiltersPanel, setShowFiltersPanel] = useState(false);
   const [filterMode, setFilterMode] = useState<ApplicationsSavedViewMode>("quick");
   const [derivedStatusFilter, setDerivedStatusFilter] = useState<
     DerivedStatusFilterValue[]
@@ -546,11 +548,18 @@ export default function ApplicationsListPage() {
         !Array.isArray(res) &&
         Boolean((res as any).meta?.hasMore) &&
         Boolean(pageNextCursor);
+      const pageTotal =
+        !Array.isArray(res) &&
+        typeof (res as any).meta?.total === "number" &&
+        Number.isFinite((res as any).meta.total)
+          ? (res as any).meta.total
+          : undefined;
 
       return {
         applications: normalized,
         hasMore: pageHasMore,
         nextCursor: pageNextCursor,
+        total: pageTotal,
       };
     },
     [csrfToken, eventId]
@@ -602,6 +611,9 @@ export default function ApplicationsListPage() {
       } else {
         applicationsRef.current = page.applications;
         setApplications(page.applications);
+        setTotalMatchingApplications(
+          typeof page.total === "number" ? page.total : page.applications.length
+        );
         if (options?.clearSelection ?? true) {
           setSelectedIds([]);
         }
@@ -2278,12 +2290,23 @@ export default function ApplicationsListPage() {
   const hasLocalNextPage =
     (pagination.pageIndex + 1) * pagination.pageSize < filteredData.length;
   const canGoNextPage = hasLocalNextPage || hasMoreApplications;
+  const currentPageVisibleRows = table.getRowModel().rows.length;
+  const currentPageStart = currentPageVisibleRows === 0 ? 0 : pagination.pageIndex * pagination.pageSize + 1;
+  const currentPageEnd = pagination.pageIndex * pagination.pageSize + currentPageVisibleRows;
+  const showFiltersLabel =
+    showFiltersPanel
+      ? "Hide filters"
+      : hasActiveFilters
+        ? `Show filters (${activeFilterChips.length} active)`
+        : "Show filters";
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Applications"
-        description={`${applications.length}${hasMoreApplications ? "+" : ""} loaded applications`}
+        description={`${totalMatchingApplications} ${
+          totalMatchingApplications === 1 ? "application" : "applications"
+        }`}
       >
         {canDraftDecisions && (
           <Button
@@ -2308,305 +2331,326 @@ export default function ApplicationsListPage() {
         </Button>
       </PageHeader>
 
-      {/* Filters */}
+      {/* Search and filters */}
       <div className="space-y-3">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by name or email..."
+            value={searchInput}
+            onChange={(event) => {
+              const value = event.target.value;
+              setSearchInput(value);
+              if (filterMode === "advanced") {
+                setFilterMode("quick");
+              }
+              setSelectedViewId(NO_SAVED_VIEW_VALUE);
+            }}
+            className="pl-9"
+          />
+        </div>
+
         <div className="flex flex-wrap items-center gap-2">
           <Button
-            variant={filterMode === "quick" ? "default" : "outline"}
-            size="sm"
-            onClick={switchToQuickMode}
-          >
-            Quick filters
-          </Button>
-          <Button
-            variant={filterMode === "advanced" ? "default" : "outline"}
-            size="sm"
-            onClick={switchToAdvancedMode}
-          >
-            Advanced builder
-          </Button>
-          <Select value={selectedViewId} onValueChange={selectSavedView}>
-            <SelectTrigger className="w-[240px]">
-              <SelectValue placeholder="Shared saved view" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NO_SAVED_VIEW_VALUE}>No saved view</SelectItem>
-              {savedViews.map((view) => (
-                <SelectItem key={view.id} value={view.id}>
-                  {view.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button size="sm" variant="outline" onClick={() => setShowSaveViewDialog(true)}>
-            <Save className="mr-1.5 h-3.5 w-3.5" />
-            Save view
-          </Button>
-          <Button
             size="sm"
             variant="outline"
-            onClick={openRenameViewDialog}
-            disabled={selectedViewId === NO_SAVED_VIEW_VALUE}
+            onClick={() => setShowFiltersPanel((previous) => !previous)}
+            aria-expanded={showFiltersPanel}
           >
-            <Pencil className="mr-1.5 h-3.5 w-3.5" />
-            Rename
+            {showFiltersLabel}
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-destructive hover:text-destructive"
-            onClick={deleteSelectedView}
-            disabled={selectedViewId === NO_SAVED_VIEW_VALUE || isDeletingView}
-          >
-            <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-            {isDeletingView ? "Deleting..." : "Delete view"}
-          </Button>
-          {hasActiveFilters && (
+          {showFiltersPanel && hasActiveFilters && (
             <Button size="sm" variant="ghost" onClick={clearAllFilters}>
               Clear all
             </Button>
           )}
         </div>
 
-        {filterMode === "quick" && (
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by name or email..."
-              value={searchInput}
-              onChange={(e) => {
-                setSearchInput(e.target.value);
-                setSelectedViewId(NO_SAVED_VIEW_VALUE);
-              }}
-              className="pl-9"
-            />
-          </div>
-        )}
-
-        {hasActiveFilters && (
-          <div className="flex flex-wrap gap-2">
-            {activeFilterChips.map((chip) => (
-              <Badge
-                key={chip.id}
-                variant="secondary"
-                className="inline-flex items-center gap-1 text-xs"
+        {showFiltersPanel && (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant={filterMode === "quick" ? "default" : "outline"}
+                size="sm"
+                onClick={switchToQuickMode}
               >
-                <span>{chip.label}</span>
-                <button
-                  type="button"
-                  onClick={chip.onRemove}
-                  className="rounded p-0.5 hover:bg-muted"
-                  aria-label={`Remove ${chip.label}`}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </Badge>
-            ))}
+                Quick filters
+              </Button>
+              <Button
+                variant={filterMode === "advanced" ? "default" : "outline"}
+                size="sm"
+                onClick={switchToAdvancedMode}
+              >
+                Advanced builder
+              </Button>
+              <Select value={selectedViewId} onValueChange={selectSavedView}>
+                <SelectTrigger className="w-[240px]">
+                  <SelectValue placeholder="Shared saved view" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_SAVED_VIEW_VALUE}>No saved view</SelectItem>
+                  {savedViews.map((view) => (
+                    <SelectItem key={view.id} value={view.id}>
+                      {view.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setShowSaveViewDialog(true)}
+              >
+                <Save className="mr-1.5 h-3.5 w-3.5" />
+                Save view
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={openRenameViewDialog}
+                disabled={selectedViewId === NO_SAVED_VIEW_VALUE}
+              >
+                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                Rename
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-destructive hover:text-destructive"
+                onClick={deleteSelectedView}
+                disabled={selectedViewId === NO_SAVED_VIEW_VALUE || isDeletingView}
+              >
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                {isDeletingView ? "Deleting..." : "Delete view"}
+              </Button>
+            </div>
+
+            {hasActiveFilters && (
+              <div className="flex flex-wrap gap-2">
+                {activeFilterChips.map((chip) => (
+                  <Badge
+                    key={chip.id}
+                    variant="secondary"
+                    className="inline-flex items-center gap-1 text-xs"
+                  >
+                    <span>{chip.label}</span>
+                    <button
+                      type="button"
+                      onClick={chip.onRemove}
+                      className="rounded p-0.5 hover:bg-muted"
+                      aria-label={`Remove ${chip.label}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            )}
+
+            {filterMode === "quick" && (
+              <Card>
+                <CardContent className="space-y-4 p-4">
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label className="text-sm">Derived status</Label>
+                      <div className="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-2">
+                        {DERIVED_STATUS_OPTIONS.map((option) => (
+                          <label
+                            key={option.value}
+                            className="flex items-center gap-2 text-sm"
+                          >
+                            <Checkbox
+                              checked={derivedStatusFilter.includes(option.value)}
+                              onCheckedChange={() => {
+                                toggleDerivedStatusFilter(option.value);
+                                setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                              }}
+                            />
+                            <span>{option.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-sm">Decision</Label>
+                      <Select
+                        value={decisionStatusFilter}
+                        onValueChange={(value) => {
+                          setDecisionStatusFilter(value as DecisionStatusFilterValue);
+                          setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {DECISION_STATUS_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-3">
+                    <div className="space-y-2">
+                      <Label className="text-sm">Step</Label>
+                      <Select
+                        value={stepFilterId}
+                        onValueChange={(value) => {
+                          setStepFilterId(value);
+                          setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__any__">Any step</SelectItem>
+                          {sortedWorkflowSteps.map((step) => (
+                            <SelectItem key={step.id} value={step.id}>
+                              {step.stepIndex + 1}. {step.title}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-sm">Step status</Label>
+                      <Select
+                        value={stepStatusFilter}
+                        onValueChange={(value) => {
+                          setStepStatusFilter(value as StepStatusFilterValue);
+                          setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {STEP_STATUS_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-sm">Assigned reviewer</Label>
+                      <Select
+                        value={reviewerFilterId}
+                        onValueChange={(value) => {
+                          setReviewerFilterId(value);
+                          setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__any__">Any reviewer</SelectItem>
+                          {reviewers.map((reviewer) => (
+                            <SelectItem key={reviewer.userId} value={reviewer.userId}>
+                              {reviewer.fullName ?? reviewer.email} ({reviewer.email})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-sm">Tags (match all)</Label>
+                    <Input
+                      value={tagsFilterInput}
+                      onChange={(event) => {
+                        setTagsFilterInput(event.target.value);
+                        setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                      }}
+                      placeholder="vip, shortlist"
+                    />
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label className="text-sm">Completion bucket</Label>
+                      <div className="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-2">
+                        {COMPLETION_BUCKET_OPTIONS.map((option) => (
+                          <label
+                            key={option.value}
+                            className="flex items-center gap-2 text-sm"
+                          >
+                            <Checkbox
+                              checked={completionBucketFilter.includes(option.value)}
+                              onCheckedChange={() => {
+                                toggleCompletionBucketFilter(option.value);
+                                setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                              }}
+                            />
+                            <span>{option.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 p-3">
+                        <div>
+                          <Label className="text-sm">Has draft progress</Label>
+                          <p className="text-xs text-muted-foreground">
+                            Show applications with at least one draft.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={hasDraftProgressFilter}
+                          onCheckedChange={(checked) => {
+                            setHasDraftProgressFilter(checked);
+                            setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                          }}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 p-3">
+                        <div>
+                          <Label className="text-sm">Needs revision only</Label>
+                          <p className="text-xs text-muted-foreground">
+                            Keep applications with at least one step in needs revision.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={needsRevisionOnlyFilter}
+                          onCheckedChange={(checked) => {
+                            setNeedsRevisionOnlyFilter(checked);
+                            setSelectedViewId(NO_SAVED_VIEW_VALUE);
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {filterMode === "advanced" && (
+              <Card>
+                <CardContent className="space-y-4 p-4">
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                    <span>
+                      Conditions: {advancedFilterStats.conditionCount}/40
+                    </span>
+                    <span>Max depth: {advancedFilterStats.maxDepth}/3</span>
+                  </div>
+                  {renderAdvancedGroupEditor(advancedFilterTree, 1, true)}
+                </CardContent>
+              </Card>
+            )}
           </div>
-        )}
-
-        {filterMode === "quick" && (
-          <Card>
-            <CardContent className="space-y-4 p-4">
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="space-y-2">
-                  <Label className="text-sm">Derived status</Label>
-                  <div className="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-2">
-                    {DERIVED_STATUS_OPTIONS.map((option) => (
-                      <label
-                        key={option.value}
-                        className="flex items-center gap-2 text-sm"
-                      >
-                        <Checkbox
-                          checked={derivedStatusFilter.includes(option.value)}
-                          onCheckedChange={() => {
-                            toggleDerivedStatusFilter(option.value);
-                            setSelectedViewId(NO_SAVED_VIEW_VALUE);
-                          }}
-                        />
-                        <span>{option.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-sm">Decision</Label>
-                  <Select
-                    value={decisionStatusFilter}
-                    onValueChange={(value) => {
-                      setDecisionStatusFilter(value as DecisionStatusFilterValue);
-                      setSelectedViewId(NO_SAVED_VIEW_VALUE);
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {DECISION_STATUS_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-3">
-                <div className="space-y-2">
-                  <Label className="text-sm">Step</Label>
-                  <Select
-                    value={stepFilterId}
-                    onValueChange={(value) => {
-                      setStepFilterId(value);
-                      setSelectedViewId(NO_SAVED_VIEW_VALUE);
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__any__">Any step</SelectItem>
-                      {sortedWorkflowSteps.map((step) => (
-                        <SelectItem key={step.id} value={step.id}>
-                          {step.stepIndex + 1}. {step.title}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-sm">Step status</Label>
-                  <Select
-                    value={stepStatusFilter}
-                    onValueChange={(value) => {
-                      setStepStatusFilter(value as StepStatusFilterValue);
-                      setSelectedViewId(NO_SAVED_VIEW_VALUE);
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {STEP_STATUS_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-sm">Assigned reviewer</Label>
-                  <Select
-                    value={reviewerFilterId}
-                    onValueChange={(value) => {
-                      setReviewerFilterId(value);
-                      setSelectedViewId(NO_SAVED_VIEW_VALUE);
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__any__">Any reviewer</SelectItem>
-                      {reviewers.map((reviewer) => (
-                        <SelectItem key={reviewer.userId} value={reviewer.userId}>
-                          {reviewer.fullName ?? reviewer.email} ({reviewer.email})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm">Tags (match all)</Label>
-                <Input
-                  value={tagsFilterInput}
-                  onChange={(event) => {
-                    setTagsFilterInput(event.target.value);
-                    setSelectedViewId(NO_SAVED_VIEW_VALUE);
-                  }}
-                  placeholder="vip, shortlist"
-                />
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="space-y-2">
-                  <Label className="text-sm">Completion bucket</Label>
-                  <div className="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-2">
-                    {COMPLETION_BUCKET_OPTIONS.map((option) => (
-                      <label
-                        key={option.value}
-                        className="flex items-center gap-2 text-sm"
-                      >
-                        <Checkbox
-                          checked={completionBucketFilter.includes(option.value)}
-                          onCheckedChange={() => {
-                            toggleCompletionBucketFilter(option.value);
-                            setSelectedViewId(NO_SAVED_VIEW_VALUE);
-                          }}
-                        />
-                        <span>{option.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 p-3">
-                    <div>
-                      <Label className="text-sm">Has draft progress</Label>
-                      <p className="text-xs text-muted-foreground">
-                        Show applications with at least one draft.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={hasDraftProgressFilter}
-                      onCheckedChange={(checked) => {
-                        setHasDraftProgressFilter(checked);
-                        setSelectedViewId(NO_SAVED_VIEW_VALUE);
-                      }}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 p-3">
-                    <div>
-                      <Label className="text-sm">Needs revision only</Label>
-                      <p className="text-xs text-muted-foreground">
-                        Keep applications with at least one step in needs revision.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={needsRevisionOnlyFilter}
-                      onCheckedChange={(checked) => {
-                        setNeedsRevisionOnlyFilter(checked);
-                        setSelectedViewId(NO_SAVED_VIEW_VALUE);
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {filterMode === "advanced" && (
-          <Card>
-            <CardContent className="space-y-4 p-4">
-              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                <span>
-                  Conditions: {advancedFilterStats.conditionCount}/40
-                </span>
-                <span>Max depth: {advancedFilterStats.maxDepth}/3</span>
-              </div>
-              {renderAdvancedGroupEditor(advancedFilterTree, 1, true)}
-            </CardContent>
-          </Card>
         )}
       </div>
 
@@ -2830,8 +2874,9 @@ export default function ApplicationsListPage() {
       {/* Pagination */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          Showing {table.getRowModel().rows.length} of {filteredData.length} loaded
-          applications{hasMoreApplications ? " (more available)" : ""}
+          {currentPageVisibleRows === 0
+            ? `Showing 0 of ${totalMatchingApplications} applications`
+            : `Showing ${currentPageStart}-${currentPageEnd} of ${totalMatchingApplications} applications`}
         </p>
         <div className="flex gap-2">
           <Button

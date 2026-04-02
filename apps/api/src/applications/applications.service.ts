@@ -153,22 +153,19 @@ export class ApplicationsService {
     const limit = Math.min(Math.max(request.limit ?? 50, 1), 100);
     const order = request.order === 'asc' ? 'asc' : 'desc';
     const compiled = this.compileApplicationsFilterTree(request.filterTree);
+    const shouldIncludeTotal = !request.cursor;
 
     // Use larger scan windows to avoid missing sparse matches while preserving stable cursor pagination.
     const batchSize = Math.min(400, Math.max(limit * 4, 100));
     const maxMatchesToCollect = limit + 1;
     const matched: Array<{ application: ApplicationsListRecord; summary: ApplicationSummary }> =
       [];
+    let totalMatches = 0;
 
     let scanCursor: string | null = request.cursor ?? null;
     let hasMoreSourceRows = true;
-    let safetyCounter = 0;
 
-    while (
-      matched.length < maxMatchesToCollect &&
-      hasMoreSourceRows &&
-      safetyCounter < 200
-    ) {
+    while (hasMoreSourceRows && (shouldIncludeTotal || matched.length < maxMatchesToCollect)) {
       const batch = await this.fetchApplicationsBatch(eventId, {
         cursor: scanCursor,
         take: batchSize,
@@ -184,9 +181,12 @@ export class ApplicationsService {
       for (const application of batch) {
         const summary = this.toSummary(application);
         if (compiled.evaluate(application, summary)) {
-          matched.push({ application, summary });
+          totalMatches += 1;
+          if (matched.length < maxMatchesToCollect) {
+            matched.push({ application, summary });
+          }
         }
-        if (matched.length >= maxMatchesToCollect) {
+        if (!shouldIncludeTotal && matched.length >= maxMatchesToCollect) {
           break;
         }
       }
@@ -195,10 +195,9 @@ export class ApplicationsService {
       if (batch.length < batchSize) {
         hasMoreSourceRows = false;
       }
-      safetyCounter += 1;
     }
 
-    const hasMore = matched.length > limit;
+    const hasMore = shouldIncludeTotal ? totalMatches > limit : matched.length > limit;
     const page = hasMore ? matched.slice(0, limit) : matched;
 
     return {
@@ -206,6 +205,7 @@ export class ApplicationsService {
       meta: {
         nextCursor: hasMore ? page[page.length - 1]?.application.id ?? null : null,
         hasMore,
+        ...(shouldIncludeTotal ? { total: totalMatches } : {}),
       },
     };
   }

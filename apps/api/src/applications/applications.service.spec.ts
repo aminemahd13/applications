@@ -1261,6 +1261,7 @@ describe('ApplicationsService boolean query semantics', () => {
 
     expect(result.data).toHaveLength(1);
     expect(result.data[0]?.id).toBe('app-match');
+    expect(result.meta.total).toBe(1);
   });
 
   it('keeps nextCursor stable for selective computed filters', async () => {
@@ -1312,6 +1313,7 @@ describe('ApplicationsService boolean query semantics', () => {
     expect(first.data[0]?.id).toBe('app-z');
     expect(first.meta.hasMore).toBe(true);
     expect(first.meta.nextCursor).toBe('app-z');
+    expect(first.meta.total).toBe(2);
 
     const second = await service.query('event-1', {
       limit: 1,
@@ -1328,6 +1330,7 @@ describe('ApplicationsService boolean query semantics', () => {
     expect(second.data[0]?.id).toBe('app-x');
     expect(second.meta.hasMore).toBe(false);
     expect(second.meta.nextCursor).toBeNull();
+    expect(second.meta.total).toBeUndefined();
   });
 });
 
