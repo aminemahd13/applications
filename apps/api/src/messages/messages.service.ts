@@ -1087,35 +1087,28 @@ export class MessagesService {
       _count: { id: true },
     });
 
-    let lastAttemptRows: Array<{
-      message_id: string;
-      _max: { email_last_attempt_at: Date | null };
-    }> = [];
-    let nextRetryRows: Array<{
-      message_id: string;
-      _min: { email_next_attempt_at: Date | null };
-    }> = [];
+    const lastAttemptRows = options?.includeAttemptTimeline
+      ? await this.prisma.message_recipients.groupBy({
+          by: ['message_id'],
+          where: {
+            message_id: { in: uniqueMessageIds },
+            email_last_attempt_at: { not: null },
+          },
+          _max: { email_last_attempt_at: true },
+        })
+      : [];
 
-    if (options?.includeAttemptTimeline) {
-      lastAttemptRows = await this.prisma.message_recipients.groupBy({
-        by: ['message_id'],
-        where: {
-          message_id: { in: uniqueMessageIds },
-          email_last_attempt_at: { not: null },
-        },
-        _max: { email_last_attempt_at: true },
-      });
-
-      nextRetryRows = await this.prisma.message_recipients.groupBy({
-        by: ['message_id'],
-        where: {
-          message_id: { in: uniqueMessageIds },
-          delivery_email_status: { in: pendingStatusValues },
-          email_next_attempt_at: { gt: now },
-        },
-        _min: { email_next_attempt_at: true },
-      });
-    }
+    const nextRetryRows = options?.includeAttemptTimeline
+      ? await this.prisma.message_recipients.groupBy({
+          by: ['message_id'],
+          where: {
+            message_id: { in: uniqueMessageIds },
+            delivery_email_status: { in: pendingStatusValues },
+            email_next_attempt_at: { gt: now },
+          },
+          _min: { email_next_attempt_at: true },
+        })
+      : [];
 
     type DeliveryAccumulator = {
       totalRecipients: number;
