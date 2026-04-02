@@ -268,6 +268,9 @@ export class StepStateService {
       where: { application_id: applicationId, step_id: stepId },
       data: {
         status: StepStatus.APPROVED,
+        // Reviewer approval should finalize the latest submitted version.
+        // Drop any unsent draft pointer so detail views don't surface draft-only edits.
+        current_draft_id: null,
         last_activity_at: new Date(),
       },
     });

@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
   CreateWorkflowStepDto,
+  StepModificationScope,
   UpdateWorkflowStepDto,
   ReorderWorkflowDto,
   UnlockPolicy,
@@ -29,6 +30,8 @@ export interface WorkflowStepResponse {
   strictGating: boolean;
   sensitivityLevel: string;
   hidden: boolean;
+  allowApplicantModification: boolean;
+  modificationScope: StepModificationScope;
   deadlineAt: Date | null;
   formVersionId: string | null;
   createdAt: Date;
@@ -57,6 +60,11 @@ export class WorkflowService {
       strictGating: step.strict_gating,
       sensitivityLevel: step.sensitivity_level,
       hidden: Boolean(step.hidden),
+      allowApplicantModification: Boolean(step.allow_applicant_modification),
+      modificationScope:
+        step.modification_scope === StepModificationScope.SUBMITTED_OR_APPROVED
+          ? StepModificationScope.SUBMITTED_OR_APPROVED
+          : StepModificationScope.SUBMITTED_ONLY,
       deadlineAt: step.deadline_at,
       formVersionId: step.form_version_id,
       createdAt: step.created_at,
@@ -130,6 +138,9 @@ export class WorkflowService {
         strict_gating: dto.strictGating ?? true,
         sensitivity_level: dto.sensitivityLevel || 'NORMAL',
         hidden: dto.hidden ?? false,
+        allow_applicant_modification: dto.allowApplicantModification ?? false,
+        modification_scope:
+          dto.modificationScope ?? StepModificationScope.SUBMITTED_ONLY,
         deadline_at: dto.deadlineAt,
         form_version_id: dto.formVersionId,
       },
@@ -163,6 +174,12 @@ export class WorkflowService {
     if (dto.sensitivityLevel !== undefined)
       data.sensitivity_level = dto.sensitivityLevel;
     if (dto.hidden !== undefined) data.hidden = dto.hidden;
+    if (dto.allowApplicantModification !== undefined) {
+      data.allow_applicant_modification = dto.allowApplicantModification;
+    }
+    if (dto.modificationScope !== undefined) {
+      data.modification_scope = dto.modificationScope;
+    }
     if (dto.deadlineAt !== undefined) data.deadline_at = dto.deadlineAt;
     if (dto.formVersionId !== undefined && dto.formVersionId !== null) {
       await this.assertFormVersionInEvent(eventId, dto.formVersionId);

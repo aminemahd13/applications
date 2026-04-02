@@ -52,6 +52,7 @@ type UnlockPolicy =
   | "ADMIN_MANUAL";
 type RejectBehavior = "FINAL" | "RESUBMIT_ALLOWED";
 type SensitivityLevel = "NORMAL" | "SENSITIVE";
+type StepModificationScope = "SUBMITTED_ONLY" | "SUBMITTED_OR_APPROVED";
 
 interface WorkflowStep {
   id: string;
@@ -68,6 +69,8 @@ interface WorkflowStep {
   formVersionId?: string | null;
   sensitivityLevel: SensitivityLevel;
   hidden: boolean;
+  allowApplicantModification: boolean;
+  modificationScope: StepModificationScope;
 }
 
 interface FormVersionOption {
@@ -122,6 +125,14 @@ function normalizeSensitivityLevel(rawLevel: unknown): SensitivityLevel {
   return value === "SENSITIVE" ? "SENSITIVE" : "NORMAL";
 }
 
+function normalizeModificationScope(rawScope: unknown): StepModificationScope {
+  const value =
+    typeof rawScope === "string" ? rawScope.trim().toUpperCase() : "";
+  return value === "SUBMITTED_OR_APPROVED"
+    ? "SUBMITTED_OR_APPROVED"
+    : "SUBMITTED_ONLY";
+}
+
 function toLocalDateTimeInput(value?: string | null): string {
   if (!value) return "";
   const date = new Date(value);
@@ -169,6 +180,8 @@ function normalizeStep(raw: any): WorkflowStep {
     formVersionId: raw?.formVersionId ?? null,
     sensitivityLevel: normalizeSensitivityLevel(raw?.sensitivityLevel),
     hidden: Boolean(raw?.hidden),
+    allowApplicantModification: Boolean(raw?.allowApplicantModification),
+    modificationScope: normalizeModificationScope(raw?.modificationScope),
   };
 }
 
@@ -186,6 +199,8 @@ function toApiPayload(step: WorkflowStep) {
     formVersionId: step.formVersionId || null,
     sensitivityLevel: step.sensitivityLevel,
     hidden: step.hidden,
+    allowApplicantModification: step.allowApplicantModification,
+    modificationScope: step.modificationScope,
   };
 }
 
@@ -319,6 +334,8 @@ export default function WorkflowBuilderPage() {
       formVersionId: null,
       sensitivityLevel: "NORMAL",
       hidden: false,
+      allowApplicantModification: false,
+      modificationScope: "SUBMITTED_ONLY",
     };
     setSteps([...steps, newStep]);
   }
@@ -676,7 +693,54 @@ export default function WorkflowBuilderPage() {
                               onCheckedChange={(v) =>
                                 updateStep(step.id, { hidden: v })
                               }
-                            />
+                              />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="flex items-center justify-between">
+                              <SettingHelpLabel
+                                label="Allow modification"
+                                helpText="When enabled, applicants can update this step after submission according to the selected scope."
+                              />
+                              <Switch
+                                checked={step.allowApplicantModification}
+                                onCheckedChange={(v) =>
+                                  updateStep(step.id, {
+                                    allowApplicantModification: v,
+                                    modificationScope: v
+                                      ? step.modificationScope
+                                      : "SUBMITTED_ONLY",
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <SettingHelpLabel
+                                label="Modification scope"
+                                helpText="Choose whether applicants can edit only after submitted, or after submitted and approved."
+                              />
+                              <Select
+                                value={step.modificationScope}
+                                onValueChange={(v) =>
+                                  updateStep(step.id, {
+                                    modificationScope: v as StepModificationScope,
+                                  })
+                                }
+                                disabled={!step.allowApplicantModification}
+                              >
+                                <SelectTrigger className="h-8">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="SUBMITTED_ONLY">
+                                    After submitted
+                                  </SelectItem>
+                                  <SelectItem value="SUBMITTED_OR_APPROVED">
+                                    After submitted or approved
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
                           </div>
 
                           <div className="grid grid-cols-2 gap-4">

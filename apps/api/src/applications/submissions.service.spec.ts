@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { SubmissionsService } from './submissions.service';
 import { StepStatus } from '@event-platform/shared';
 import {
@@ -225,5 +225,217 @@ describe('SubmissionsService targeted needs-info gating', () => {
       ),
     ).resolves.toEqual(submittedAnswers);
     expect(prisma.step_submission_versions.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('SubmissionsService applicant modification scope behavior', () => {
+  function createSaveDraftHarness(params: {
+    stepStatus: string;
+    allowApplicantModification: boolean;
+    modificationScope: 'SUBMITTED_ONLY' | 'SUBMITTED_OR_APPROVED';
+  }) {
+    const prisma = {
+      workflow_steps: {
+        findUnique: jest.fn().mockResolvedValue({
+          category: 'APPLICATION',
+          form_version_id: 'form-1',
+          allow_applicant_modification: params.allowApplicantModification,
+          modification_scope: params.modificationScope,
+        }),
+      },
+      step_drafts: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'draft-1' }),
+      },
+      application_step_states: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+
+    const stepStateService = {
+      getStepState: jest.fn().mockResolvedValue({
+        stepId: 'step-1',
+        status: params.stepStatus,
+        currentDraftId: null,
+      }),
+    };
+
+    const service = new SubmissionsService(
+      prisma as any,
+      {} as any,
+      stepStateService as any,
+      {} as any,
+      {} as any,
+    );
+
+    return { service, prisma };
+  }
+
+  it('denies submitted draft edits when modification toggle is disabled', async () => {
+    const { service } = createSaveDraftHarness({
+      stepStatus: StepStatus.SUBMITTED,
+      allowApplicantModification: false,
+      modificationScope: 'SUBMITTED_ONLY',
+    });
+
+    await expect(
+      service.saveDraft('app-1', 'step-1', { answers: { field: 'value' } }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('allows submitted draft edits when scope includes submitted', async () => {
+    const { service, prisma } = createSaveDraftHarness({
+      stepStatus: StepStatus.SUBMITTED,
+      allowApplicantModification: true,
+      modificationScope: 'SUBMITTED_ONLY',
+    });
+
+    await expect(
+      service.saveDraft('app-1', 'step-1', { answers: { field: 'value' } }),
+    ).resolves.toEqual({ draftId: 'draft-1' });
+    expect(prisma.step_drafts.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('denies approved draft edits when scope is submitted only', async () => {
+    const { service } = createSaveDraftHarness({
+      stepStatus: StepStatus.APPROVED,
+      allowApplicantModification: true,
+      modificationScope: 'SUBMITTED_ONLY',
+    });
+
+    await expect(
+      service.saveDraft('app-1', 'step-1', { answers: { field: 'value' } }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('allows approved draft edits when scope includes approved', async () => {
+    const { service, prisma } = createSaveDraftHarness({
+      stepStatus: StepStatus.APPROVED,
+      allowApplicantModification: true,
+      modificationScope: 'SUBMITTED_OR_APPROVED',
+    });
+
+    await expect(
+      service.saveDraft('app-1', 'step-1', { answers: { field: 'value' } }),
+    ).resolves.toEqual({ draftId: 'draft-1' });
+    expect(prisma.step_drafts.create).toHaveBeenCalledTimes(1);
+  });
+
+  function createSubmitHarness(params: { reviewRequired: boolean }) {
+    const updateManyMock = jest.fn().mockResolvedValue({ count: 1 });
+    const tx = {
+      step_submission_versions: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: 'submission-1',
+          application_id: 'app-1',
+          step_id: 'step-1',
+          form_version_id: 'form-1',
+          version_number: 1,
+          answers_snapshot: { field: 'value' },
+          submitted_at: new Date('2026-01-01T10:00:00.000Z'),
+          submitted_by: 'user-1',
+        }),
+      },
+      application_step_states: {
+        updateMany: updateManyMock,
+      },
+    };
+
+    const prisma = {
+      applications: {
+        findUnique: jest.fn().mockResolvedValue({
+          event_id: 'event-1',
+          applicant_user_id: 'user-1',
+        }),
+      },
+      workflow_steps: {
+        findFirst: jest.fn().mockResolvedValue({
+          category: 'APPLICATION',
+          deadline_at: null,
+          form_version_id: 'form-1',
+          review_required: params.reviewRequired,
+          allow_applicant_modification: true,
+          modification_scope: 'SUBMITTED_OR_APPROVED',
+        }),
+      },
+      form_versions: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'form-1',
+          schema: undefined,
+        }),
+      },
+      needs_info_requests: {
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      step_submission_versions: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      $transaction: jest.fn(async (cb: any) => cb(tx)),
+    };
+
+    const cls = {
+      get: jest.fn((key: string) => (key === 'actorId' ? 'user-1' : undefined)),
+    };
+
+    const stepStateService = {
+      getStepState: jest.fn().mockResolvedValue({
+        stepId: 'step-1',
+        status: StepStatus.APPROVED,
+        currentDraftId: null,
+      }),
+      recomputeAllStepStates: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const filesService = {
+      validateAndCommit: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const service = new SubmissionsService(
+      prisma as any,
+      cls as any,
+      stepStateService as any,
+      filesService as any,
+      {} as any,
+    );
+
+    return { service, updateManyMock };
+  }
+
+  it('reverts approved step back to submitted on resubmit when review is required', async () => {
+    const { service, updateManyMock } = createSubmitHarness({
+      reviewRequired: true,
+    });
+
+    await service.submit('event-1', 'app-1', 'step-1', {
+      answers: { field: 'value' },
+    });
+
+    expect(updateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: StepStatus.SUBMITTED,
+        }),
+      }),
+    );
+  });
+
+  it('keeps approved step approved on resubmit when review is not required', async () => {
+    const { service, updateManyMock } = createSubmitHarness({
+      reviewRequired: false,
+    });
+
+    await service.submit('event-1', 'app-1', 'step-1', {
+      answers: { field: 'value' },
+    });
+
+    expect(updateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: StepStatus.APPROVED,
+        }),
+      }),
+    );
   });
 });

@@ -13,10 +13,10 @@ import {
   FileDownloadUrlResponse,
   FileVerificationResponse,
   Permission,
-  StepStatus,
 } from '@event-platform/shared';
 import { StorageService } from '../common/storage/storage.service';
 import { FormDefinition, getFormFields } from '@event-platform/schemas';
+import { canApplicantEditStep } from '../applications/applicant-step-editability.util';
 
 interface UploadFieldContext {
   applicationId: string;
@@ -623,7 +623,13 @@ export class FilesService {
     const [step, stepState] = await Promise.all([
       this.prisma.workflow_steps.findFirst({
         where: { id: context.stepId, event_id: eventId },
-        select: { id: true, form_version_id: true, deadline_at: true },
+        select: {
+          id: true,
+          form_version_id: true,
+          deadline_at: true,
+          allow_applicant_modification: true,
+          modification_scope: true,
+        },
       }),
       this.prisma.application_step_states.findFirst({
         where: {
@@ -642,8 +648,11 @@ export class FilesService {
 
     if (!isStaffActor) {
       if (
-        stepState.status !== StepStatus.UNLOCKED &&
-        stepState.status !== StepStatus.NEEDS_REVISION
+        !canApplicantEditStep(
+          stepState.status,
+          step.allow_applicant_modification,
+          step.modification_scope,
+        )
       ) {
         throw new ForbiddenException('Step is not open for file uploads');
       }

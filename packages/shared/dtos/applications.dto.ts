@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { StepModificationScope } from './workflow.dto';
 
 // ============================================================
 // APPLICATION DTOs
@@ -587,6 +588,8 @@ export interface StepStateResponse {
     answersSource: 'SUBMISSION' | 'DRAFT' | null;
     currentDraftId: string | null;
     latestSubmissionVersionId: string | null;
+    allowApplicantModification?: boolean;
+    modificationScope?: StepModificationScope;
     revisionCycleCount: number;
     unlockedAt: Date | null;
     lastActivityAt: Date;

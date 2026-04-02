@@ -17,6 +17,7 @@ import {
 import { StepStateService } from './step-state.service';
 import { FilesService } from '../reviews/files.service';
 import { FormsService } from '../workflow/forms.service';
+import { canApplicantEditStep } from './applicant-step-editability.util';
 import {
   generateFormSchema,
   FormDefinition,
@@ -51,22 +52,30 @@ export class SubmissionsService {
     );
     if (!state) throw new NotFoundException('Step state not found');
 
-    // Check step is unlocked or needs revision
-    if (
-      state.status !== StepStatus.UNLOCKED &&
-      state.status !== StepStatus.NEEDS_REVISION
-    ) {
-      throw new ForbiddenException('Step is not open for editing');
-    }
-
     // Get current form version for this step
     const step = await this.prisma.workflow_steps.findUnique({
       where: { id: stepId },
-      select: { category: true, form_version_id: true },
+      select: {
+        category: true,
+        form_version_id: true,
+        allow_applicant_modification: true,
+        modification_scope: true,
+      },
     });
     if (!step) {
       throw new NotFoundException('Step not found');
     }
+
+    if (
+      !canApplicantEditStep(
+        state.status,
+        step.allow_applicant_modification,
+        step.modification_scope,
+      )
+    ) {
+      throw new ForbiddenException('Step is not open for editing');
+    }
+
     if (!step.form_version_id) {
       if (step.category === 'INFO_ONLY') {
         // Info-only steps intentionally do not persist answer drafts.
@@ -167,14 +176,6 @@ export class SubmissionsService {
 
     if (!state) throw new NotFoundException('Step state not found');
 
-    // Check step is unlocked or needs revision
-    if (
-      state.status !== StepStatus.UNLOCKED &&
-      state.status !== StepStatus.NEEDS_REVISION
-    ) {
-      throw new ForbiddenException('Step is not open for submission');
-    }
-
     // Get form version and step details
     const step = await this.prisma.workflow_steps.findFirst({
       where: { id: stepId, event_id: eventId },
@@ -183,10 +184,22 @@ export class SubmissionsService {
         deadline_at: true,
         form_version_id: true,
         review_required: true,
+        allow_applicant_modification: true,
+        modification_scope: true,
       },
     });
     if (!step) {
       throw new NotFoundException('Step not found');
+    }
+
+    if (
+      !canApplicantEditStep(
+        state.status,
+        step.allow_applicant_modification,
+        step.modification_scope,
+      )
+    ) {
+      throw new ForbiddenException('Step is not open for submission');
     }
 
     // Enforce step deadline (if set)

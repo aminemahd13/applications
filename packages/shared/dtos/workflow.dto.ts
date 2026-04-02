@@ -46,6 +46,11 @@ export enum SensitivityLevel {
     SENSITIVE = 'SENSITIVE',
 }
 
+export enum StepModificationScope {
+    SUBMITTED_ONLY = 'SUBMITTED_ONLY',
+    SUBMITTED_OR_APPROVED = 'SUBMITTED_OR_APPROVED',
+}
+
 export const CreateWorkflowStepSchema = z.object({
     title: z.string().min(1).max(200),
     category: z.nativeEnum(StepCategory).default(StepCategory.APPLICATION),
@@ -59,6 +64,10 @@ export const CreateWorkflowStepSchema = z.object({
     formVersionId: z.string().uuid().optional().nullable(),
     sensitivityLevel: z.nativeEnum(SensitivityLevel).default(SensitivityLevel.NORMAL),
     hidden: z.boolean().default(false),
+    allowApplicantModification: z.boolean().default(false),
+    modificationScope: z.nativeEnum(StepModificationScope).default(
+        StepModificationScope.SUBMITTED_ONLY,
+    ),
 });
 
 export type CreateWorkflowStepDto = z.infer<typeof CreateWorkflowStepSchema>;

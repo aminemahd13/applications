@@ -288,6 +288,121 @@ interface FilterTreeStats {
 }
 
 let filterNodeCounter = 0;
+const MAX_QUERY_FILTER_DEPTH = 3;
+const MAX_QUERY_FILTER_CONDITIONS = 40;
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const DERIVED_STATUS_VALUES: readonly DerivedStatusFilterValue[] = [
+  "waiting_applicant",
+  "waiting_review",
+  "revision_required",
+  "all_required_steps_approved",
+  "accepted",
+  "waitlisted",
+  "confirmed",
+  "rejected",
+];
+
+const DECISION_STATUS_FILTER_VALUES: readonly DecisionStatusFilterValue[] = [
+  "all",
+  "NONE",
+  "ACCEPTED",
+  "WAITLISTED",
+  "REJECTED",
+];
+
+const DECISION_STATUS_CONDITION_VALUES: readonly DecisionStatusConditionValue[] = [
+  "NONE",
+  "ACCEPTED",
+  "WAITLISTED",
+  "REJECTED",
+];
+
+const STEP_STATUS_FILTER_VALUES: readonly StepStatusFilterValue[] = [
+  "all",
+  "LOCKED",
+  "UNLOCKED",
+  "SUBMITTED",
+  "NEEDS_REVISION",
+  "APPROVED",
+  "REJECTED_FINAL",
+];
+
+const STEP_STATUS_CONDITION_VALUES: readonly StepStatusConditionValue[] = [
+  "LOCKED",
+  "UNLOCKED",
+  "SUBMITTED",
+  "NEEDS_REVISION",
+  "APPROVED",
+  "REJECTED_FINAL",
+];
+
+const COMPLETION_BUCKET_VALUES: readonly CompletionBucketValue[] = [
+  "0",
+  "1_49",
+  "50_99",
+  "100",
+];
+
+const DERIVED_STATUS_SET = new Set<string>(DERIVED_STATUS_VALUES);
+const DECISION_STATUS_FILTER_SET = new Set<string>(DECISION_STATUS_FILTER_VALUES);
+const DECISION_STATUS_CONDITION_SET = new Set<string>(DECISION_STATUS_CONDITION_VALUES);
+const STEP_STATUS_FILTER_SET = new Set<string>(STEP_STATUS_FILTER_VALUES);
+const STEP_STATUS_CONDITION_SET = new Set<string>(STEP_STATUS_CONDITION_VALUES);
+const COMPLETION_BUCKET_SET = new Set<string>(COMPLETION_BUCKET_VALUES);
+
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value.trim());
+}
+
+function isDerivedStatusFilterValue(value: unknown): value is DerivedStatusFilterValue {
+  return typeof value === "string" && DERIVED_STATUS_SET.has(value);
+}
+
+function isDecisionStatusFilterValue(value: unknown): value is DecisionStatusFilterValue {
+  return typeof value === "string" && DECISION_STATUS_FILTER_SET.has(value);
+}
+
+function isDecisionStatusConditionValue(value: unknown): value is DecisionStatusConditionValue {
+  return typeof value === "string" && DECISION_STATUS_CONDITION_SET.has(value);
+}
+
+function isStepStatusFilterValue(value: unknown): value is StepStatusFilterValue {
+  return typeof value === "string" && STEP_STATUS_FILTER_SET.has(value);
+}
+
+function isStepStatusConditionValue(value: unknown): value is StepStatusConditionValue {
+  return typeof value === "string" && STEP_STATUS_CONDITION_SET.has(value);
+}
+
+function isCompletionBucketValue(value: unknown): value is CompletionBucketValue {
+  return typeof value === "string" && COMPLETION_BUCKET_SET.has(value);
+}
+
+function uniqueTrimmedStrings(values: readonly string[]): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
+}
+
+function pickAllowedValues<T extends string>(
+  values: readonly string[],
+  predicate: (value: unknown) => value is T,
+): T[] {
+  return uniqueTrimmedStrings(values).filter(predicate);
+}
+
+function normalizeNegate(
+  negate: boolean | undefined,
+): { negate: true } | Record<string, never> {
+  return negate ? { negate: true } : {};
+}
 
 function nextFilterNodeId(): string {
   filterNodeCounter += 1;
@@ -329,26 +444,45 @@ function isApiFilterCondition(value: unknown): value is ApplicationsApiFilterCon
   const candidate = value as { type?: unknown; [key: string]: unknown };
   switch (candidate.type) {
     case "search_text":
-      return typeof candidate.value === "string";
-    case "decision_status":
-      return isStringArray(candidate.values);
-    case "derived_status":
-      return isStringArray(candidate.values);
+      return typeof candidate.value === "string" && candidate.value.trim().length > 0;
+    case "decision_status": {
+      if (!isStringArray(candidate.values) || candidate.values.length === 0) return false;
+      return candidate.values.every((entry) => isDecisionStatusConditionValue(entry));
+    }
+    case "derived_status": {
+      if (!isStringArray(candidate.values) || candidate.values.length === 0) return false;
+      return candidate.values.every((entry) => isDerivedStatusFilterValue(entry));
+    }
     case "step_status":
-      return typeof candidate.stepId === "string" && isStringArray(candidate.statuses);
-    case "assigned_reviewer":
       return (
-        (candidate.matcher === "any" ||
-          candidate.matcher === "unassigned" ||
-          candidate.matcher === "specific") &&
-        (candidate.reviewerId === undefined || typeof candidate.reviewerId === "string")
+        isUuid(candidate.stepId) &&
+        isStringArray(candidate.statuses) &&
+        candidate.statuses.length > 0 &&
+        candidate.statuses.every((entry) => isStepStatusConditionValue(entry))
       );
+    case "assigned_reviewer": {
+      if (candidate.matcher === "specific") {
+        return isUuid(candidate.reviewerId);
+      }
+      if (candidate.matcher === "any" || candidate.matcher === "unassigned") {
+        return candidate.reviewerId === undefined;
+      }
+      return false;
+    }
     case "tags_any":
     case "tags_all":
     case "tags_none":
-      return isStringArray(candidate.values);
+      return (
+        isStringArray(candidate.values) &&
+        candidate.values.length > 0 &&
+        candidate.values.every((entry) => entry.trim().length > 0)
+      );
     case "completion_bucket":
-      return isStringArray(candidate.values);
+      return (
+        isStringArray(candidate.values) &&
+        candidate.values.length > 0 &&
+        candidate.values.every((entry) => isCompletionBucketValue(entry))
+      );
     case "has_draft_progress":
     case "needs_revision":
       return typeof candidate.value === "boolean";
@@ -357,14 +491,32 @@ function isApiFilterCondition(value: unknown): value is ApplicationsApiFilterCon
   }
 }
 
-function isApiFilterGroup(value: unknown): value is ApplicationsApiFilterGroup {
+function isApiFilterNode(
+  value: unknown,
+  depth: number,
+  stats: { conditionCount: number },
+): value is ApplicationsApiFilterNode {
+  if (depth > MAX_QUERY_FILTER_DEPTH) return false;
+  if (isApiFilterCondition(value)) {
+    stats.conditionCount += 1;
+    return stats.conditionCount <= MAX_QUERY_FILTER_CONDITIONS;
+  }
+  return isApiFilterGroup(value, depth, stats);
+}
+
+function isApiFilterGroup(
+  value: unknown,
+  depth = 1,
+  stats: { conditionCount: number } = { conditionCount: 0 },
+): value is ApplicationsApiFilterGroup {
+  if (depth > MAX_QUERY_FILTER_DEPTH) return false;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as { type?: unknown; mode?: unknown; children?: unknown };
   if (candidate.type !== "group") return false;
   if (candidate.mode !== "all" && candidate.mode !== "any") return false;
   if (!Array.isArray(candidate.children)) return false;
   return candidate.children.every(
-    (child) => isApiFilterGroup(child) || isApiFilterCondition(child),
+    (child) => isApiFilterNode(child, depth + 1, stats),
   );
 }
 
@@ -382,7 +534,7 @@ export function parseTagFilterInput(input: string): string[] {
 export function createQuickFilters(
   partial?: Partial<ApplicationsQuickFilters>,
 ): ApplicationsQuickFilters {
-  return {
+  const merged = {
     searchQuery: "",
     derivedStatus: [],
     decisionStatus: "all",
@@ -394,6 +546,31 @@ export function createQuickFilters(
     completionBucket: [],
     needsRevisionOnly: false,
     ...partial,
+  } as Partial<ApplicationsQuickFilters>;
+
+  return {
+    searchQuery: typeof merged.searchQuery === "string" ? merged.searchQuery : "",
+    derivedStatus: Array.isArray(merged.derivedStatus)
+      ? pickAllowedValues(merged.derivedStatus, isDerivedStatusFilterValue)
+      : [],
+    decisionStatus: isDecisionStatusFilterValue(merged.decisionStatus)
+      ? merged.decisionStatus
+      : "all",
+    stepId:
+      typeof merged.stepId === "string" && merged.stepId.trim().length > 0
+        ? merged.stepId.trim()
+        : "__any__",
+    stepStatus: isStepStatusFilterValue(merged.stepStatus) ? merged.stepStatus : "all",
+    reviewerId:
+      typeof merged.reviewerId === "string" && merged.reviewerId.trim().length > 0
+        ? merged.reviewerId.trim()
+        : "__any__",
+    tagsInput: typeof merged.tagsInput === "string" ? merged.tagsInput : "",
+    hasDraftProgress: Boolean(merged.hasDraftProgress),
+    completionBucket: Array.isArray(merged.completionBucket)
+      ? pickAllowedValues(merged.completionBucket, isCompletionBucketValue)
+      : [],
+    needsRevisionOnly: Boolean(merged.needsRevisionOnly),
   };
 }
 
@@ -458,77 +635,142 @@ export function createAdvancedConditionNode(
 export function toApiFilterTree(
   tree: ApplicationsFilterGroupNode,
 ): ApplicationsApiFilterGroup {
-  const convert = (node: ApplicationsFilterNode): ApplicationsApiFilterNode => {
-    if (node.type === "group") {
-      return {
-        type: "group",
-        mode: node.mode,
-        ...((node.negate && { negate: true }) || {}),
-        children: node.children.map(convert),
-      };
-    }
+  let conditionCount = 0;
+
+  const convertCondition = (
+    node: ApplicationsFilterConditionNode,
+  ): ApplicationsApiFilterCondition | null => {
+    const negate = normalizeNegate(node.negate);
     switch (node.type) {
-      case "search_text":
+      case "search_text": {
+        const value = node.value.trim();
+        if (value.length === 0) return null;
         return {
           type: node.type,
-          ...((node.negate && { negate: true }) || {}),
-          value: node.value,
+          ...negate,
+          value,
         };
-      case "decision_status":
+      }
+      case "decision_status": {
+        const values = pickAllowedValues(node.values, isDecisionStatusConditionValue);
+        if (values.length === 0) return null;
         return {
           type: node.type,
-          ...((node.negate && { negate: true }) || {}),
-          values: [...node.values],
+          ...negate,
+          values,
         };
-      case "derived_status":
+      }
+      case "derived_status": {
+        const values = pickAllowedValues(node.values, isDerivedStatusFilterValue);
+        if (values.length === 0) return null;
         return {
           type: node.type,
-          ...((node.negate && { negate: true }) || {}),
-          values: [...node.values],
+          ...negate,
+          values,
         };
-      case "step_status":
+      }
+      case "step_status": {
+        const stepId = node.stepId.trim();
+        const statuses = pickAllowedValues(node.statuses, isStepStatusConditionValue);
+        if (!isUuid(stepId) || statuses.length === 0) return null;
         return {
           type: node.type,
-          ...((node.negate && { negate: true }) || {}),
-          stepId: node.stepId,
-          statuses: [...node.statuses],
+          ...negate,
+          stepId,
+          statuses,
         };
-      case "assigned_reviewer":
+      }
+      case "assigned_reviewer": {
+        if (node.matcher === "any" || node.matcher === "unassigned") {
+          return {
+            type: node.type,
+            ...negate,
+            matcher: node.matcher,
+          };
+        }
+        const reviewerId = node.reviewerId?.trim();
+        if (!isUuid(reviewerId)) return null;
         return {
           type: node.type,
-          ...((node.negate && { negate: true }) || {}),
-          matcher: node.matcher,
-          ...(node.reviewerId ? { reviewerId: node.reviewerId } : {}),
+          ...negate,
+          matcher: "specific",
+          reviewerId,
         };
+      }
       case "tags_any":
       case "tags_all":
-      case "tags_none":
+      case "tags_none": {
+        const values = uniqueTrimmedStrings(node.values);
+        if (values.length === 0) return null;
         return {
           type: node.type,
-          ...((node.negate && { negate: true }) || {}),
-          values: [...node.values],
+          ...negate,
+          values,
         };
-      case "completion_bucket":
+      }
+      case "completion_bucket": {
+        const values = pickAllowedValues(node.values, isCompletionBucketValue);
+        if (values.length === 0) return null;
         return {
           type: node.type,
-          ...((node.negate && { negate: true }) || {}),
-          values: [...node.values],
+          ...negate,
+          values,
         };
+      }
       case "has_draft_progress":
       case "needs_revision":
         return {
           type: node.type,
-          ...((node.negate && { negate: true }) || {}),
-          value: node.value,
+          ...negate,
+          value: Boolean(node.value),
         };
       default:
-        return {
-          type: "search_text",
-          value: "",
-        };
+        return null;
     }
   };
-  return convert(tree) as ApplicationsApiFilterGroup;
+
+  const convertNode = (
+    node: ApplicationsFilterNode,
+    depth: number,
+  ): ApplicationsApiFilterNode | null => {
+    if (depth > MAX_QUERY_FILTER_DEPTH) {
+      return null;
+    }
+    if (node.type === "group") {
+      const children = node.children
+        .map((child) => convertNode(child, depth + 1))
+        .filter((child): child is ApplicationsApiFilterNode => Boolean(child));
+
+      if (depth > 1 && children.length === 0) {
+        return null;
+      }
+
+      return {
+        type: "group",
+        mode: node.mode === "any" ? "any" : "all",
+        ...normalizeNegate(node.negate),
+        children,
+      };
+    }
+
+    if (conditionCount >= MAX_QUERY_FILTER_CONDITIONS) {
+      return null;
+    }
+    const convertedCondition = convertCondition(node);
+    if (!convertedCondition) return null;
+    conditionCount += 1;
+    return convertedCondition;
+  };
+
+  const converted = convertNode(tree, 1);
+  if (converted && converted.type === "group") {
+    return converted;
+  }
+  return {
+    type: "group",
+    mode: "all",
+    children: [],
+  };
 }
 
 export function fromApiFilterTree(
@@ -626,34 +868,45 @@ export function quickFiltersToApiFilterTree(
       value: query,
     });
   }
-  if (quickFilters.decisionStatus !== "all") {
+  if (isDecisionStatusConditionValue(quickFilters.decisionStatus)) {
     children.push({
       type: "decision_status",
       values: [quickFilters.decisionStatus],
     });
   }
-  if (quickFilters.derivedStatus.length > 0) {
+  const derivedStatuses = pickAllowedValues(
+    quickFilters.derivedStatus,
+    isDerivedStatusFilterValue,
+  );
+  if (derivedStatuses.length > 0) {
     children.push({
       type: "derived_status",
-      values: [...quickFilters.derivedStatus],
+      values: derivedStatuses,
     });
   }
+  const stepId = quickFilters.stepId.trim();
   if (
-    quickFilters.stepId &&
     quickFilters.stepId !== "__any__" &&
-    quickFilters.stepStatus !== "all"
+    isUuid(stepId) &&
+    isStepStatusConditionValue(quickFilters.stepStatus)
   ) {
     children.push({
       type: "step_status",
-      stepId: quickFilters.stepId,
+      stepId,
       statuses: [quickFilters.stepStatus],
     });
   }
-  if (quickFilters.reviewerId !== "__any__") {
+  const reviewerId = quickFilters.reviewerId.trim();
+  if (reviewerId === "__unassigned__") {
+    children.push({
+      type: "assigned_reviewer",
+      matcher: "unassigned",
+    });
+  } else if (isUuid(reviewerId)) {
     children.push({
       type: "assigned_reviewer",
       matcher: "specific",
-      reviewerId: quickFilters.reviewerId,
+      reviewerId,
     });
   }
   const tags = parseTagFilterInput(quickFilters.tagsInput);
@@ -669,10 +922,14 @@ export function quickFiltersToApiFilterTree(
       value: true,
     });
   }
-  if (quickFilters.completionBucket.length > 0) {
+  const completionBuckets = pickAllowedValues(
+    quickFilters.completionBucket,
+    isCompletionBucketValue,
+  );
+  if (completionBuckets.length > 0) {
     children.push({
       type: "completion_bucket",
-      values: [...quickFilters.completionBucket],
+      values: completionBuckets,
     });
   }
   if (quickFilters.needsRevisionOnly) {

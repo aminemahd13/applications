@@ -15,6 +15,9 @@ import {
   type ApplicationsAdvancedFilters,
 } from "./applications-filters";
 
+const STEP_ID = "11111111-1111-1111-1111-111111111111";
+const REVIEWER_ID = "22222222-2222-2222-2222-222222222222";
+
 function createLegacyFilters(
   partial?: Partial<ApplicationsAdvancedFilters>,
 ): ApplicationsAdvancedFilters {
@@ -98,9 +101,9 @@ describe("quickFiltersToApiFilterTree", () => {
         searchQuery: "ada",
         decisionStatus: "ACCEPTED",
         derivedStatus: ["waiting_review", "accepted"],
-        stepId: "step-1",
+        stepId: STEP_ID,
         stepStatus: "SUBMITTED",
-        reviewerId: "reviewer-1",
+        reviewerId: REVIEWER_ID,
         tagsInput: "vip, intl",
         hasDraftProgress: true,
         completionBucket: ["50_99"],
@@ -120,6 +123,23 @@ describe("quickFiltersToApiFilterTree", () => {
       "has_draft_progress",
       "completion_bucket",
       "needs_revision",
+    ]);
+  });
+
+  it("drops invalid step IDs and supports unassigned reviewer sentinel", () => {
+    const tree = quickFiltersToApiFilterTree(
+      createQuickFilters({
+        stepId: "not-a-uuid",
+        stepStatus: "SUBMITTED",
+        reviewerId: "__unassigned__",
+      }),
+    );
+
+    expect(tree.children).toEqual([
+      {
+        type: "assigned_reviewer",
+        matcher: "unassigned",
+      },
     ]);
   });
 });
@@ -142,11 +162,11 @@ describe("buildApplicationsQueryRequest", () => {
 
   it("uses advanced tree when mode is advanced", () => {
     const root = createEmptyAdvancedFilterTree();
-    root.children.push(
-      createAdvancedConditionNode("search_text", {
-        stepId: "step-1",
-      }),
-    );
+    const node = createAdvancedConditionNode("search_text", {
+      stepId: STEP_ID,
+    });
+    node.value = "ada";
+    root.children.push(node);
     const request = buildApplicationsQueryRequest({
       limit: 20,
       mode: "advanced",
@@ -157,6 +177,26 @@ describe("buildApplicationsQueryRequest", () => {
     });
 
     expect(request.filterTree).toEqual(toApiFilterTree(root));
+  });
+
+  it("drops invalid advanced conditions before sending to API", () => {
+    const root = createEmptyAdvancedFilterTree();
+    const invalidStep = createAdvancedConditionNode("step_status");
+    const validSearch = createAdvancedConditionNode("search_text");
+    validSearch.value = "ada";
+    root.children.push(invalidStep);
+    root.children.push(validSearch);
+
+    const request = buildApplicationsQueryRequest({
+      limit: 20,
+      mode: "advanced",
+      quickFilters: createQuickFilters(),
+      advancedTree: root,
+    });
+
+    expect(request.filterTree.children).toEqual([
+      { type: "search_text", value: "ada" },
+    ]);
   });
 });
 
@@ -176,6 +216,22 @@ describe("advanced tree encoding", () => {
 
   it("returns null for malformed encoded value", () => {
     expect(decodeFilterTreeFromUrl("@@not-base64@@")).toBeNull();
+  });
+
+  it("returns null for invalid encoded filter node values", () => {
+    const encoded = encodeFilterTreeForUrl({
+      type: "group",
+      mode: "all",
+      children: [
+        {
+          type: "step_status",
+          stepId: "not-a-uuid",
+          statuses: ["SUBMITTED"],
+        },
+      ],
+    } as any);
+
+    expect(decodeFilterTreeFromUrl(encoded ?? "")).toBeNull();
   });
 });
 

@@ -80,6 +80,8 @@ interface StepDetail {
   title: string;
   instructions?: string;
   status: string;
+  allowApplicantModification: boolean;
+  modificationScope: StepModificationScope;
   deadlineAt?: string;
   formDefinition?: {
     sections: Array<{
@@ -98,6 +100,8 @@ interface StepDetail {
     deadlineAt?: string;
   }>;
 }
+
+type StepModificationScope = "SUBMITTED_ONLY" | "SUBMITTED_OR_APPROVED";
 
 const schemaTypeToUiType: Record<string, string> = {
   text: "TEXT",
@@ -751,6 +755,38 @@ function formatDeadline(deadline: Date): string {
   })}`;
 }
 
+function normalizeModificationScope(value: unknown): StepModificationScope {
+  return value === "SUBMITTED_OR_APPROVED"
+    ? "SUBMITTED_OR_APPROVED"
+    : "SUBMITTED_ONLY";
+}
+
+function canApplicantEditStep(
+  status: unknown,
+  allowApplicantModification: boolean,
+  modificationScope: StepModificationScope,
+): boolean {
+  const normalizedStatus = String(status ?? "").toUpperCase();
+  if (
+    normalizedStatus === "UNLOCKED" ||
+    normalizedStatus === "NEEDS_REVISION" ||
+    normalizedStatus === "UNLOCKED_DRAFT" ||
+    normalizedStatus === "READY_TO_SUBMIT"
+  ) {
+    return true;
+  }
+  if (normalizedStatus === "SUBMITTED") {
+    return allowApplicantModification;
+  }
+  if (normalizedStatus === "APPROVED") {
+    return (
+      allowApplicantModification && modificationScope === "SUBMITTED_OR_APPROVED"
+    );
+  }
+
+  return false;
+}
+
 function getFriendlySubmitError(error: unknown, deadlineAt?: string): string {
   const rawMessage =
     error instanceof ApiError
@@ -805,10 +841,11 @@ export default function StepFormPage() {
     | Record<string, unknown>
     | undefined;
 
-  const isReadOnly =
-    step?.status === "SUBMITTED" ||
-    step?.status === "APPROVED" ||
-    step?.status === "REJECTED_FINAL";
+  const isReadOnly = !canApplicantEditStep(
+    step?.status,
+    step?.allowApplicantModification ?? false,
+    step?.modificationScope ?? "SUBMITTED_ONLY",
+  );
   const isLocked = step?.status === "LOCKED";
 
   const requestedNeedsInfoFieldIds = useMemo(
@@ -976,6 +1013,12 @@ export default function StepFormPage() {
             typeof stepState?.status === "string"
               ? stepState.status
               : "UNLOCKED",
+          allowApplicantModification: Boolean(
+            stepState?.allowApplicantModification
+          ),
+          modificationScope: normalizeModificationScope(
+            stepState?.modificationScope
+          ),
           deadlineAt:
             typeof stepState?.deadlineAt === "string"
               ? stepState.deadlineAt
@@ -1588,7 +1631,7 @@ export default function StepFormPage() {
         open={showConfirm}
         onOpenChange={setShowConfirm}
         title="Submit this step?"
-        description="Once submitted, you won't be able to edit your answers unless a revision is requested."
+        description="After submission, further edits depend on this step's workflow settings or a revision request."
         confirmLabel="Submit"
         onConfirm={handleSubmit}
       />

@@ -36,6 +36,7 @@ import {
   EmailDeliveryStatus,
   MessageType,
   StepStatus,
+  StepModificationScope,
   UpdateDecisionTemplateDto,
   PaginatedResponse,
 } from '@event-platform/shared';
@@ -1605,6 +1606,8 @@ export class ApplicationsService {
                 deadline_at: true,
                 instructions_rich: true,
                 hidden: true,
+                allow_applicant_modification: true,
+                modification_scope: true,
                 form_versions: { select: { schema: true } },
               },
             },
@@ -1667,6 +1670,8 @@ export class ApplicationsService {
                   deadline_at: true,
                   instructions_rich: true,
                   hidden: true,
+                  allow_applicant_modification: true,
+                  modification_scope: true,
                   form_versions: { select: { schema: true } },
                 },
               },
@@ -3120,6 +3125,14 @@ export class ApplicationsService {
         answersSource: answersSourceByStepId[ss.step_id] ?? null,
         currentDraftId: ss.current_draft_id,
         latestSubmissionVersionId: ss.latest_submission_version_id,
+        allowApplicantModification: Boolean(
+          ss.workflow_steps?.allow_applicant_modification,
+        ),
+        modificationScope:
+          ss.workflow_steps?.modification_scope ===
+          StepModificationScope.SUBMITTED_OR_APPROVED
+            ? StepModificationScope.SUBMITTED_OR_APPROVED
+            : StepModificationScope.SUBMITTED_ONLY,
         revisionCycleCount: ss.revision_cycle_count,
         unlockedAt: ss.unlocked_at,
         lastActivityAt: ss.last_activity_at,

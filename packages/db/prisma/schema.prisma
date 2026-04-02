@@ -515,33 +515,35 @@ model decision_templates {
 }
 
 model workflow_steps {
-  id                       String                     @id @db.Uuid
-  event_id                 String                     @db.Uuid
-  step_index               Int
-  category                 String
-  title                    String
-  instructions_rich        Json                       @default("{}")
-  unlock_policy            String
-  unlock_at                DateTime?                  @db.Timestamptz(6)
-  review_required          Boolean                    @default(false)
-  reviewer_roles_allowed   Json                       @default("[\"reviewer\", \"organizer\"]")
-    reject_behavior          String                     @default("reject_resubmit_allowed")
-    strict_gating            Boolean                    @default(true)
-    sensitivity_level        String                     @default("NORMAL")
-    hidden                   Boolean                    @default(false)
-    deadline_at              DateTime?                  @db.Timestamptz(6)
-  late_policy              String                     @default("allow")
-  max_revision_cycles      Int?
-  form_version_id          String?                    @db.Uuid
-  created_at               DateTime                   @default(now()) @db.Timestamptz(6)
-  updated_at               DateTime                   @default(now()) @db.Timestamptz(6)
-  admin_change_patches     admin_change_patches[]
-  application_step_states  application_step_states[]
-  needs_info_requests      needs_info_requests[]
-  step_drafts              step_drafts[]
-  step_submission_versions step_submission_versions[]
-  events                   events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  form_versions            form_versions?             @relation(fields: [form_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                           String                     @id @db.Uuid
+  event_id                     String                     @db.Uuid
+  step_index                   Int
+  category                     String
+  title                        String
+  instructions_rich            Json                       @default("{}")
+  unlock_policy                String
+  unlock_at                    DateTime?                  @db.Timestamptz(6)
+  review_required              Boolean                    @default(false)
+  reviewer_roles_allowed       Json                       @default("[\"reviewer\", \"organizer\"]")
+  reject_behavior              String                     @default("reject_resubmit_allowed")
+  strict_gating                Boolean                    @default(true)
+  sensitivity_level            String                     @default("NORMAL")
+  hidden                       Boolean                    @default(false)
+  allow_applicant_modification Boolean                    @default(false)
+  modification_scope           String                     @default("SUBMITTED_ONLY")
+  deadline_at                  DateTime?                  @db.Timestamptz(6)
+  late_policy                  String                     @default("allow")
+  max_revision_cycles          Int?
+  form_version_id              String?                    @db.Uuid
+  created_at                   DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at                   DateTime                   @default(now()) @db.Timestamptz(6)
+  admin_change_patches         admin_change_patches[]
+  application_step_states      application_step_states[]
+  needs_info_requests          needs_info_requests[]
+  step_drafts                  step_drafts[]
+  step_submission_versions     step_submission_versions[]
+  events                       events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  form_versions                form_versions?             @relation(fields: [form_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([event_id, step_index])
   @@index([event_id, step_index], map: "ws_event_idx")
