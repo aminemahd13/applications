@@ -156,6 +156,20 @@ Required for sending invites, password resets, and notifications.
 | `SMTP_PASS` | SMTP Password |
 | `SMTP_FROM` | Default "From" address |
 
+#### Email Queue Retry Tuning (Optional)
+
+Queued announcement/notification emails use provider-agnostic retry logic with deferred backoff.
+
+| Variable | Description |
+|----------|-------------|
+| `MESSAGES_EMAIL_SEND_BATCH_SIZE` | Max queued recipients fetched per worker run (default `150`). |
+| `MESSAGES_EMAIL_RETRY_MAX_ATTEMPTS` | Max attempts for non-rate-limit retryable errors before suppression (default `5`). |
+| `MESSAGES_EMAIL_RETRY_BASE_MS` | Base delay for non-rate-limit retries (default `60000`). |
+| `MESSAGES_EMAIL_RETRY_MAX_DELAY_MS` | Max delay cap for non-rate-limit retries (default `1800000`). |
+| `MESSAGES_EMAIL_RATE_LIMIT_MAX_DELAY_MS` | Max delay cap when provider rate limits are detected (default `3600000`). |
+| `MESSAGES_EMAIL_RATE_LIMIT_WINDOW_MS` | Total retry window for rate-limited recipients before suppression (default `86400000`, 24h). |
+| `MESSAGES_EMAIL_RATE_LIMIT_TAIL_SIZE` | Additional recipients attempted after first rate-limit hit in a run (default `5`). |
+
 ---
 
 ## 🏗️ Architecture Explained

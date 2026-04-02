@@ -1,4 +1,8 @@
-import { DecisionStatus, MessageType } from '@event-platform/shared';
+import {
+  DecisionStatus,
+  EmailDeliveryStatus,
+  MessageType,
+} from '@event-platform/shared';
 import { MessagesService } from './messages.service';
 import { NotFoundException } from '@nestjs/common';
 
@@ -173,6 +177,26 @@ describe('MessagesService', () => {
   });
 
   describe('processQueuedEmails', () => {
+    function buildRecipient(
+      id: string,
+      overrides?: Partial<Record<string, unknown>>,
+    ) {
+      return {
+        id,
+        message_id: 'message-1',
+        email_attempts: 0,
+        email_rate_limited_at: null,
+        users: { email: `user-${id}@example.com` },
+        messages: {
+          title: 'Subject line',
+          body_rich: 'Plain body from composer',
+          body_text: 'Plain body from composer',
+          action_buttons: [],
+        },
+        ...(overrides ?? {}),
+      };
+    }
+
     it('falls back to bodyText when bodyRich is plain text', async () => {
       mockPrisma.message_recipients.findMany.mockResolvedValue([
         {
@@ -189,16 +213,138 @@ describe('MessagesService', () => {
         },
       ]);
       mockPrisma.message_recipients.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.message_recipients.update.mockResolvedValue({});
       mockEmailService.sendAnnouncement.mockResolvedValue(undefined);
 
       const result = await service.processQueuedEmails(10);
 
-      expect(result).toEqual({ attempted: 1, sent: 1, failed: 0 });
+      expect(result).toEqual({ attempted: 1, sent: 1, failed: 0, deferred: 0 });
       expect(mockEmailService.sendAnnouncement).toHaveBeenCalledWith(
         'target@example.com',
         'Subject line',
         '<p>Plain body from composer</p>',
         [],
+      );
+      expect(mockPrisma.message_recipients.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            delivery_email_status: EmailDeliveryStatus.SENT,
+            email_next_attempt_at: null,
+            email_rate_limited_at: null,
+          }),
+        }),
+      );
+    });
+
+    it('defers rate-limited recipients with next attempt scheduling', async () => {
+      mockPrisma.message_recipients.findMany.mockResolvedValue([
+        buildRecipient('recipient-1'),
+      ]);
+      mockPrisma.message_recipients.update.mockResolvedValue({});
+      mockEmailService.sendAnnouncement.mockRejectedValue({
+        message: 'Too many requests',
+        responseCode: 429,
+        retryAfterSeconds: 120,
+      });
+
+      const result = await service.processQueuedEmails(10);
+
+      expect(result).toEqual({ attempted: 1, sent: 0, failed: 1, deferred: 0 });
+      expect(mockPrisma.message_recipients.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'recipient-1' },
+          data: expect.objectContaining({
+            delivery_email_status: EmailDeliveryStatus.FAILED,
+            email_rate_limited_at: expect.any(Date),
+            email_next_attempt_at: expect.any(Date),
+          }),
+        }),
+      );
+    });
+
+    it('suppresses rate-limited recipients once retry window is exceeded', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-04-02T12:00:00.000Z'));
+
+      mockPrisma.message_recipients.findMany.mockResolvedValue([
+        buildRecipient('recipient-1', {
+          email_rate_limited_at: new Date('2026-03-31T11:59:59.000Z'),
+        }),
+      ]);
+      mockPrisma.message_recipients.update.mockResolvedValue({});
+      mockEmailService.sendAnnouncement.mockRejectedValue({
+        message: '4.7.0 rate limit exceeded',
+        responseCode: 451,
+      });
+
+      const result = await service.processQueuedEmails(10);
+
+      expect(result).toEqual({ attempted: 1, sent: 0, failed: 1, deferred: 0 });
+      expect(mockPrisma.message_recipients.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            delivery_email_status: EmailDeliveryStatus.SUPPRESSED,
+            email_next_attempt_at: null,
+          }),
+        }),
+      );
+
+      jest.useRealTimers();
+    });
+
+    it('attempts a small tail after first rate-limit hit then defers the rest', async () => {
+      const recipients = Array.from({ length: 8 }).map((_, index) =>
+        buildRecipient(`recipient-${index + 1}`),
+      );
+      mockPrisma.message_recipients.findMany.mockResolvedValue(recipients);
+      mockPrisma.message_recipients.update.mockResolvedValue({});
+      mockPrisma.message_recipients.updateMany.mockResolvedValue({ count: 1 });
+
+      mockEmailService.sendAnnouncement
+        .mockRejectedValueOnce({
+          message: 'Too many requests',
+          responseCode: 429,
+          retryAfterSeconds: 90,
+        })
+        .mockResolvedValue(undefined);
+
+      const result = await service.processQueuedEmails(20);
+
+      expect(result).toEqual({ attempted: 6, sent: 5, failed: 1, deferred: 2 });
+      expect(mockEmailService.sendAnnouncement).toHaveBeenCalledTimes(6);
+      expect(mockPrisma.message_recipients.updateMany).toHaveBeenCalledTimes(2);
+      expect(mockPrisma.message_recipients.updateMany).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          where: {
+            id: { in: ['recipient-7', 'recipient-8'] },
+          },
+          data: expect.objectContaining({
+            email_next_attempt_at: expect.any(Date),
+          }),
+        }),
+      );
+    });
+
+    it('keeps max-attempt suppression for non-rate-limit retryable failures', async () => {
+      mockPrisma.message_recipients.findMany.mockResolvedValue([
+        buildRecipient('recipient-1', { email_attempts: 4 }),
+      ]);
+      mockPrisma.message_recipients.update.mockResolvedValue({});
+      mockEmailService.sendAnnouncement.mockRejectedValue({
+        message: 'Temporary mailbox unavailable',
+        responseCode: 425,
+      });
+
+      const result = await service.processQueuedEmails(10);
+
+      expect(result).toEqual({ attempted: 1, sent: 0, failed: 1, deferred: 0 });
+      expect(mockPrisma.message_recipients.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            delivery_email_status: EmailDeliveryStatus.SUPPRESSED,
+            email_rate_limited_at: null,
+          }),
+        }),
       );
     });
   });

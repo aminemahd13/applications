@@ -18,7 +18,7 @@ export class MessagesEmailSchedulerService {
       const result = await this.messagesService.processQueuedEmails();
       if (result.attempted > 0) {
         this.logger.log(
-          `Email worker batch complete: attempted=${result.attempted}, sent=${result.sent}, failed=${result.failed}`,
+          `Email worker batch complete: attempted=${result.attempted}, sent=${result.sent}, failed=${result.failed}, deferred=${result.deferred}`,
         );
       }
     } catch (error) {

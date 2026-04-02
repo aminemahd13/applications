@@ -7,6 +7,10 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
 import { EmailService } from '../common/email/email.service';
 import {
+  classifyEmailSendError,
+  EmailFailureClass,
+} from './email-error-classifier';
+import {
   RecipientFilter,
   RecipientFilterSchema,
   CreateMessageDto,
@@ -26,16 +30,67 @@ import {
 
 @Injectable()
 export class MessagesService {
-  private static readonly EMAIL_SEND_BATCH_SIZE = 150;
-  private static readonly EMAIL_SEND_CONCURRENCY = 12;
-  private static readonly EMAIL_RETRY_MAX_ATTEMPTS = 5;
-  private static readonly EMAIL_RETRY_COOLDOWN_MS = 60_000;
+  private static readonly EMAIL_SEND_BATCH_SIZE = MessagesService.readEnvInt(
+    'MESSAGES_EMAIL_SEND_BATCH_SIZE',
+    150,
+    1,
+    500,
+  );
+  private static readonly EMAIL_RETRY_MAX_ATTEMPTS = MessagesService.readEnvInt(
+    'MESSAGES_EMAIL_RETRY_MAX_ATTEMPTS',
+    5,
+    1,
+    20,
+  );
+  private static readonly EMAIL_RETRY_BASE_DELAY_MS = MessagesService.readEnvInt(
+    'MESSAGES_EMAIL_RETRY_BASE_MS',
+    60_000,
+    1_000,
+  );
+  private static readonly EMAIL_RETRY_MAX_DELAY_MS = MessagesService.readEnvInt(
+    'MESSAGES_EMAIL_RETRY_MAX_DELAY_MS',
+    30 * 60_000,
+    1_000,
+  );
+  private static readonly EMAIL_RATE_LIMIT_MAX_DELAY_MS =
+    MessagesService.readEnvInt(
+      'MESSAGES_EMAIL_RATE_LIMIT_MAX_DELAY_MS',
+      60 * 60_000,
+      1_000,
+    );
+  private static readonly EMAIL_RATE_LIMIT_WINDOW_MS = MessagesService.readEnvInt(
+    'MESSAGES_EMAIL_RATE_LIMIT_WINDOW_MS',
+    24 * 60 * 60_000,
+    60_000,
+  );
+  private static readonly EMAIL_RATE_LIMIT_TAIL_SIZE = MessagesService.readEnvInt(
+    'MESSAGES_EMAIL_RATE_LIMIT_TAIL_SIZE',
+    5,
+    0,
+    100,
+  );
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly cls: ClsService,
     private readonly emailService: EmailService,
   ) {}
+
+  private static readEnvInt(
+    key: string,
+    fallback: number,
+    min: number,
+    max?: number,
+  ): number {
+    const raw = process.env[key];
+    if (!raw || raw.trim().length === 0) return fallback;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return fallback;
+    const normalized = Math.floor(parsed);
+    const bounded = Math.max(normalized, min);
+    if (typeof max === 'number') return Math.min(bounded, max);
+    return bounded;
+  }
 
   // ============================================================
   // SEGMENTATION DSL EVALUATION
@@ -1042,19 +1097,32 @@ export class MessagesService {
 
   async processQueuedEmails(
     limit = MessagesService.EMAIL_SEND_BATCH_SIZE,
-  ): Promise<{ attempted: number; sent: number; failed: number }> {
+  ): Promise<{
+    attempted: number;
+    sent: number;
+    failed: number;
+    deferred: number;
+  }> {
     const cappedLimit = Math.min(Math.max(limit, 1), 500);
-    const retryCutoff = new Date(
-      Date.now() - MessagesService.EMAIL_RETRY_COOLDOWN_MS,
-    );
+    const now = new Date();
+    const dueFilter = {
+      OR: [
+        { email_next_attempt_at: null },
+        { email_next_attempt_at: { lte: now } },
+      ],
+    };
 
     const recipients = await this.prisma.message_recipients.findMany({
       where: {
         OR: [
-          { delivery_email_status: EmailDeliveryStatus.QUEUED },
+          {
+            delivery_email_status: EmailDeliveryStatus.QUEUED,
+            AND: [dueFilter],
+          },
           {
             delivery_email_status: EmailDeliveryStatus.FAILED,
             AND: [
+              dueFilter,
               {
                 OR: [
                   { email_attempts: null },
@@ -1063,12 +1131,7 @@ export class MessagesService {
                       lt: MessagesService.EMAIL_RETRY_MAX_ATTEMPTS,
                     },
                   },
-                ],
-              },
-              {
-                OR: [
-                  { email_last_attempt_at: null },
-                  { email_last_attempt_at: { lte: retryCutoff } },
+                  { email_rate_limited_at: { not: null } },
                 ],
               },
             ],
@@ -1091,15 +1154,9 @@ export class MessagesService {
     });
 
     if (recipients.length === 0) {
-      return { attempted: 0, sent: 0, failed: 0 };
+      return { attempted: 0, sent: 0, failed: 0, deferred: 0 };
     }
 
-    const currentAttemptsById = new Map<string, number>(
-      recipients.map((recipient) => [
-        recipient.id,
-        recipient.email_attempts ?? 0,
-      ]),
-    );
     const bodyHtmlByMessageId = new Map<string, string>();
     const buttonsByMessageId = new Map<
       string,
@@ -1125,92 +1182,230 @@ export class MessagesService {
     }
 
     const sentIds: string[] = [];
-    const failures: Array<{ id: string; reason: string }> = [];
-    const workerWidth = MessagesService.EMAIL_SEND_CONCURRENCY;
+    const deferredIds: string[] = [];
+    const failureUpdates: Array<{
+      id: string;
+      status: EmailDeliveryStatus.FAILED | EmailDeliveryStatus.SUPPRESSED;
+      reason: string;
+      attemptedAt: Date;
+      nextAttemptAt: Date | null;
+      rateLimitedAt: Date | null;
+    }> = [];
 
-    for (let i = 0; i < recipients.length; i += workerWidth) {
-      const batch = recipients.slice(i, i + workerWidth);
-      const results = await Promise.all(
-        batch.map(async (recipient) => {
-          const email = recipient.users.email;
-          if (!email) {
-            return {
-              id: recipient.id,
-              status: EmailDeliveryStatus.FAILED as const,
-              reason: 'Recipient email missing',
-            };
-          }
+    let rateLimitDetected = false;
+    let rateLimitTailRemaining = 0;
+    let rateLimitDeferUntil: Date | null = null;
 
-          try {
-            await this.emailService.sendAnnouncement(
-              email,
-              recipient.messages.title,
-              bodyHtmlByMessageId.get(recipient.message_id) ?? '',
-              buttonsByMessageId.get(recipient.message_id) ?? [],
+    for (const recipient of recipients) {
+      if (rateLimitDetected && rateLimitTailRemaining <= 0) {
+        deferredIds.push(recipient.id);
+        continue;
+      }
+      if (rateLimitDetected && rateLimitTailRemaining > 0) {
+        rateLimitTailRemaining -= 1;
+      }
+
+      const attemptedAt = new Date();
+      const currentAttempts = recipient.email_attempts ?? 0;
+      const nextAttempts = currentAttempts + 1;
+      const email = recipient.users.email;
+
+      if (!email) {
+        failureUpdates.push({
+          id: recipient.id,
+          status: EmailDeliveryStatus.SUPPRESSED,
+          reason: 'Recipient email missing',
+          attemptedAt,
+          nextAttemptAt: null,
+          rateLimitedAt: null,
+        });
+        continue;
+      }
+
+      try {
+        await this.emailService.sendAnnouncement(
+          email,
+          recipient.messages.title,
+          bodyHtmlByMessageId.get(recipient.message_id) ?? '',
+          buttonsByMessageId.get(recipient.message_id) ?? [],
+        );
+        sentIds.push(recipient.id);
+      } catch (error) {
+        const classified = classifyEmailSendError(error);
+
+        if (classified.classification === EmailFailureClass.RATE_LIMIT) {
+          if (!rateLimitDetected) {
+            rateLimitDetected = true;
+            rateLimitTailRemaining = MessagesService.EMAIL_RATE_LIMIT_TAIL_SIZE;
+            rateLimitDeferUntil = this.computeRateLimitNextAttemptAt(
+              nextAttempts,
+              attemptedAt,
+              classified.retryAfterMs,
             );
-            return {
-              id: recipient.id,
-              status: EmailDeliveryStatus.SENT as const,
-            };
-          } catch (error) {
-            return {
-              id: recipient.id,
-              status: EmailDeliveryStatus.FAILED as const,
-              reason: error instanceof Error ? error.message : String(error),
-            };
           }
-        }),
-      );
 
-      for (const result of results) {
-        if (result.status === EmailDeliveryStatus.SENT) {
-          sentIds.push(result.id);
-        } else {
-          failures.push({ id: result.id, reason: result.reason });
+          const rateLimitedAt = recipient.email_rate_limited_at ?? attemptedAt;
+          const isWindowExceeded =
+            attemptedAt.getTime() - rateLimitedAt.getTime() >=
+            MessagesService.EMAIL_RATE_LIMIT_WINDOW_MS;
+
+          if (isWindowExceeded) {
+            failureUpdates.push({
+              id: recipient.id,
+              status: EmailDeliveryStatus.SUPPRESSED,
+              reason: `${classified.reason} (rate-limit retry window exceeded)`,
+              attemptedAt,
+              nextAttemptAt: null,
+              rateLimitedAt,
+            });
+            continue;
+          }
+
+          failureUpdates.push({
+            id: recipient.id,
+            status: EmailDeliveryStatus.FAILED,
+            reason: classified.reason,
+            attemptedAt,
+            nextAttemptAt: this.computeRateLimitNextAttemptAt(
+              nextAttempts,
+              attemptedAt,
+              classified.retryAfterMs,
+            ),
+            rateLimitedAt,
+          });
+          continue;
         }
+
+        if (classified.classification === EmailFailureClass.PERMANENT) {
+          failureUpdates.push({
+            id: recipient.id,
+            status: EmailDeliveryStatus.SUPPRESSED,
+            reason: classified.reason,
+            attemptedAt,
+            nextAttemptAt: null,
+            rateLimitedAt: null,
+          });
+          continue;
+        }
+
+        const shouldSuppress =
+          nextAttempts >= MessagesService.EMAIL_RETRY_MAX_ATTEMPTS;
+        failureUpdates.push({
+          id: recipient.id,
+          status: shouldSuppress
+            ? EmailDeliveryStatus.SUPPRESSED
+            : EmailDeliveryStatus.FAILED,
+          reason: classified.reason,
+          attemptedAt,
+          nextAttemptAt: shouldSuppress
+            ? null
+            : this.computeRetryNextAttemptAt(
+                nextAttempts,
+                attemptedAt,
+                classified.retryAfterMs,
+              ),
+          rateLimitedAt: null,
+        });
       }
     }
 
-    const attemptedAt = new Date();
+    const finalizedAt = new Date();
     if (sentIds.length > 0) {
       await this.prisma.message_recipients.updateMany({
         where: { id: { in: sentIds } },
         data: {
           delivery_email_status: EmailDeliveryStatus.SENT,
           email_attempts: { increment: 1 },
-          email_last_attempt_at: attemptedAt,
+          email_last_attempt_at: finalizedAt,
           email_failure_reason: null,
+          email_next_attempt_at: null,
+          email_rate_limited_at: null,
         },
       });
     }
 
-    if (failures.length > 0) {
+    if (failureUpdates.length > 0) {
       await Promise.all(
-        failures.map((failure) => {
-          const nextAttempts = (currentAttemptsById.get(failure.id) ?? 0) + 1;
-          const nextStatus =
-            nextAttempts >= MessagesService.EMAIL_RETRY_MAX_ATTEMPTS
-              ? EmailDeliveryStatus.SUPPRESSED
-              : EmailDeliveryStatus.FAILED;
-
-          return this.prisma.message_recipients.update({
+        failureUpdates.map((failure) =>
+          this.prisma.message_recipients.update({
             where: { id: failure.id },
             data: {
-              delivery_email_status: nextStatus,
+              delivery_email_status: failure.status,
               email_attempts: { increment: 1 },
-              email_last_attempt_at: attemptedAt,
+              email_last_attempt_at: failure.attemptedAt,
               email_failure_reason: failure.reason,
+              email_next_attempt_at: failure.nextAttemptAt,
+              email_rate_limited_at: failure.rateLimitedAt,
             },
-          });
-        }),
+          }),
+        ),
       );
     }
 
+    if (deferredIds.length > 0) {
+      const deferUntil =
+        rateLimitDeferUntil ??
+        new Date(Date.now() + MessagesService.EMAIL_RETRY_BASE_DELAY_MS);
+      await this.prisma.message_recipients.updateMany({
+        where: { id: { in: deferredIds } },
+        data: {
+          email_next_attempt_at: deferUntil,
+        },
+      });
+    }
+
     return {
-      attempted: recipients.length,
+      attempted: sentIds.length + failureUpdates.length,
       sent: sentIds.length,
-      failed: failures.length,
+      failed: failureUpdates.length,
+      deferred: deferredIds.length,
     };
+  }
+
+  private computeRetryNextAttemptAt(
+    nextAttempts: number,
+    attemptedAt: Date,
+    retryAfterHintMs?: number,
+  ): Date {
+    const delayMs = this.resolveDelayMs(
+      nextAttempts,
+      MessagesService.EMAIL_RETRY_BASE_DELAY_MS,
+      MessagesService.EMAIL_RETRY_MAX_DELAY_MS,
+      retryAfterHintMs,
+    );
+    return new Date(attemptedAt.getTime() + delayMs);
+  }
+
+  private computeRateLimitNextAttemptAt(
+    nextAttempts: number,
+    attemptedAt: Date,
+    retryAfterHintMs?: number,
+  ): Date {
+    const delayMs = this.resolveDelayMs(
+      nextAttempts,
+      MessagesService.EMAIL_RETRY_BASE_DELAY_MS,
+      MessagesService.EMAIL_RATE_LIMIT_MAX_DELAY_MS,
+      retryAfterHintMs,
+    );
+    return new Date(attemptedAt.getTime() + delayMs);
+  }
+
+  private resolveDelayMs(
+    nextAttempts: number,
+    baseDelayMs: number,
+    maxDelayMs: number,
+    retryAfterHintMs?: number,
+  ): number {
+    const cappedAttempts = Math.max(1, nextAttempts);
+    const exponent = Math.min(cappedAttempts - 1, 8);
+    const exponentialDelay = Math.min(maxDelayMs, baseDelayMs * 2 ** exponent);
+    const numericHint =
+      typeof retryAfterHintMs === 'number' && Number.isFinite(retryAfterHintMs)
+        ? Math.max(0, Math.round(retryAfterHintMs))
+        : 0;
+    if (numericHint <= 0) return exponentialDelay;
+    const hintedDelay = Math.min(maxDelayMs, numericHint);
+    return Math.max(exponentialDelay, hintedDelay);
   }
 
   private normalizeActionButtons(

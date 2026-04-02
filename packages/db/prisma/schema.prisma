@@ -328,6 +328,8 @@ model message_recipients {
   delivery_inbox_status String?   @default("DELIVERED")
   email_attempts        Int?      @default(0)
   email_last_attempt_at DateTime? @db.Timestamptz(6)
+  email_next_attempt_at DateTime? @db.Timestamptz(6)
+  email_rate_limited_at DateTime? @db.Timestamptz(6)
   email_failure_reason  String?
   messages              messages  @relation(fields: [message_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   users                 users     @relation(fields: [recipient_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -336,6 +338,7 @@ model message_recipients {
   @@index([recipient_user_id, created_at(sort: Desc)], map: "mr_recipient_created_idx")
   @@index([message_id, created_at(sort: Desc)], map: "mr_message_created_idx")
   @@index([delivery_email_status, email_last_attempt_at], map: "mr_email_status_last_attempt_idx")
+  @@index([delivery_email_status, email_next_attempt_at], map: "mr_email_status_next_attempt_idx")
 }
 
 model messages {
