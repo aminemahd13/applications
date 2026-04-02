@@ -177,6 +177,27 @@ export enum EmailDeliveryStatus {
     SUPPRESSED = 'SUPPRESSED',
 }
 
+export enum MessageEmailDeliveryState {
+    NOT_REQUESTED = 'NOT_REQUESTED',
+    IN_PROGRESS = 'IN_PROGRESS',
+    COMPLETED = 'COMPLETED',
+    COMPLETED_WITH_ISSUES = 'COMPLETED_WITH_ISSUES',
+}
+
+export interface MessageEmailDeliverySummary {
+    state: MessageEmailDeliveryState;
+    totalRecipients: number;
+    requestedCount: number;
+    sentCount: number;
+    remainingCount: number;
+    deferredCount: number;
+    failedFinalCount: number;
+    notRequestedCount: number;
+    successRatePct: number | null;
+    lastAttemptAt?: Date | null;
+    nextRetryAt?: Date | null;
+}
+
 // Response types
 export interface MessageSummary {
     id: string;
@@ -188,6 +209,7 @@ export interface MessageSummary {
     readCount: number;
     createdAt: Date;
     createdBy: string;
+    emailDelivery?: MessageEmailDeliverySummary;
 }
 
 export interface MessageDetail extends MessageSummary {

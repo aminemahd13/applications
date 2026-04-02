@@ -1,6 +1,7 @@
 import {
   DecisionStatus,
   EmailDeliveryStatus,
+  MessageEmailDeliveryState,
   MessageType,
 } from '@event-platform/shared';
 import { MessagesService } from './messages.service';
@@ -41,6 +42,7 @@ describe('MessagesService', () => {
       { get: jest.fn() } as any,
       mockEmailService,
     );
+    mockPrisma.message_recipients.groupBy.mockResolvedValue([]);
   });
 
   describe('evaluateFilter', () => {
@@ -346,6 +348,269 @@ describe('MessagesService', () => {
           }),
         }),
       );
+    });
+  });
+
+  describe('email delivery summaries', () => {
+    it('returns NOT_REQUESTED summary when email delivery was never requested', async () => {
+      mockPrisma.messages.findFirst.mockResolvedValue({
+        id: 'message-1',
+        event_id: 'event-1',
+        type: MessageType.ANNOUNCEMENT,
+        title: 'Announcement',
+        status: 'SENT',
+        created_at: new Date('2026-03-01T10:00:00.000Z'),
+        created_by: 'staff-1',
+        body_rich: { type: 'doc', content: [] },
+        body_text: 'Body',
+        action_buttons: [],
+        recipient_filter_json: {},
+        resolved_at: new Date('2026-03-01T10:00:00.000Z'),
+        _count: { message_recipients: 3 },
+      });
+      mockPrisma.message_recipients.count.mockResolvedValue(1);
+      mockPrisma.message_recipients.groupBy
+        .mockResolvedValueOnce([
+          {
+            message_id: 'message-1',
+            delivery_email_status: 'not_requested',
+            _count: { id: 3 },
+          },
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      const detail = await service.getMessageById('event-1', 'message-1');
+
+      expect(detail.emailDelivery).toEqual({
+        state: MessageEmailDeliveryState.NOT_REQUESTED,
+        totalRecipients: 3,
+        requestedCount: 0,
+        sentCount: 0,
+        remainingCount: 0,
+        deferredCount: 0,
+        failedFinalCount: 0,
+        notRequestedCount: 3,
+        successRatePct: null,
+        lastAttemptAt: null,
+        nextRetryAt: null,
+      });
+    });
+
+    it('returns IN_PROGRESS summary with deferred retries on message lists', async () => {
+      mockPrisma.messages.findMany.mockResolvedValue([
+        {
+          id: 'message-1',
+          event_id: 'event-1',
+          type: MessageType.ANNOUNCEMENT,
+          title: 'Announcement',
+          status: 'SENT',
+          created_at: new Date('2026-03-01T10:00:00.000Z'),
+          created_by: 'staff-1',
+          _count: { message_recipients: 10 },
+        },
+      ]);
+      mockPrisma.message_recipients.groupBy
+        .mockResolvedValueOnce([{ message_id: 'message-1', _count: { id: 2 } }])
+        .mockResolvedValueOnce([
+          {
+            message_id: 'message-1',
+            delivery_email_status: 'SENT',
+            _count: { id: 4 },
+          },
+          {
+            message_id: 'message-1',
+            delivery_email_status: 'queued',
+            _count: { id: 3 },
+          },
+          {
+            message_id: 'message-1',
+            delivery_email_status: 'FAILED',
+            _count: { id: 2 },
+          },
+          {
+            message_id: 'message-1',
+            delivery_email_status: 'NOT_REQUESTED',
+            _count: { id: 1 },
+          },
+        ])
+        .mockResolvedValueOnce([{ message_id: 'message-1', _count: { id: 2 } }]);
+
+      const result = await service.listMessages('event-1', { limit: 10 } as any);
+      const summary = result.items[0].emailDelivery;
+
+      expect(summary).toEqual({
+        state: MessageEmailDeliveryState.IN_PROGRESS,
+        totalRecipients: 10,
+        requestedCount: 9,
+        sentCount: 4,
+        remainingCount: 5,
+        deferredCount: 2,
+        failedFinalCount: 0,
+        notRequestedCount: 1,
+        successRatePct: 44.44,
+      });
+    });
+
+    it('returns COMPLETED summary when all requested emails are sent', async () => {
+      mockPrisma.messages.findMany.mockResolvedValue([
+        {
+          id: 'message-1',
+          event_id: null,
+          type: MessageType.ANNOUNCEMENT,
+          title: 'System update',
+          status: 'SENT',
+          created_at: new Date('2026-03-01T10:00:00.000Z'),
+          created_by: 'admin-1',
+          _count: { message_recipients: 3 },
+        },
+      ]);
+      mockPrisma.message_recipients.groupBy
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            message_id: 'message-1',
+            delivery_email_status: 'SENT',
+            _count: { id: 3 },
+          },
+        ])
+        .mockResolvedValueOnce([]);
+
+      const result = await service.listSystemAnnouncements({ limit: 10 } as any);
+      const summary = result.items[0].emailDelivery;
+
+      expect(summary).toEqual({
+        state: MessageEmailDeliveryState.COMPLETED,
+        totalRecipients: 3,
+        requestedCount: 3,
+        sentCount: 3,
+        remainingCount: 0,
+        deferredCount: 0,
+        failedFinalCount: 0,
+        notRequestedCount: 0,
+        successRatePct: 100,
+      });
+    });
+
+    it('returns COMPLETED_WITH_ISSUES when only final failures remain', async () => {
+      mockPrisma.messages.findFirst.mockResolvedValue({
+        id: 'message-1',
+        event_id: null,
+        type: MessageType.ANNOUNCEMENT,
+        title: 'System update',
+        status: 'SENT',
+        created_at: new Date('2026-03-01T10:00:00.000Z'),
+        created_by: 'admin-user',
+        body_rich: { type: 'doc', content: [] },
+        body_text: 'Body',
+        action_buttons: [],
+        recipient_filter_json: {},
+        resolved_at: new Date('2026-03-01T10:00:00.000Z'),
+        _count: { message_recipients: 4 },
+      });
+      mockPrisma.message_recipients.count.mockResolvedValue(1);
+      mockPrisma.message_recipients.groupBy
+        .mockResolvedValueOnce([
+          {
+            message_id: 'message-1',
+            delivery_email_status: 'SENT',
+            _count: { id: 2 },
+          },
+          {
+            message_id: 'message-1',
+            delivery_email_status: 'SUPPRESSED',
+            _count: { id: 1 },
+          },
+          {
+            message_id: 'message-1',
+            delivery_email_status: 'SKIPPED_NO_PROVIDER',
+            _count: { id: 1 },
+          },
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      const detail = await service.getSystemAnnouncementById('message-1');
+
+      expect(detail.emailDelivery).toEqual({
+        state: MessageEmailDeliveryState.COMPLETED_WITH_ISSUES,
+        totalRecipients: 4,
+        requestedCount: 4,
+        sentCount: 2,
+        remainingCount: 0,
+        deferredCount: 0,
+        failedFinalCount: 2,
+        notRequestedCount: 0,
+        successRatePct: 50,
+        lastAttemptAt: null,
+        nextRetryAt: null,
+      });
+    });
+
+    it('includes nextRetryAt and lastAttemptAt for deferred retries on detail', async () => {
+      const lastAttemptAt = new Date('2026-03-01T10:10:00.000Z');
+      const nextRetryAt = new Date('2026-03-01T10:20:00.000Z');
+
+      mockPrisma.messages.findFirst.mockResolvedValue({
+        id: 'message-1',
+        event_id: 'event-1',
+        type: MessageType.ANNOUNCEMENT,
+        title: 'Announcement',
+        status: 'SENT',
+        created_at: new Date('2026-03-01T10:00:00.000Z'),
+        created_by: 'staff-1',
+        body_rich: { type: 'doc', content: [] },
+        body_text: 'Body',
+        action_buttons: [],
+        recipient_filter_json: {},
+        resolved_at: new Date('2026-03-01T10:00:00.000Z'),
+        _count: { message_recipients: 2 },
+      });
+      mockPrisma.message_recipients.count.mockResolvedValue(0);
+      mockPrisma.message_recipients.groupBy
+        .mockResolvedValueOnce([
+          {
+            message_id: 'message-1',
+            delivery_email_status: 'SENT',
+            _count: { id: 1 },
+          },
+          {
+            message_id: 'message-1',
+            delivery_email_status: 'FAILED',
+            _count: { id: 1 },
+          },
+        ])
+        .mockResolvedValueOnce([{ message_id: 'message-1', _count: { id: 1 } }])
+        .mockResolvedValueOnce([
+          {
+            message_id: 'message-1',
+            _max: { email_last_attempt_at: lastAttemptAt },
+          },
+        ])
+        .mockResolvedValueOnce([
+          {
+            message_id: 'message-1',
+            _min: { email_next_attempt_at: nextRetryAt },
+          },
+        ]);
+
+      const detail = await service.getMessageById('event-1', 'message-1');
+
+      expect(detail.emailDelivery).toEqual({
+        state: MessageEmailDeliveryState.IN_PROGRESS,
+        totalRecipients: 2,
+        requestedCount: 2,
+        sentCount: 1,
+        remainingCount: 1,
+        deferredCount: 1,
+        failedFinalCount: 0,
+        notRequestedCount: 0,
+        successRatePct: 50,
+        lastAttemptAt,
+        nextRetryAt,
+      });
     });
   });
 

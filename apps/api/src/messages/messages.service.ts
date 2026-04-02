@@ -24,6 +24,8 @@ import {
   MessageType,
   MessageStatus,
   EmailDeliveryStatus,
+  MessageEmailDeliverySummary,
+  MessageEmailDeliveryState,
   MessageListQueryDto,
   MessageRecipientsQueryDto,
 } from '@event-platform/shared';
@@ -449,6 +451,8 @@ export class MessagesService {
     const readCountByMessageId = new Map<string, number>(
       readCounts.map((row) => [row.message_id, row._count.id]),
     );
+    const emailDeliveryByMessageId =
+      await this.buildEmailDeliverySummaryByMessageIds(messageIds);
 
     const items = page.map((m) => ({
       id: m.id,
@@ -460,6 +464,7 @@ export class MessagesService {
       readCount: readCountByMessageId.get(m.id) ?? 0,
       createdAt: m.created_at,
       createdBy: m.created_by,
+      emailDelivery: emailDeliveryByMessageId.get(m.id),
     }));
 
     return {
@@ -494,6 +499,11 @@ export class MessagesService {
         read_at: { not: null },
       },
     });
+    const emailDelivery = (
+      await this.buildEmailDeliverySummaryByMessageIds([message.id], {
+        includeAttemptTimeline: true,
+      })
+    ).get(message.id);
 
     return {
       id: message.id,
@@ -512,6 +522,7 @@ export class MessagesService {
         message.recipient_filter_json,
       ),
       resolvedAt: message.resolved_at,
+      emailDelivery,
     };
   }
 
@@ -995,6 +1006,8 @@ export class MessagesService {
     const readCountByMessageId = new Map<string, number>(
       readCounts.map((row) => [row.message_id, row._count.id]),
     );
+    const emailDeliveryByMessageId =
+      await this.buildEmailDeliverySummaryByMessageIds(messageIds);
 
     const items = page.map((m) => ({
       id: m.id,
@@ -1006,6 +1019,7 @@ export class MessagesService {
       readCount: readCountByMessageId.get(m.id) ?? 0,
       createdAt: m.created_at,
       createdBy: m.created_by,
+      emailDelivery: emailDeliveryByMessageId.get(m.id),
     }));
 
     return {
@@ -1043,6 +1057,200 @@ export class MessagesService {
   // HELPERS
   // ============================================================
 
+  private async buildEmailDeliverySummaryByMessageIds(
+    messageIds: string[],
+    options?: { includeAttemptTimeline?: boolean },
+  ): Promise<Map<string, MessageEmailDeliverySummary>> {
+    const summaries = new Map<string, MessageEmailDeliverySummary>();
+    const uniqueMessageIds = [...new Set(messageIds.filter(Boolean))];
+    if (uniqueMessageIds.length === 0) return summaries;
+
+    const now = new Date();
+    const pendingStatusValues = this.getStatusFilterValues([
+      EmailDeliveryStatus.QUEUED,
+      EmailDeliveryStatus.FAILED,
+    ]);
+
+    const statusCounts = await this.prisma.message_recipients.groupBy({
+      by: ['message_id', 'delivery_email_status'],
+      where: { message_id: { in: uniqueMessageIds } },
+      _count: { id: true },
+    });
+
+    const deferredCounts = await this.prisma.message_recipients.groupBy({
+      by: ['message_id'],
+      where: {
+        message_id: { in: uniqueMessageIds },
+        delivery_email_status: { in: pendingStatusValues },
+        email_next_attempt_at: { gt: now },
+      },
+      _count: { id: true },
+    });
+
+    let lastAttemptRows: Array<{
+      message_id: string;
+      _max: { email_last_attempt_at: Date | null };
+    }> = [];
+    let nextRetryRows: Array<{
+      message_id: string;
+      _min: { email_next_attempt_at: Date | null };
+    }> = [];
+
+    if (options?.includeAttemptTimeline) {
+      lastAttemptRows = await this.prisma.message_recipients.groupBy({
+        by: ['message_id'],
+        where: {
+          message_id: { in: uniqueMessageIds },
+          email_last_attempt_at: { not: null },
+        },
+        _max: { email_last_attempt_at: true },
+      });
+
+      nextRetryRows = await this.prisma.message_recipients.groupBy({
+        by: ['message_id'],
+        where: {
+          message_id: { in: uniqueMessageIds },
+          delivery_email_status: { in: pendingStatusValues },
+          email_next_attempt_at: { gt: now },
+        },
+        _min: { email_next_attempt_at: true },
+      });
+    }
+
+    type DeliveryAccumulator = {
+      totalRecipients: number;
+      sentCount: number;
+      remainingCount: number;
+      failedFinalCount: number;
+      notRequestedCount: number;
+      unknownCount: number;
+    };
+
+    const zeroAccumulator = (): DeliveryAccumulator => ({
+      totalRecipients: 0,
+      sentCount: 0,
+      remainingCount: 0,
+      failedFinalCount: 0,
+      notRequestedCount: 0,
+      unknownCount: 0,
+    });
+
+    const accumulatorByMessageId = new Map<string, DeliveryAccumulator>(
+      uniqueMessageIds.map((id) => [id, zeroAccumulator()]),
+    );
+
+    for (const row of statusCounts) {
+      const messageId = row.message_id;
+      const statusCount = row._count.id;
+      const accumulator =
+        accumulatorByMessageId.get(messageId) ?? zeroAccumulator();
+      accumulator.totalRecipients += statusCount;
+
+      const normalizedStatus = this.normalizeEmailDeliveryStatus(
+        row.delivery_email_status,
+      );
+      if (normalizedStatus === EmailDeliveryStatus.SENT) {
+        accumulator.sentCount += statusCount;
+      } else if (
+        normalizedStatus === EmailDeliveryStatus.QUEUED ||
+        normalizedStatus === EmailDeliveryStatus.FAILED
+      ) {
+        accumulator.remainingCount += statusCount;
+      } else if (
+        normalizedStatus === EmailDeliveryStatus.SUPPRESSED ||
+        normalizedStatus === EmailDeliveryStatus.SKIPPED_NO_PROVIDER
+      ) {
+        accumulator.failedFinalCount += statusCount;
+      } else if (normalizedStatus === EmailDeliveryStatus.NOT_REQUESTED) {
+        accumulator.notRequestedCount += statusCount;
+      } else {
+        accumulator.unknownCount += statusCount;
+      }
+
+      accumulatorByMessageId.set(messageId, accumulator);
+    }
+
+    const deferredCountByMessageId = new Map<string, number>(
+      deferredCounts.map((row) => [row.message_id, row._count.id]),
+    );
+
+    const lastAttemptAtByMessageId = new Map<string, Date | null>(
+      lastAttemptRows.map((row) => [
+        row.message_id,
+        row._max.email_last_attempt_at ?? null,
+      ]),
+    );
+    const nextRetryAtByMessageId = new Map<string, Date | null>(
+      nextRetryRows.map((row) => [
+        row.message_id,
+        row._min.email_next_attempt_at ?? null,
+      ]),
+    );
+
+    for (const messageId of uniqueMessageIds) {
+      const accumulator = accumulatorByMessageId.get(messageId) ?? zeroAccumulator();
+      const requestedCount = Math.max(
+        accumulator.totalRecipients - accumulator.notRequestedCount,
+        0,
+      );
+      const hasUnknownRequested = accumulator.unknownCount > 0;
+      const summary: MessageEmailDeliverySummary = {
+        state: this.resolveEmailDeliveryState(
+          requestedCount,
+          accumulator.remainingCount,
+          accumulator.failedFinalCount,
+          hasUnknownRequested,
+        ),
+        totalRecipients: accumulator.totalRecipients,
+        requestedCount,
+        sentCount: accumulator.sentCount,
+        remainingCount: accumulator.remainingCount,
+        deferredCount: deferredCountByMessageId.get(messageId) ?? 0,
+        failedFinalCount: accumulator.failedFinalCount,
+        notRequestedCount: accumulator.notRequestedCount,
+        successRatePct:
+          requestedCount > 0
+            ? Math.round((accumulator.sentCount / requestedCount) * 10_000) /
+              100
+            : null,
+      };
+
+      if (options?.includeAttemptTimeline) {
+        summary.lastAttemptAt = lastAttemptAtByMessageId.get(messageId) ?? null;
+        summary.nextRetryAt = nextRetryAtByMessageId.get(messageId) ?? null;
+      }
+
+      summaries.set(messageId, summary);
+    }
+
+    return summaries;
+  }
+
+  private getStatusFilterValues(statuses: EmailDeliveryStatus[]): string[] {
+    const values = new Set<string>();
+    for (const status of statuses) {
+      values.add(status);
+      values.add(status.toLowerCase());
+    }
+    return [...values];
+  }
+
+  private resolveEmailDeliveryState(
+    requestedCount: number,
+    remainingCount: number,
+    failedFinalCount: number,
+    hasUnknownRequested: boolean,
+  ): MessageEmailDeliveryState {
+    if (requestedCount <= 0) return MessageEmailDeliveryState.NOT_REQUESTED;
+    if (remainingCount > 0 || hasUnknownRequested) {
+      return MessageEmailDeliveryState.IN_PROGRESS;
+    }
+    if (failedFinalCount > 0) {
+      return MessageEmailDeliveryState.COMPLETED_WITH_ISSUES;
+    }
+    return MessageEmailDeliveryState.COMPLETED;
+  }
+
   private parseCursorDate(cursor?: string): Date | null {
     if (typeof cursor !== 'string' || cursor.trim().length === 0) return null;
     const parsed = new Date(cursor);
@@ -1062,6 +1270,33 @@ export class MessagesService {
       return normalized as MessageStatus;
     }
     return MessageStatus.SENT;
+  }
+
+  private normalizeEmailDeliveryStatus(
+    value: unknown,
+  ): EmailDeliveryStatus | null {
+    const normalized = String(value ?? '')
+      .trim()
+      .toUpperCase();
+    if (normalized === EmailDeliveryStatus.NOT_REQUESTED) {
+      return EmailDeliveryStatus.NOT_REQUESTED;
+    }
+    if (normalized === EmailDeliveryStatus.QUEUED) {
+      return EmailDeliveryStatus.QUEUED;
+    }
+    if (normalized === EmailDeliveryStatus.SENT) {
+      return EmailDeliveryStatus.SENT;
+    }
+    if (normalized === EmailDeliveryStatus.FAILED) {
+      return EmailDeliveryStatus.FAILED;
+    }
+    if (normalized === EmailDeliveryStatus.SKIPPED_NO_PROVIDER) {
+      return EmailDeliveryStatus.SKIPPED_NO_PROVIDER;
+    }
+    if (normalized === EmailDeliveryStatus.SUPPRESSED) {
+      return EmailDeliveryStatus.SUPPRESSED;
+    }
+    return null;
   }
 
   private normalizeRecipientFilter(value: unknown): RecipientFilter | null {

@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
@@ -30,6 +31,12 @@ import {
 } from "@/components/ui/dialog";
 import { PageHeader, EmptyState, CardSkeleton } from "@/components/shared";
 import { apiClient } from "@/lib/api";
+import {
+  emailDeliveryProgressPercent,
+  emailDeliveryStateLabel,
+  normalizeMessageEmailDelivery,
+  type MessageEmailDeliverySummary,
+} from "@/lib/message-email-delivery";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 
@@ -40,6 +47,7 @@ interface SentAnnouncement {
   recipientCount: number;
   sentAt: string;
   readCount: number;
+  emailDelivery: MessageEmailDeliverySummary;
 }
 
 interface AnnouncementDetail {
@@ -52,6 +60,7 @@ interface AnnouncementDetail {
   createdAt: string;
   bodyText: string | null;
   bodyRich: unknown;
+  emailDelivery: MessageEmailDeliverySummary;
 }
 
 interface SystemFilter {
@@ -66,27 +75,31 @@ interface SystemFilter {
 }
 
 function normalizeAnnouncement(raw: any): SentAnnouncement {
+  const recipientCount = raw.recipientCount ?? 0;
   return {
     id: raw.id,
     title: raw.title ?? "(no subject)",
     status: raw.status ?? "SENT",
-    recipientCount: raw.recipientCount ?? 0,
+    recipientCount,
     sentAt: raw.createdAt ?? new Date().toISOString(),
     readCount: raw.readCount ?? 0,
+    emailDelivery: normalizeMessageEmailDelivery(raw.emailDelivery, recipientCount),
   };
 }
 
 function normalizeAnnouncementDetail(raw: any): AnnouncementDetail {
+  const recipientCount = raw.recipientCount ?? 0;
   return {
     id: raw.id,
     title: raw.title ?? "(no subject)",
     status: raw.status ?? "SENT",
     type: raw.type ?? "ANNOUNCEMENT",
-    recipientCount: raw.recipientCount ?? 0,
+    recipientCount,
     readCount: raw.readCount ?? 0,
     createdAt: raw.createdAt ?? new Date().toISOString(),
     bodyText: typeof raw.bodyText === "string" ? raw.bodyText : null,
     bodyRich: raw.bodyRich,
+    emailDelivery: normalizeMessageEmailDelivery(raw.emailDelivery, recipientCount),
   };
 }
 
@@ -101,6 +114,22 @@ function resolveMessageBody(bodyText: unknown, bodyRich: unknown): string {
     return JSON.stringify(bodyRich, null, 2);
   }
   return "";
+}
+
+function getEmailDeliveryBadgeVariant(
+  state: MessageEmailDeliverySummary["state"],
+): "default" | "secondary" | "outline" | "destructive" {
+  if (state === "IN_PROGRESS") return "default";
+  if (state === "COMPLETED_WITH_ISSUES") return "destructive";
+  if (state === "COMPLETED") return "outline";
+  return "secondary";
+}
+
+function formatEmailDeliveryTime(value: string | null): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleString("en-GB");
 }
 
 function CollapsibleSection({
@@ -229,17 +258,11 @@ export default function AdminAnnouncementsPage() {
     [],
   );
 
-  const openAnnouncementDialog = useCallback(async (announcement: SentAnnouncement) => {
-    setSelectedAnnouncement(announcement);
-    setAnnouncementDetail(null);
-    setDetailError(null);
-    setIsDetailLoading(true);
-    setIsDetailOpen(true);
-
-    try {
+  const fetchAnnouncementDetail = useCallback(
+    async (announcementId: string): Promise<AnnouncementDetail> => {
       const response = await apiClient<
         { data?: Record<string, unknown> } | Record<string, unknown>
-      >(`/admin/announcements/${announcement.id}`);
+      >(`/admin/announcements/${announcementId}`);
 
       const rawDetail =
         response &&
@@ -251,13 +274,39 @@ export default function AdminAnnouncementsPage() {
           ? (response.data as Record<string, unknown>)
           : (response as Record<string, unknown>);
 
-      setAnnouncementDetail(normalizeAnnouncementDetail(rawDetail));
+      return normalizeAnnouncementDetail(rawDetail);
+    },
+    [],
+  );
+
+  const openAnnouncementDialog = useCallback(async (announcement: SentAnnouncement) => {
+    setSelectedAnnouncement(announcement);
+    setAnnouncementDetail(null);
+    setDetailError(null);
+    setIsDetailLoading(true);
+    setIsDetailOpen(true);
+
+    try {
+      const detail = await fetchAnnouncementDetail(announcement.id);
+      setAnnouncementDetail(detail);
+      setSelectedAnnouncement((current) =>
+        current && current.id === detail.id
+          ? {
+              ...current,
+              status: detail.status,
+              recipientCount: detail.recipientCount,
+              readCount: detail.readCount,
+              sentAt: detail.createdAt,
+              emailDelivery: detail.emailDelivery,
+            }
+          : current,
+      );
     } catch {
       setDetailError("Could not load full announcement.");
     } finally {
       setIsDetailLoading(false);
     }
-  }, []);
+  }, [fetchAnnouncementDetail]);
 
   useEffect(() => {
     (async () => {
@@ -272,6 +321,29 @@ export default function AdminAnnouncementsPage() {
       }
     })();
   }, [fetchAnnouncements]);
+
+  useEffect(() => {
+    if (!isDetailOpen || !selectedAnnouncement?.id) return;
+    if (announcementDetail?.emailDelivery.state !== "IN_PROGRESS") return;
+
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          const detail = await fetchAnnouncementDetail(selectedAnnouncement.id);
+          setAnnouncementDetail(detail);
+        } catch {
+          /* keep current UI state on background refresh failures */
+        }
+      })();
+    }, 12_000);
+
+    return () => clearInterval(timer);
+  }, [
+    announcementDetail?.emailDelivery.state,
+    fetchAnnouncementDetail,
+    isDetailOpen,
+    selectedAnnouncement?.id,
+  ]);
 
   // Debounced preview
   useEffect(() => {
@@ -369,6 +441,13 @@ export default function AdminAnnouncementsPage() {
   }
 
   const fullBody = resolveMessageBody(announcementDetail?.bodyText, announcementDetail?.bodyRich);
+  const detailEmailDelivery =
+    announcementDetail?.emailDelivery ??
+    selectedAnnouncement?.emailDelivery ??
+    normalizeMessageEmailDelivery(undefined, selectedAnnouncement?.recipientCount ?? 0);
+  const detailEmailProgressPct = emailDeliveryProgressPercent(detailEmailDelivery);
+  const detailLastAttemptLabel = formatEmailDeliveryTime(detailEmailDelivery.lastAttemptAt);
+  const detailNextRetryLabel = formatEmailDeliveryTime(detailEmailDelivery.nextRetryAt);
 
   return (
     <div className="space-y-6">
@@ -400,6 +479,7 @@ export default function AdminAnnouncementsPage() {
               ann.recipientCount > 0
                 ? Math.round((ann.readCount / ann.recipientCount) * 100)
                 : 0;
+            const emailProgress = emailDeliveryProgressPercent(ann.emailDelivery);
             return (
               <Card key={ann.id}>
                 <CardContent className="p-4">
@@ -415,10 +495,25 @@ export default function AdminAnnouncementsPage() {
                         </span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
                       <Badge variant="outline" className="text-xs">
                         <BarChart3 className="mr-1 h-3 w-3" />
                         {readRate}% read
+                      </Badge>
+                      <Badge
+                        variant={getEmailDeliveryBadgeVariant(ann.emailDelivery.state)}
+                        className="text-xs"
+                      >
+                        {emailDeliveryStateLabel(ann.emailDelivery.state)}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        Email {ann.emailDelivery.sentCount}/{ann.emailDelivery.requestedCount} sent
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        {ann.emailDelivery.remainingCount} left
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        {emailProgress}% done
                       </Badge>
                       <Badge>System</Badge>
                       <Button variant="outline" size="sm" onClick={() => void openAnnouncementDialog(ann)}>
@@ -483,6 +578,14 @@ export default function AdminAnnouncementsPage() {
                     {announcementDetail.status}
                   </Badge>
                 ) : null}
+                {selectedAnnouncement ? (
+                  <Badge
+                    variant={getEmailDeliveryBadgeVariant(detailEmailDelivery.state)}
+                    className="text-xs"
+                  >
+                    Email {emailDeliveryStateLabel(detailEmailDelivery.state)}
+                  </Badge>
+                ) : null}
               </span>
             </DialogDescription>
           </DialogHeader>
@@ -495,8 +598,39 @@ export default function AdminAnnouncementsPage() {
           ) : detailError ? (
             <p className="text-sm text-destructive">{detailError}</p>
           ) : (
-            <div className="rounded-md border p-3 text-sm whitespace-pre-wrap break-words">
-              {fullBody || "No announcement body available."}
+            <div className="space-y-3">
+              <div className="rounded-md border p-3 space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={getEmailDeliveryBadgeVariant(detailEmailDelivery.state)}>
+                    {emailDeliveryStateLabel(detailEmailDelivery.state)}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    {detailEmailDelivery.sentCount}/{detailEmailDelivery.requestedCount} sent
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {detailEmailDelivery.remainingCount} left
+                  </span>
+                </div>
+                <Progress value={detailEmailProgressPct} />
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">Sent {detailEmailDelivery.sentCount}</Badge>
+                  <Badge variant="outline">Left {detailEmailDelivery.remainingCount}</Badge>
+                  <Badge variant="outline">Deferred {detailEmailDelivery.deferredCount}</Badge>
+                  <Badge variant="outline">
+                    Final failures {detailEmailDelivery.failedFinalCount}
+                  </Badge>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  {detailNextRetryLabel ? <span>Next retry: {detailNextRetryLabel}</span> : null}
+                  {detailLastAttemptLabel ? <span>Last attempt: {detailLastAttemptLabel}</span> : null}
+                  {typeof detailEmailDelivery.successRatePct === "number" ? (
+                    <span>Success rate: {detailEmailDelivery.successRatePct}%</span>
+                  ) : null}
+                </div>
+              </div>
+              <div className="rounded-md border p-3 text-sm whitespace-pre-wrap break-words">
+                {fullBody || "No announcement body available."}
+              </div>
             </div>
           )}
         </DialogContent>

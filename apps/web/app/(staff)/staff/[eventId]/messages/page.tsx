@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import {
@@ -43,6 +44,12 @@ import {
   AudienceBuilder,
 } from "@/components/shared";
 import { apiClient } from "@/lib/api";
+import {
+  emailDeliveryProgressPercent,
+  emailDeliveryStateLabel,
+  normalizeMessageEmailDelivery,
+  type MessageEmailDeliverySummary,
+} from "@/lib/message-email-delivery";
 import { useAuth, usePermissions } from "@/lib/auth-context";
 import { Permission } from "@event-platform/shared";
 import type { RecipientFilter } from "@event-platform/shared";
@@ -57,6 +64,7 @@ interface SentMessage {
   recipientCount: number;
   sentAt: string;
   readCount: number;
+  emailDelivery: MessageEmailDeliverySummary;
 }
 
 interface MessageDetail {
@@ -69,31 +77,36 @@ interface MessageDetail {
   createdAt: string;
   bodyText: string | null;
   bodyRich: unknown;
+  emailDelivery: MessageEmailDeliverySummary;
 }
 
 function normalizeMessage(raw: any): SentMessage {
+  const recipientCount = raw.recipientCount ?? 0;
   return {
     id: raw.id,
     subject: raw.title ?? raw.subject ?? "(no subject)",
     type: raw.type ?? "ANNOUNCEMENT",
     status: raw.status ?? "SENT",
-    recipientCount: raw.recipientCount ?? 0,
+    recipientCount,
     sentAt: raw.createdAt ?? raw.sentAt ?? new Date().toISOString(),
     readCount: raw.readCount ?? 0,
+    emailDelivery: normalizeMessageEmailDelivery(raw.emailDelivery, recipientCount),
   };
 }
 
 function normalizeMessageDetail(raw: any): MessageDetail {
+  const recipientCount = raw.recipientCount ?? 0;
   return {
     id: raw.id,
     subject: raw.title ?? raw.subject ?? "(no subject)",
     type: raw.type ?? "ANNOUNCEMENT",
     status: raw.status ?? "SENT",
-    recipientCount: raw.recipientCount ?? 0,
+    recipientCount,
     readCount: raw.readCount ?? 0,
     createdAt: raw.createdAt ?? new Date().toISOString(),
     bodyText: typeof raw.bodyText === "string" ? raw.bodyText : null,
     bodyRich: raw.bodyRich,
+    emailDelivery: normalizeMessageEmailDelivery(raw.emailDelivery, recipientCount),
   };
 }
 
@@ -108,6 +121,22 @@ function resolveMessageBody(bodyText: unknown, bodyRich: unknown): string {
     return JSON.stringify(bodyRich, null, 2);
   }
   return "";
+}
+
+function getEmailDeliveryBadgeVariant(
+  state: MessageEmailDeliverySummary["state"],
+): "default" | "secondary" | "outline" | "destructive" {
+  if (state === "IN_PROGRESS") return "default";
+  if (state === "COMPLETED_WITH_ISSUES") return "destructive";
+  if (state === "COMPLETED") return "outline";
+  return "secondary";
+}
+
+function formatEmailDeliveryTime(value: string | null): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleString("en-GB");
 }
 
 function unpackMessagesPayload(raw: any): {
@@ -168,6 +197,27 @@ export default function MessagesPage() {
     return unpackMessagesPayload(res);
   }, [eventId]);
 
+  const fetchMessageDetail = useCallback(
+    async (messageId: string): Promise<MessageDetail> => {
+      const response = await apiClient<
+        { data?: Record<string, unknown> } | Record<string, unknown>
+      >(`/events/${eventId}/messages/${messageId}`);
+
+      const rawDetail =
+        response &&
+        typeof response === "object" &&
+        !Array.isArray(response) &&
+        "data" in response &&
+        response.data &&
+        typeof response.data === "object"
+          ? (response.data as Record<string, unknown>)
+          : (response as Record<string, unknown>);
+
+      return normalizeMessageDetail(rawDetail);
+    },
+    [eventId],
+  );
+
   const openMessageDialog = useCallback(
     async (message: SentMessage) => {
       setSelectedMessage(message);
@@ -177,28 +227,27 @@ export default function MessagesPage() {
       setIsDetailOpen(true);
 
       try {
-        const response = await apiClient<
-          { data?: Record<string, unknown> } | Record<string, unknown>
-        >(`/events/${eventId}/messages/${message.id}`);
-
-        const rawDetail =
-          response &&
-          typeof response === "object" &&
-          !Array.isArray(response) &&
-          "data" in response &&
-          response.data &&
-          typeof response.data === "object"
-            ? (response.data as Record<string, unknown>)
-            : (response as Record<string, unknown>);
-
-        setMessageDetail(normalizeMessageDetail(rawDetail));
+        const detail = await fetchMessageDetail(message.id);
+        setMessageDetail(detail);
+        setSelectedMessage((current) =>
+          current && current.id === detail.id
+            ? {
+                ...current,
+                status: detail.status,
+                recipientCount: detail.recipientCount,
+                readCount: detail.readCount,
+                sentAt: detail.createdAt,
+                emailDelivery: detail.emailDelivery,
+              }
+            : current,
+        );
       } catch {
         setDetailError("Could not load full message.");
       } finally {
         setIsDetailLoading(false);
       }
     },
-    [eventId]
+    [fetchMessageDetail]
   );
 
   useEffect(() => {
@@ -214,6 +263,29 @@ export default function MessagesPage() {
       }
     })();
   }, [fetchMessages]);
+
+  useEffect(() => {
+    if (!isDetailOpen || !selectedMessage?.id) return;
+    if (messageDetail?.emailDelivery.state !== "IN_PROGRESS") return;
+
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          const latestDetail = await fetchMessageDetail(selectedMessage.id);
+          setMessageDetail(latestDetail);
+        } catch {
+          /* keep current UI state on background refresh failures */
+        }
+      })();
+    }, 12_000);
+
+    return () => clearInterval(timer);
+  }, [
+    fetchMessageDetail,
+    isDetailOpen,
+    messageDetail?.emailDelivery.state,
+    selectedMessage?.id,
+  ]);
 
   // Debounced recipient preview for announcements
   useEffect(() => {
@@ -335,6 +407,13 @@ export default function MessagesPage() {
   const direct = messages.filter((m) => m.type === "DIRECT");
 
   const fullBody = resolveMessageBody(messageDetail?.bodyText, messageDetail?.bodyRich);
+  const detailEmailDelivery =
+    messageDetail?.emailDelivery ??
+    selectedMessage?.emailDelivery ??
+    normalizeMessageEmailDelivery(undefined, selectedMessage?.recipientCount ?? 0);
+  const detailEmailProgressPct = emailDeliveryProgressPercent(detailEmailDelivery);
+  const detailLastAttemptLabel = formatEmailDeliveryTime(detailEmailDelivery.lastAttemptAt);
+  const detailNextRetryLabel = formatEmailDeliveryTime(detailEmailDelivery.nextRetryAt);
 
   return (
     <>
@@ -480,6 +559,14 @@ export default function MessagesPage() {
                       {messageDetail.status}
                     </Badge>
                   ) : null}
+                  {selectedMessage ? (
+                    <Badge
+                      variant={getEmailDeliveryBadgeVariant(detailEmailDelivery.state)}
+                      className="text-xs"
+                    >
+                      Email {emailDeliveryStateLabel(detailEmailDelivery.state)}
+                    </Badge>
+                  ) : null}
                 </span>
               </DialogDescription>
             </DialogHeader>
@@ -492,8 +579,39 @@ export default function MessagesPage() {
             ) : detailError ? (
               <p className="text-sm text-destructive">{detailError}</p>
             ) : (
-              <div className="rounded-md border p-3 text-sm whitespace-pre-wrap break-words">
-                {fullBody || "No message body available."}
+              <div className="space-y-3">
+                <div className="rounded-md border p-3 space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={getEmailDeliveryBadgeVariant(detailEmailDelivery.state)}>
+                      {emailDeliveryStateLabel(detailEmailDelivery.state)}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">
+                      {detailEmailDelivery.sentCount}/{detailEmailDelivery.requestedCount} sent
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {detailEmailDelivery.remainingCount} left
+                    </span>
+                  </div>
+                  <Progress value={detailEmailProgressPct} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline">Sent {detailEmailDelivery.sentCount}</Badge>
+                    <Badge variant="outline">Left {detailEmailDelivery.remainingCount}</Badge>
+                    <Badge variant="outline">Deferred {detailEmailDelivery.deferredCount}</Badge>
+                    <Badge variant="outline">
+                      Final failures {detailEmailDelivery.failedFinalCount}
+                    </Badge>
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                    {detailNextRetryLabel ? <span>Next retry: {detailNextRetryLabel}</span> : null}
+                    {detailLastAttemptLabel ? <span>Last attempt: {detailLastAttemptLabel}</span> : null}
+                    {typeof detailEmailDelivery.successRatePct === "number" ? (
+                      <span>Success rate: {detailEmailDelivery.successRatePct}%</span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="rounded-md border p-3 text-sm whitespace-pre-wrap break-words">
+                  {fullBody || "No message body available."}
+                </div>
               </div>
             )}
           </DialogContent>
@@ -624,6 +742,7 @@ function MessageCard({
     message.recipientCount > 0
       ? Math.round((message.readCount / message.recipientCount) * 100)
       : 0;
+  const emailProgress = emailDeliveryProgressPercent(message.emailDelivery);
 
   return (
     <Card>
@@ -640,10 +759,25 @@ function MessageCard({
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Badge variant="outline" className="text-xs">
               <BarChart3 className="mr-1 h-3 w-3" />
               {readRate}% read
+            </Badge>
+            <Badge
+              variant={getEmailDeliveryBadgeVariant(message.emailDelivery.state)}
+              className="text-xs"
+            >
+              {emailDeliveryStateLabel(message.emailDelivery.state)}
+            </Badge>
+            <Badge variant="outline" className="text-xs">
+              Email {message.emailDelivery.sentCount}/{message.emailDelivery.requestedCount} sent
+            </Badge>
+            <Badge variant="outline" className="text-xs">
+              {message.emailDelivery.remainingCount} left
+            </Badge>
+            <Badge variant="outline" className="text-xs">
+              {emailProgress}% done
             </Badge>
             <Badge variant={message.type === "ANNOUNCEMENT" ? "default" : "secondary"}>
               {message.type === "ANNOUNCEMENT" ? "Announcement" : "Direct"}
