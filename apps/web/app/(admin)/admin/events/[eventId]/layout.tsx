@@ -14,6 +14,7 @@ import {
   Globe,
   Settings,
   ArrowLeft,
+  Shuffle,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { useRequireAdmin } from "@/lib/auth-context";
@@ -67,6 +68,7 @@ export default function AdminEventLayout({ children }: { children: React.ReactNo
         { label: "Overview", href: base, icon: LayoutDashboard },
         { label: "Applications", href: `${base}/applications`, icon: Users },
         { label: "Reviews", href: `${base}/reviews`, icon: ClipboardCheck },
+        { label: "Reviewer Assignment", href: `${base}/reviewer-assignment`, icon: Shuffle },
         { label: "Messages", href: `${base}/messages`, icon: MessageSquare },
         { label: "Metrics", href: `${base}/metrics`, icon: BarChart3 },
         { label: "Check-in", href: `${base}/checkin`, icon: ScanLine },

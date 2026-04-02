@@ -107,6 +107,7 @@ model applications {
   needs_info_requests                            needs_info_requests[]
   step_drafts                                    step_drafts[]
   step_submission_versions                       step_submission_versions[]
+  review_queue_items                             review_queue_items[]
 
   @@unique([event_id, applicant_user_id])
   @@index([applicant_user_id], map: "app_applicant_idx")
@@ -241,6 +242,9 @@ model events {
   messages               messages[]
   microsites             microsites?
   review_queue_saved_views review_queue_saved_views[]
+  review_assignment_previews review_assignment_previews[]
+  review_assignment_runs     review_assignment_runs[]
+  review_queue_items         review_queue_items[]
   workflow_steps         workflow_steps[]
 
   @@index([application_open_at, application_close_at], map: "events_open_close_idx")
@@ -438,6 +442,7 @@ model step_submission_versions {
   field_verifications  field_verifications[]
   needs_info_requests  needs_info_requests[]
   review_records       review_records[]
+  review_queue_items   review_queue_items[]
   applications         applications           @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   form_versions        form_versions          @relation(fields: [form_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   workflow_steps       workflow_steps         @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -476,6 +481,10 @@ model users {
   needs_info_requests                                   needs_info_requests[]
   password_reset_tokens                                 password_reset_tokens[]
   review_queue_saved_views                              review_queue_saved_views[]
+  review_assignment_previews                            review_assignment_previews[]
+  review_assignment_runs                                review_assignment_runs[]
+  review_queue_items_review_queue_items_assigned_reviewer_idTousers review_queue_items[] @relation("review_queue_items_assigned_reviewer_idTousers")
+  review_queue_items_review_queue_items_completed_byTousers         review_queue_items[] @relation("review_queue_items_completed_byTousers")
   review_records                                        review_records[]
   step_submission_versions                              step_submission_versions[]
 }
@@ -494,6 +503,67 @@ model review_queue_saved_views {
 
   @@unique([event_id, user_id, name], map: "rqsv_event_user_name_uq")
   @@index([event_id, user_id, created_at(sort: Desc)], map: "rqsv_event_user_created_idx")
+}
+
+model review_queue_items {
+  id                                                                     String                   @id @db.Uuid
+  event_id                                                               String                   @db.Uuid
+  application_id                                                         String                   @db.Uuid
+  step_id                                                                String                   @db.Uuid
+  submission_version_id                                                  String                   @unique(map: "rqi_submission_version_uq") @db.Uuid
+  assigned_reviewer_id                                                   String?                  @db.Uuid
+  queue_mode                                                             String                   @default("shared")
+  assignment_expires_at                                                  DateTime?                @db.Timestamptz(6)
+  completed_at                                                           DateTime?                @db.Timestamptz(6)
+  completed_by                                                           String?                  @db.Uuid
+  created_at                                                             DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at                                                             DateTime                 @default(now()) @db.Timestamptz(6)
+  applications                                                           applications             @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  events                                                                 events                   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  step_submission_versions                                               step_submission_versions @relation(fields: [submission_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_review_queue_items_assigned_reviewer_idTousers                  users?                   @relation("review_queue_items_assigned_reviewer_idTousers", fields: [assigned_reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_review_queue_items_completed_byTousers                          users?                   @relation("review_queue_items_completed_byTousers", fields: [completed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  workflow_steps                                                         workflow_steps           @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([event_id, completed_at], map: "rqi_event_completed_idx")
+  @@index([event_id, assigned_reviewer_id, completed_at], map: "rqi_event_assigned_completed_idx")
+  @@index([event_id, assignment_expires_at, completed_at], map: "rqi_event_expiry_completed_idx")
+  @@index([application_id, step_id], map: "rqi_application_step_idx")
+}
+
+model review_assignment_previews {
+  id                 String   @id @db.Uuid
+  event_id           String   @db.Uuid
+  created_by         String   @db.Uuid
+  request_payload    Json     @default("{}")
+  snapshot_payload   Json     @default("{}")
+  scope_fingerprint  String
+  expires_at         DateTime @db.Timestamptz(6)
+  applied_at         DateTime? @db.Timestamptz(6)
+  created_at         DateTime @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime @default(now()) @db.Timestamptz(6)
+  events             events   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users              users    @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  review_assignment_runs review_assignment_runs[]
+
+  @@index([event_id, expires_at], map: "rap_event_expires_idx")
+  @@index([event_id, created_by, created_at(sort: Desc)], map: "rap_event_creator_created_idx")
+}
+
+model review_assignment_runs {
+  id            String                     @id @db.Uuid
+  event_id      String                     @db.Uuid
+  preview_id    String                     @db.Uuid
+  created_by    String                     @db.Uuid
+  idempotency_key String
+  result_payload Json                      @default("{}")
+  created_at    DateTime                   @default(now()) @db.Timestamptz(6)
+  events        events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  review_assignment_previews review_assignment_previews @relation(fields: [preview_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users         users                      @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([event_id, idempotency_key], map: "rar_event_idempotency_uq")
+  @@index([event_id, created_at(sort: Desc)], map: "rar_event_created_idx")
 }
 
 model decision_templates {
@@ -545,6 +615,7 @@ model workflow_steps {
   needs_info_requests          needs_info_requests[]
   step_drafts                  step_drafts[]
   step_submission_versions     step_submission_versions[]
+  review_queue_items           review_queue_items[]
   events                       events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   form_versions                form_versions?             @relation(fields: [form_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 

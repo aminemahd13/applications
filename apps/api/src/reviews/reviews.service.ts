@@ -19,6 +19,7 @@ import { StepStateService } from '../applications/step-state.service';
 import { ApplicationsService } from '../applications/applications.service';
 import { FilesService } from './files.service';
 import { FormsService } from '../workflow/forms.service';
+import { ReviewerAssignmentService } from './reviewer-assignment.service';
 
 @Injectable()
 export class ReviewsService {
@@ -29,6 +30,7 @@ export class ReviewsService {
     private readonly applicationsService: ApplicationsService,
     private readonly filesService: FilesService,
     private readonly formsService: FormsService,
+    private readonly reviewerAssignmentService: ReviewerAssignmentService,
   ) {}
 
   /**
@@ -78,6 +80,23 @@ export class ReviewsService {
         code: 'VERSION_NOT_LATEST',
         message: 'Cannot review old version. Applicant has resubmitted.',
         latestVersionId: latestVersion?.id,
+      });
+    }
+
+    await this.reviewerAssignmentService.assertQueueAccessForReview(
+      eventId,
+      versionId,
+      reviewerId,
+    );
+
+    const existingReview = await this.prisma.review_records.findFirst({
+      where: { submission_version_id: versionId },
+      select: { id: true },
+    });
+    if (existingReview) {
+      throw new ConflictException({
+        code: 'REVIEW_ALREADY_COMPLETED',
+        message: 'This submission version has already been reviewed.',
       });
     }
 
@@ -136,6 +155,12 @@ export class ReviewsService {
         break;
       }
     }
+
+    await this.reviewerAssignmentService.markQueueItemCompleted(
+      eventId,
+      versionId,
+      reviewerId,
+    );
 
     return {
       id: review.id,

@@ -8,11 +8,13 @@ import {
   Param,
   Query,
   UseGuards,
+  GoneException,
 } from '@nestjs/common';
 import { ReviewsService } from './reviews.service';
 import { ReviewQueueService } from './review-queue.service';
 import { PatchesService } from './patches.service';
 import { FilesService } from './files.service'; // Added import
+import { ReviewerAssignmentService } from './reviewer-assignment.service';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { Permission } from '@event-platform/shared';
@@ -23,6 +25,9 @@ import {
   CreateReviewQueueSavedViewSchema,
   UpdateReviewQueueSavedViewSchema,
   VerifyFieldSchema, // Added import
+  ReviewerAssignmentPreviewRequestSchema,
+  ReviewerAssignmentApplyRequestSchema,
+  ReviewerQueueItemOverrideRequestSchema,
 } from '@event-platform/shared';
 
 /**
@@ -35,6 +40,7 @@ export class ReviewsController {
   constructor(
     private readonly reviewsService: ReviewsService,
     private readonly queueService: ReviewQueueService,
+    private readonly reviewerAssignmentService: ReviewerAssignmentService,
     private readonly patchesService: PatchesService,
     private readonly filesService: FilesService, // Injected
   ) {}
@@ -111,18 +117,78 @@ export class ReviewsController {
    * Assign reviewer
    */
   @Post('applications/:applicationId/assign')
-  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  @RequirePermission(Permission.EVENT_UPDATE)
   async assignReviewer(
     @Param('eventId') eventId: string,
-    @Param('applicationId') applicationId: string,
+    @Param('applicationId') _applicationId: string,
     @Body() body: { reviewerId: string },
   ) {
-    await this.queueService.assignReviewer(
+    void body;
+    throw new GoneException({
+      code: 'LEGACY_ASSIGNMENT_DISABLED',
+      message:
+        'Legacy application-level reviewer assignment is disabled. Use /events/:eventId/reviewer-assignment instead.',
+      reviewerAssignmentPath: `/staff/${eventId}/reviewer-assignment`,
+    });
+  }
+
+  // ============================================================
+  // REVIEWER ASSIGNMENT ENGINE
+  // ============================================================
+
+  @Get('reviewer-assignment/context')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async getReviewerAssignmentContext(@Param('eventId') eventId: string) {
+    const data = await this.reviewerAssignmentService.getContext(eventId);
+    return { data };
+  }
+
+  @Post('reviewer-assignment/preview')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async previewReviewerAssignment(
+    @Param('eventId') eventId: string,
+    @Body() body: any,
+  ) {
+    const dto = ReviewerAssignmentPreviewRequestSchema.parse(body);
+    const data = await this.reviewerAssignmentService.createPreview(eventId, dto);
+    return { data };
+  }
+
+  @Post('reviewer-assignment/apply')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async applyReviewerAssignment(
+    @Param('eventId') eventId: string,
+    @Body() body: any,
+  ) {
+    const dto = ReviewerAssignmentApplyRequestSchema.parse(body);
+    const data = await this.reviewerAssignmentService.applyPreview(eventId, dto);
+    return { data };
+  }
+
+  @Patch('reviewer-assignment/items/:queueItemId')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async overrideReviewerQueueItem(
+    @Param('eventId') eventId: string,
+    @Param('queueItemId') queueItemId: string,
+    @Body() body: any,
+  ) {
+    const dto = ReviewerQueueItemOverrideRequestSchema.parse(body);
+    const data = await this.reviewerAssignmentService.overrideQueueItem(
       eventId,
-      applicationId,
-      body.reviewerId,
+      queueItemId,
+      dto,
     );
-    return { success: true };
+    return { data };
+  }
+
+  @Post('reviewer-assignment/release-expired')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async releaseExpiredReviewerAssignments(@Param('eventId') eventId: string) {
+    const data =
+      await this.reviewerAssignmentService.releaseExpiredDirectAssignments(
+        eventId,
+      );
+    return { data };
   }
 
   // ============================================================

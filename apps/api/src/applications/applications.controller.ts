@@ -11,6 +11,7 @@ import {
   UseGuards,
   ForbiddenException,
   NotFoundException,
+  GoneException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApplicationsService } from './applications.service';
@@ -344,17 +345,18 @@ export class ApplicationsController {
    * Bulk assign/unassign reviewer
    */
   @Post('bulk/assign-reviewer')
-  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  @RequirePermission(Permission.EVENT_UPDATE)
   async bulkAssignReviewer(
     @Param('eventId') eventId: string,
     @Body() body: any,
   ) {
-    const dto = BulkAssignReviewerSchema.parse(body);
-    const result = await this.applicationsService.bulkAssignReviewer(
-      eventId,
-      dto,
-    );
-    return { data: result };
+    BulkAssignReviewerSchema.parse(body);
+    throw new GoneException({
+      code: 'LEGACY_ASSIGNMENT_DISABLED',
+      message:
+        'Legacy application-level reviewer assignment is disabled. Use /events/:eventId/reviewer-assignment instead.',
+      reviewerAssignmentPath: `/staff/${eventId}/reviewer-assignment`,
+    });
   }
 
   /**

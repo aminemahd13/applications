@@ -92,6 +92,153 @@ export const ReviewQueueFilterSchema = z.object({
 
 export type ReviewQueueFilterDto = z.infer<typeof ReviewQueueFilterSchema>;
 
+// ============================================================
+// REVIEWER ASSIGNMENT DTOs
+// ============================================================
+
+export const ReviewerAssignmentModeSchema = z.enum([
+    'equal_distribution',
+    'fixed_per_reviewer',
+    'hybrid_manual_then_random',
+    'pure_random',
+]);
+
+export type ReviewerAssignmentMode = z.infer<
+    typeof ReviewerAssignmentModeSchema
+>;
+
+export const ReviewerAssignmentRunPolicySchema = z.enum([
+    'reassign_all',
+    'unassigned_only',
+]);
+
+export type ReviewerAssignmentRunPolicy = z.infer<
+    typeof ReviewerAssignmentRunPolicySchema
+>;
+
+export const ReviewerAssignmentHybridTargetSchema = z.object({
+    reviewerId: z.string().uuid(),
+    count: z.coerce.number().int().min(0),
+});
+
+export type ReviewerAssignmentHybridTargetDto = z.infer<
+    typeof ReviewerAssignmentHybridTargetSchema
+>;
+
+export const ReviewerAssignmentPreviewRequestSchema = z
+    .object({
+        mode: ReviewerAssignmentModeSchema,
+        reviewerPoolUserIds: z.array(z.string().uuid()).min(1).max(500),
+        includeStepIds: z.array(z.string().uuid()).max(200).optional().default([]),
+        excludeStepIds: z.array(z.string().uuid()).max(200).optional().default([]),
+        runPolicy: ReviewerAssignmentRunPolicySchema.default('reassign_all'),
+        ttlMinutes: z.coerce.number().int().min(1).max(10080).optional(),
+        fixedReviewsPerReviewer: z.coerce.number().int().min(0).optional(),
+        hybridTargets: z
+            .array(ReviewerAssignmentHybridTargetSchema)
+            .max(500)
+            .optional()
+            .default([]),
+    })
+    .superRefine((value, ctx) => {
+        if (
+            value.mode === 'fixed_per_reviewer' &&
+            value.fixedReviewsPerReviewer === undefined
+        ) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'fixedReviewsPerReviewer is required for fixed_per_reviewer mode',
+                path: ['fixedReviewsPerReviewer'],
+            });
+        }
+
+        if (
+            value.mode !== 'fixed_per_reviewer' &&
+            value.fixedReviewsPerReviewer !== undefined
+        ) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'fixedReviewsPerReviewer is only allowed in fixed_per_reviewer mode',
+                path: ['fixedReviewsPerReviewer'],
+            });
+        }
+
+        if (
+            value.mode === 'hybrid_manual_then_random' &&
+            (!Array.isArray(value.hybridTargets) || value.hybridTargets.length === 0)
+        ) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'hybridTargets is required for hybrid_manual_then_random mode',
+                path: ['hybridTargets'],
+            });
+        }
+
+        if (
+            value.mode !== 'hybrid_manual_then_random' &&
+            Array.isArray(value.hybridTargets) &&
+            value.hybridTargets.length > 0
+        ) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'hybridTargets is only allowed in hybrid_manual_then_random mode',
+                path: ['hybridTargets'],
+            });
+        }
+    });
+
+export type ReviewerAssignmentPreviewRequestDto = z.infer<
+    typeof ReviewerAssignmentPreviewRequestSchema
+>;
+
+export const ReviewerAssignmentApplyRequestSchema = z.object({
+    previewId: z.string().uuid(),
+    idempotencyKey: z.string().trim().min(1).max(200),
+});
+
+export type ReviewerAssignmentApplyRequestDto = z.infer<
+    typeof ReviewerAssignmentApplyRequestSchema
+>;
+
+export const ReviewerQueueItemOverrideActionSchema = z.enum([
+    'assign_direct',
+    'release_shared',
+    'reassign_direct',
+]);
+
+export type ReviewerQueueItemOverrideAction = z.infer<
+    typeof ReviewerQueueItemOverrideActionSchema
+>;
+
+export const ReviewerQueueItemOverrideRequestSchema = z
+    .object({
+        action: ReviewerQueueItemOverrideActionSchema,
+        reviewerId: z.string().uuid().optional(),
+        ttlMinutes: z.coerce.number().int().min(1).max(10080).optional(),
+    })
+    .superRefine((value, ctx) => {
+        const needsReviewer =
+            value.action === 'assign_direct' || value.action === 'reassign_direct';
+        if (needsReviewer && !value.reviewerId) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'reviewerId is required for direct assignment actions',
+                path: ['reviewerId'],
+            });
+        }
+        if (value.action === 'release_shared' && value.reviewerId) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'reviewerId is not allowed for release_shared',
+                path: ['reviewerId'],
+            });
+        }
+    });
+
+export type ReviewerQueueItemOverrideRequestDto = z.infer<
+    typeof ReviewerQueueItemOverrideRequestSchema
+>;
+
 export const ReviewQueueSavedViewFilterSchema = z.object({
     stepId: z.string().uuid().optional(),
     assignedTo: z.enum(['me', 'any', 'unassigned']).optional(),
@@ -189,6 +336,7 @@ export interface NeedsInfoResponse {
 
 export interface ReviewQueueItem {
     id?: string;
+    queueItemId?: string;
     applicationId: string;
     applicantEmail: string;
     applicantName: string | null;
@@ -202,9 +350,60 @@ export interface ReviewQueueItem {
     answers?: Record<string, unknown>;
     formDefinition?: Record<string, unknown> | null;
     assignedReviewerId: string | null;
+    queueMode?: 'direct' | 'shared';
+    assignmentExpiresAt?: Date | null;
+    isOverdue?: boolean;
     tags?: string[];
     hasOpenNeedsInfo: boolean;
     isResubmission: boolean;
+}
+
+export interface ReviewerAssignmentContextResponse {
+    steps: Array<{
+        stepId: string;
+        stepTitle: string;
+        stepIndex: number;
+    }>;
+    reviewers: Array<{
+        userId: string;
+        email: string;
+        fullName: string | null;
+        roles: string[];
+        workload: {
+            assigned: number;
+            pending: number;
+            overdue: number;
+            completed: number;
+        };
+    }>;
+    sharedQueueCount: number;
+    defaults: {
+        defaultTtlMinutes: number;
+        previewTtlSeconds: number;
+    };
+}
+
+export interface ReviewerAssignmentPreviewResponse {
+    previewId: string;
+    expiresAt: Date;
+    mode: ReviewerAssignmentMode;
+    runPolicy: ReviewerAssignmentRunPolicy;
+    totalCandidates: number;
+    operationCount: number;
+    sharedQueueAfter: number;
+    reviewerImpact: Array<{
+        reviewerId: string;
+        beforeAssigned: number;
+        afterAssigned: number;
+        deltaAssigned: number;
+    }>;
+}
+
+export interface ReviewerAssignmentApplyResponse {
+    previewId: string;
+    appliedAt: Date;
+    updatedItems: number;
+    sharedQueueAfter: number;
 }
 
 export interface ReviewQueueStats {

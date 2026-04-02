@@ -1,39 +1,64 @@
-import { StepStatus } from '@event-platform/shared';
+import { Permission, StepStatus } from '@event-platform/shared';
 import { ReviewQueueService } from './review-queue.service';
 
-function buildApp(params: {
-  id: string;
-  updatedAt: string;
+function buildQueueItem(params?: {
+  id?: string;
+  queueMode?: 'direct' | 'shared';
+  assignedReviewerId?: string | null;
+  updatedAt?: string;
   stepId?: string;
-  stepStatus?: StepStatus;
+  submissionVersionId?: string;
+  revisionCycleCount?: number;
+  hasOpenNeedsInfo?: boolean;
 }) {
-  const stepId = params.stepId ?? 'step-1';
-  const stepStatus = params.stepStatus ?? StepStatus.SUBMITTED;
+  const stepId = params?.stepId ?? 'step-1';
+  const updatedAt = new Date(params?.updatedAt ?? '2026-03-09T10:00:00.000Z');
+  const submissionVersionId = params?.submissionVersionId ?? 'version-1';
+  const queueMode = params?.queueMode ?? 'shared';
+  const assignedReviewerId = params?.assignedReviewerId ?? null;
+  const revisionCycleCount = params?.revisionCycleCount ?? 0;
+
   return {
-    id: params.id,
-    event_id: 'event-1',
-    updated_at: new Date(params.updatedAt),
-    assigned_reviewer_id: null,
-    tags: [],
-    users_applications_applicant_user_idTousers: {
-      email: `${params.id}@example.com`,
-      applicant_profiles: { full_name: params.id },
-    },
-    application_step_states: [
-      {
-        step_id: stepId,
-        status: stepStatus,
-        revision_cycle_count: 0,
-        latest_submission_version_id: null,
-        last_activity_at: new Date(params.updatedAt),
-        workflow_steps: {
-          id: stepId,
-          title: 'Review Step',
-          step_index: 1,
-        },
+    id: params?.id ?? 'queue-1',
+    updated_at: updatedAt,
+    queue_mode: queueMode,
+    assignment_expires_at: null,
+    assigned_reviewer_id: assignedReviewerId,
+    application_id: 'app-1',
+    step_id: stepId,
+    submission_version_id: submissionVersionId,
+    applications: {
+      id: 'app-1',
+      tags: ['vip'],
+      users_applications_applicant_user_idTousers: {
+        email: 'applicant@example.com',
+        applicant_profiles: { full_name: 'Applicant Name' },
       },
-    ],
-    needs_info_requests: [],
+      application_step_states: [
+        {
+          step_id: stepId,
+          status: StepStatus.SUBMITTED,
+          latest_submission_version_id: submissionVersionId,
+          last_activity_at: updatedAt,
+          revision_cycle_count: revisionCycleCount,
+        },
+      ],
+      needs_info_requests: params?.hasOpenNeedsInfo
+        ? [{ step_id: stepId }]
+        : [],
+    },
+    workflow_steps: {
+      id: stepId,
+      title: 'Review Step',
+      step_index: 1,
+    },
+    step_submission_versions: {
+      id: submissionVersionId,
+      form_version_id: 'form-version-1',
+      answers_snapshot: { answer: 'value' },
+      version_number: 2,
+      submitted_at: updatedAt,
+    },
   };
 }
 
@@ -41,145 +66,113 @@ describe('ReviewQueueService', () => {
   let service: ReviewQueueService;
   let mockPrisma: any;
   let mockCls: any;
+  let mockReviewerAssignmentService: any;
 
   beforeEach(() => {
     mockPrisma = {
       workflow_steps: {
-        findMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([{ id: 'step-1' }]),
       },
-      applications: {
-        findMany: jest.fn(),
-        findFirst: jest.fn(),
-      },
-      step_submission_versions: {
-        findMany: jest.fn(),
+      review_queue_items: {
+        findMany: jest.fn().mockResolvedValue([buildQueueItem()]),
+        count: jest.fn(),
       },
       form_versions: {
-        findMany: jest.fn(),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'form-version-1', schema: { fields: [] } }]),
       },
       review_queue_saved_views: {
         findMany: jest.fn(),
       },
+      applications: {
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
     };
+
     mockCls = {
-      get: jest.fn().mockReturnValue('reviewer-1'),
+      get: jest.fn((key: string) => {
+        if (key === 'actorId') return 'reviewer-1';
+        if (key === 'permissions') return [Permission.EVENT_APPLICATION_LIST];
+        if (key === 'isGlobalAdmin') return false;
+        return undefined;
+      }),
     };
-    service = new ReviewQueueService(mockPrisma, mockCls);
+
+    mockReviewerAssignmentService = {
+      syncOpenQueueItemsForEvent: jest.fn().mockResolvedValue({ created: 0, completed: 0 }),
+      releaseExpiredDirectAssignments: jest.fn().mockResolvedValue({ released: 0 }),
+      listEligibleReviewers: jest.fn().mockResolvedValue([]),
+    };
+
+    service = new ReviewQueueService(
+      mockPrisma,
+      mockCls,
+      mockReviewerAssignmentService,
+    );
   });
 
-  it('applies DB-level queue eligibility filter before pagination', async () => {
-    mockPrisma.workflow_steps.findMany.mockResolvedValue([{ id: 'step-1' }]);
-    mockPrisma.applications.findMany.mockResolvedValue([
-      buildApp({
-        id: 'app-matching',
-        updatedAt: '2026-03-09T10:00:00.000Z',
-      }),
-    ]);
-    mockPrisma.step_submission_versions.findMany.mockResolvedValue([]);
+  it('restricts non-organizer queue visibility to mine + shared', async () => {
+    await service.getQueue('event-1', { limit: 20 } as any);
 
-    const result = await service.getQueue('event-1', {
-      limit: 50,
-    } as any);
-
-    const findManyArg = mockPrisma.applications.findMany.mock.calls[0][0];
+    const findManyArg = mockPrisma.review_queue_items.findMany.mock.calls[0][0];
     expect(findManyArg.where).toMatchObject({
       event_id: 'event-1',
-      application_step_states: {
-        some: {
-          status: { in: [StepStatus.SUBMITTED, StepStatus.NEEDS_REVISION] },
-          step_id: { in: ['step-1'] },
-        },
-      },
-    });
-    expect(findManyArg.orderBy).toEqual([
-      { updated_at: 'desc' },
-      { id: 'desc' },
-    ]);
-    expect(result.data).toHaveLength(1);
-    expect(result.data[0].applicationId).toBe('app-matching');
-  });
-
-  it('uses composite cursor pagination without duplicates when timestamps are equal', async () => {
-    const sharedUpdatedAt = '2026-03-09T10:00:00.000Z';
-    const firstPageTop = buildApp({
-      id: 'app-b',
-      updatedAt: sharedUpdatedAt,
-    });
-    const firstPageNext = buildApp({
-      id: 'app-a',
-      updatedAt: sharedUpdatedAt,
-    });
-
-    mockPrisma.workflow_steps.findMany.mockResolvedValue([{ id: 'step-1' }]);
-    mockPrisma.step_submission_versions.findMany.mockResolvedValue([]);
-    mockPrisma.applications.findMany
-      .mockResolvedValueOnce([firstPageTop, firstPageNext])
-      .mockResolvedValueOnce([firstPageNext]);
-
-    const first = await service.getQueue('event-1', {
-      limit: 1,
-    } as any);
-    expect(first.meta.hasMore).toBe(true);
-    expect(typeof first.meta.nextCursor).toBe('string');
-    expect(first.data).toHaveLength(1);
-
-    const second = await service.getQueue('event-1', {
-      limit: 1,
-      cursor: first.meta.nextCursor!,
-    } as any);
-
-    const secondWhere = mockPrisma.applications.findMany.mock.calls[1][0].where;
-    expect(secondWhere.AND[0]).toEqual({
+      completed_at: null,
       OR: [
-        { updated_at: { lt: new Date(sharedUpdatedAt) } },
         {
-          updated_at: new Date(sharedUpdatedAt),
-          id: { lt: 'app-b' },
+          queue_mode: 'direct',
+          assigned_reviewer_id: 'reviewer-1',
+        },
+        {
+          queue_mode: 'shared',
         },
       ],
     });
-
-    const allQueueIds = [...first.data, ...second.data].map((item) => item.id);
-    expect(new Set(allQueueIds).size).toBe(allQueueIds.length);
-    expect(second.data).toHaveLength(1);
-    expect(second.data[0].applicationId).toBe('app-a');
   });
 
-  it('supports legacy id-only cursor by resolving anchor application first', async () => {
-    mockPrisma.workflow_steps.findMany.mockResolvedValue([{ id: 'step-1' }]);
-    mockPrisma.step_submission_versions.findMany.mockResolvedValue([]);
-    mockPrisma.applications.findFirst.mockResolvedValue({
-      id: 'legacy-app-id',
-      updated_at: new Date('2026-03-08T08:00:00.000Z'),
+  it('allows organizer to query full queue when assignedTo is omitted', async () => {
+    mockCls.get = jest.fn((key: string) => {
+      if (key === 'actorId') return 'organizer-1';
+      if (key === 'permissions') return [Permission.EVENT_UPDATE];
+      if (key === 'isGlobalAdmin') return false;
+      return undefined;
     });
-    mockPrisma.applications.findMany.mockResolvedValue([
-      buildApp({
-        id: 'app-older',
-        updatedAt: '2026-03-07T08:00:00.000Z',
-      }),
-    ]);
 
-    const result = await service.getQueue('event-1', {
-      limit: 10,
-      cursor: 'legacy-app-id',
+    await service.getQueue('event-1', { limit: 20 } as any);
+
+    const findManyArg = mockPrisma.review_queue_items.findMany.mock.calls[0][0];
+    expect(findManyArg.where.OR).toBeUndefined();
+  });
+
+  it('applies assignedTo=me filter against direct assignments', async () => {
+    await service.getQueue('event-1', {
+      limit: 20,
+      assignedTo: 'me',
     } as any);
 
-    expect(mockPrisma.applications.findFirst).toHaveBeenCalledWith({
-      where: { id: 'legacy-app-id', event_id: 'event-1' },
-      select: { id: true, updated_at: true },
+    const findManyArg = mockPrisma.review_queue_items.findMany.mock.calls[0][0];
+    expect(findManyArg.where).toMatchObject({
+      queue_mode: 'direct',
+      assigned_reviewer_id: 'reviewer-1',
     });
-    const whereArg = mockPrisma.applications.findMany.mock.calls[0][0].where;
-    expect(whereArg.AND[0]).toEqual({
-      OR: [
-        { updated_at: { lt: new Date('2026-03-08T08:00:00.000Z') } },
-        {
-          updated_at: new Date('2026-03-08T08:00:00.000Z'),
-          id: { lt: 'legacy-app-id' },
-        },
-      ],
-    });
+  });
+
+  it('maps queue response with assignment metadata', async () => {
+    const result = await service.getQueue('event-1', { limit: 20 } as any);
+
     expect(result.data).toHaveLength(1);
-    expect(result.data[0].applicationId).toBe('app-older');
+    expect(result.data[0]).toMatchObject({
+      id: 'queue-1',
+      queueItemId: 'queue-1',
+      queueMode: 'shared',
+      assignedReviewerId: null,
+      stepId: 'step-1',
+      submissionVersionId: 'version-1',
+    });
+    expect(result.meta.hasMore).toBe(false);
+    expect(result.meta.nextCursor).toBeNull();
   });
 
   it('ignores application-filter saved view payloads in review queue list', async () => {

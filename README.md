@@ -170,6 +170,13 @@ Queued announcement/notification emails use provider-agnostic retry logic with d
 | `MESSAGES_EMAIL_RATE_LIMIT_WINDOW_MS` | Total retry window for rate-limited recipients before suppression (default `86400000`, 24h). |
 | `MESSAGES_EMAIL_RATE_LIMIT_TAIL_SIZE` | Additional recipients attempted after first rate-limit hit in a run (default `5`). |
 
+#### Reviewer Assignment Tuning (Optional)
+
+| Variable | Description |
+|----------|-------------|
+| `REVIEW_ASSIGNMENT_PREVIEW_TTL_SECONDS` | Lifetime of preview snapshots before apply becomes invalid (default `300`). |
+| `REVIEW_ASSIGNMENT_DEFAULT_TTL_MINUTES` | Default direct-assignment queue TTL before items fall back to shared queue (default `120`). |
+
 ---
 
 ## 🏗️ Architecture Explained

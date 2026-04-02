@@ -337,6 +337,7 @@ export default function ApplicationsListPage() {
   const canDeleteApplications = hasPermission(Permission.EVENT_APPLICATION_DELETE);
   const canManageTags = hasPermission(Permission.EVENT_APPLICATION_TAGS_MANAGE);
   const canAssignReviewers = hasPermission(Permission.EVENT_APPLICATION_LIST);
+  const canManageReviewerAssignment = hasPermission(Permission.EVENT_UPDATE);
   const canDraftDecisions = hasPermission(Permission.EVENT_DECISION_DRAFT);
   const canSendMessages = hasPermission(Permission.EVENT_MESSAGES_SEND);
   const canIssueCredentials = hasPermission(Permission.EVENT_UPDATE);
@@ -396,13 +397,11 @@ export default function ApplicationsListPage() {
   const [deleteTarget, setDeleteTarget] = useState<Application | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showBulkTags, setShowBulkTags] = useState(false);
-  const [showBulkAssign, setShowBulkAssign] = useState(false);
   const [showBulkMessage, setShowBulkMessage] = useState(false);
   const [showBulkDecision, setShowBulkDecision] = useState(false);
   const [showTemplateManager, setShowTemplateManager] = useState(false);
   const [bulkAddTags, setBulkAddTags] = useState("");
   const [bulkRemoveTags, setBulkRemoveTags] = useState("");
-  const [bulkReviewerId, setBulkReviewerId] = useState("__unassigned__");
   const [bulkMessageSubject, setBulkMessageSubject] = useState("");
   const [bulkMessageBody, setBulkMessageBody] = useState("");
   const [bulkMessageSendEmail, setBulkMessageSendEmail] = useState(false);
@@ -1834,28 +1833,6 @@ export default function ApplicationsListPage() {
     }
   }
 
-  async function applyBulkReviewer() {
-    if (!canAssignReviewers || selectedApplicationIds.length === 0) return;
-    setIsApplyingBulk(true);
-    try {
-      await apiClient(`/events/${eventId}/applications/bulk/assign-reviewer`, {
-        method: "POST",
-        body: {
-          applicationIds: selectedApplicationIds,
-          reviewerId: bulkReviewerId === "__unassigned__" ? null : bulkReviewerId,
-        },
-        csrfToken: csrfToken ?? undefined,
-      });
-      await refreshApplications();
-      toast.success("Bulk reviewer assignment updated");
-      setShowBulkAssign(false);
-    } catch {
-      /* handled */
-    } finally {
-      setIsApplyingBulk(false);
-    }
-  }
-
   async function applyBulkDecisionDraft() {
     if (!canDraftDecisions || selectedApplicationIds.length === 0) return;
     setIsApplyingBulk(true);
@@ -2723,11 +2700,11 @@ export default function ApplicationsListPage() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => setShowBulkAssign(true)}
-              disabled={!canAssignReviewers}
+              onClick={() => router.push(`${basePath}/reviewer-assignment`)}
+              disabled={!canManageReviewerAssignment}
             >
               <UserCheck className="mr-1.5 h-3.5 w-3.5" />
-              Assign reviewer
+              Reviewer assignment
             </Button>
             <Button
               size="sm"
@@ -2932,41 +2909,6 @@ export default function ApplicationsListPage() {
               Cancel
             </Button>
             <Button onClick={applyBulkTags} disabled={isApplyingBulk}>
-              {isApplyingBulk ? "Applying..." : "Apply"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showBulkAssign} onOpenChange={setShowBulkAssign}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Bulk assign reviewer</DialogTitle>
-            <DialogDescription>
-              Assign or clear reviewer for {selectedCount} selected applications.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label>Reviewer</Label>
-            <Select value={bulkReviewerId} onValueChange={setBulkReviewerId}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__unassigned__">Unassigned</SelectItem>
-                {reviewers.map((reviewer) => (
-                  <SelectItem key={reviewer.userId} value={reviewer.userId}>
-                    {reviewer.fullName ?? reviewer.email} ({reviewer.email})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowBulkAssign(false)}>
-              Cancel
-            </Button>
-            <Button onClick={applyBulkReviewer} disabled={isApplyingBulk}>
               {isApplyingBulk ? "Applying..." : "Apply"}
             </Button>
           </DialogFooter>

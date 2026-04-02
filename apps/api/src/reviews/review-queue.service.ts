@@ -13,13 +13,16 @@ import {
   ReviewQueueSavedView,
   ReviewQueueSavedViewFilterDto,
   UpdateReviewQueueSavedViewDto,
+  Permission,
 } from '@event-platform/shared';
+import { ReviewerAssignmentService } from './reviewer-assignment.service';
 
 @Injectable()
 export class ReviewQueueService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cls: ClsService,
+    private readonly reviewerAssignmentService: ReviewerAssignmentService,
   ) {}
 
   private encodeQueueCursor(value: { updatedAt: Date; id: string }): string {
@@ -64,7 +67,11 @@ export class ReviewQueueService {
     filter: ReviewQueueFilterDto,
   ): Promise<PaginatedResponse<ReviewQueueItem>> {
     const { cursor, limit, stepId, assignedTo, status, tags } = filter;
-    const reviewerId = this.cls.get('actorId');
+    const reviewerId = this.cls.get('actorId') as string;
+    const permissions = (this.cls.get('permissions') ?? []) as string[];
+    const canViewAll =
+      Boolean(this.cls.get('isGlobalAdmin')) ||
+      permissions.includes(Permission.EVENT_UPDATE);
 
     const reviewableSteps = await this.prisma.workflow_steps.findMany({
       where: {
@@ -85,33 +92,40 @@ export class ReviewQueueService {
       };
     }
 
-    // Build step state filter based on status
-    let stepStateStatus: string[] = [];
-    if (status === 'pending') {
-      stepStateStatus = [StepStatus.SUBMITTED];
-    } else if (status === 'needs_info') {
-      stepStateStatus = [StepStatus.NEEDS_REVISION];
-    } else if (status === 'resubmitted') {
-      stepStateStatus = [StepStatus.SUBMITTED]; // Will filter by revision_cycle > 0
-    } else {
-      stepStateStatus = [StepStatus.SUBMITTED, StepStatus.NEEDS_REVISION];
-    }
+    await this.reviewerAssignmentService.syncOpenQueueItemsForEvent(eventId, {
+      stepIds: reviewableStepIds,
+    });
+    await this.reviewerAssignmentService.releaseExpiredDirectAssignments(eventId);
 
-    const stepStateWhere: any = {
-      status: { in: stepStateStatus },
+    const queueWhere: any = {
+      event_id: eventId,
+      completed_at: null,
       step_id: { in: reviewableStepIds },
-      ...(status === 'resubmitted' ? { revision_cycle_count: { gt: 0 } } : {}),
+      ...(tags && tags.length > 0 ? { applications: { tags: { hasSome: tags } } } : {}),
     };
 
-    // Build application filter
-    const appWhere: any = { event_id: eventId };
-    appWhere.application_step_states = { some: stepStateWhere };
+    if (assignedTo === 'me') {
+      queueWhere.queue_mode = 'direct';
+      queueWhere.assigned_reviewer_id = reviewerId;
+    } else if (assignedTo === 'unassigned') {
+      queueWhere.queue_mode = 'shared';
+    } else if (!canViewAll) {
+      queueWhere.OR = [
+        {
+          queue_mode: 'direct',
+          assigned_reviewer_id: reviewerId,
+        },
+        {
+          queue_mode: 'shared',
+        },
+      ];
+    }
 
     if (cursor) {
       const parsedCursor = this.decodeQueueCursor(cursor);
       if (parsedCursor) {
-        appWhere.AND = [
-          ...(appWhere.AND ?? []),
+        queueWhere.AND = [
+          ...(queueWhere.AND ?? []),
           {
             OR: [
               { updated_at: { lt: parsedCursor.updatedAt } },
@@ -122,116 +136,77 @@ export class ReviewQueueService {
             ],
           },
         ];
-      } else {
-        // Backward compatibility for legacy id-only cursors.
-        const legacyAnchor = await this.prisma.applications.findFirst({
-          where: { id: cursor, event_id: eventId },
-          select: { id: true, updated_at: true },
-        });
-        if (legacyAnchor) {
-          appWhere.AND = [
-            ...(appWhere.AND ?? []),
-            {
-              OR: [
-                { updated_at: { lt: legacyAnchor.updated_at } },
-                {
-                  updated_at: legacyAnchor.updated_at,
-                  id: { lt: legacyAnchor.id },
-                },
-              ],
-            },
-          ];
-        } else {
-          appWhere.id = { lt: cursor };
-        }
       }
     }
 
-    if (assignedTo === 'me') {
-      appWhere.assigned_reviewer_id = reviewerId;
-    } else if (assignedTo === 'unassigned') {
-      appWhere.assigned_reviewer_id = null;
-    }
-    if (tags && tags.length > 0) {
-      appWhere.tags = { hasSome: tags };
-    }
-
-    // Query applications with step states
-    const applications = await this.prisma.applications.findMany({
-      where: appWhere,
+    const queueItems = await this.prisma.review_queue_items.findMany({
+      where: queueWhere,
       orderBy: [{ updated_at: 'desc' }, { id: 'desc' }],
-      take: limit + 1,
+      take: limit * 3 + 1,
       select: {
         id: true,
         updated_at: true,
+        queue_mode: true,
+        assignment_expires_at: true,
         assigned_reviewer_id: true,
-        tags: true,
-        users_applications_applicant_user_idTousers: {
+        application_id: true,
+        step_id: true,
+        submission_version_id: true,
+        applications: {
           select: {
-            email: true,
-            applicant_profiles: { select: { full_name: true } },
-          },
-        },
-        application_step_states: {
-          where: stepStateWhere,
-          select: {
-            step_id: true,
-            status: true,
-            latest_submission_version_id: true,
-            last_activity_at: true,
-            revision_cycle_count: true,
-            workflow_steps: {
-              select: { id: true, title: true, step_index: true },
+            id: true,
+            tags: true,
+            users_applications_applicant_user_idTousers: {
+              select: {
+                email: true,
+                applicant_profiles: { select: { full_name: true } },
+              },
+            },
+            application_step_states: {
+              where: { step_id: { in: reviewableStepIds } },
+              select: {
+                step_id: true,
+                status: true,
+                latest_submission_version_id: true,
+                last_activity_at: true,
+                revision_cycle_count: true,
+              },
+            },
+            needs_info_requests: {
+              where: { status: NeedsInfoStatus.OPEN },
+              select: { step_id: true },
             },
           },
         },
-        needs_info_requests: {
-          where: { status: NeedsInfoStatus.OPEN },
-          select: { step_id: true },
+        workflow_steps: {
+          select: {
+            id: true,
+            title: true,
+            step_index: true,
+          },
+        },
+        step_submission_versions: {
+          select: {
+            id: true,
+            form_version_id: true,
+            answers_snapshot: true,
+            version_number: true,
+            submitted_at: true,
+          },
         },
       },
     });
 
-    const hasMore = applications.length > limit;
-    const data = hasMore ? applications.slice(0, limit) : applications;
-
-    const queueStepStates = data.flatMap((app) => app.application_step_states);
-    const submissionVersionIds = Array.from(
-      new Set(
-        queueStepStates
-          .map((stepState) => stepState.latest_submission_version_id)
-          .filter(
-            (id): id is string => typeof id === 'string' && id.length > 0,
-          ),
-      ),
-    );
-
-    const submissionVersions =
-      submissionVersionIds.length === 0
-        ? []
-        : await this.prisma.step_submission_versions.findMany({
-            where: { id: { in: submissionVersionIds } },
-            select: {
-              id: true,
-              form_version_id: true,
-              answers_snapshot: true,
-              version_number: true,
-              submitted_at: true,
-            },
-          });
-    const submissionVersionById = new Map(
-      submissionVersions.map((version) => [version.id, version]),
-    );
-
     const formVersionIds = Array.from(
       new Set(
-        submissionVersions
-          .map((version) => version.form_version_id)
+        queueItems
+          .map((item) => item.step_submission_versions.form_version_id)
           .filter(
             (id): id is string => typeof id === 'string' && id.length > 0,
           ),
       ),
     );
+
     const formVersions =
       formVersionIds.length === 0
         ? []
@@ -250,62 +225,85 @@ export class ReviewQueueService {
       );
     }
 
-    // Transform to queue items using the preloaded submission/form maps.
-    const items: any[] = [];
-    for (const app of data) {
-      const user = app.users_applications_applicant_user_idTousers;
+    const now = Date.now();
+    const filtered: Array<ReviewQueueItem & { __cursorUpdatedAt: Date }> = [];
 
-      for (const stepState of app.application_step_states) {
-        const submissionVersion = stepState.latest_submission_version_id
-          ? (submissionVersionById.get(
-              stepState.latest_submission_version_id,
-            ) ?? null)
-          : null;
-        const formDefinition =
-          (submissionVersion?.form_version_id
-            ? formDefinitionByVersionId.get(submissionVersion.form_version_id)
-            : null) ?? null;
+    for (const item of queueItems) {
+      const app = item.applications;
+      const stepState = app.application_step_states.find(
+        (entry) => entry.step_id === item.step_id,
+      );
+      if (!stepState) continue;
 
-        items.push({
-          id: `${app.id}:${stepState.step_id}`,
-          applicationId: app.id,
-          applicantEmail: user?.email || '',
-          applicantName: user?.applicant_profiles?.full_name || null,
-          stepId: stepState.step_id,
-          stepTitle: stepState.workflow_steps?.title || 'Unknown',
-          stepIndex: stepState.workflow_steps?.step_index ?? 0,
-          status: stepState.status as StepStatus,
-          answers:
-            (submissionVersion?.answers_snapshot as Record<string, unknown>) ||
-            {},
-          formDefinition,
-          submissionVersionId:
-            submissionVersion?.id ||
-            stepState.latest_submission_version_id ||
-            '',
-          submissionVersionNumber: submissionVersion?.version_number || 0,
-          submittedAt:
-            submissionVersion?.submitted_at ||
-            stepState.last_activity_at ||
-            new Date(),
-          assignedReviewerId: app.assigned_reviewer_id,
-          tags: app.tags ?? [],
-          hasOpenNeedsInfo: app.needs_info_requests.some(
-            (ni) => ni.step_id === stepState.step_id,
-          ),
-          isResubmission: stepState.revision_cycle_count > 0,
-        });
+      if (status === 'pending' && stepState.revision_cycle_count > 0) {
+        continue;
       }
+      if (status === 'resubmitted' && stepState.revision_cycle_count <= 0) {
+        continue;
+      }
+      if (
+        status === 'needs_info' &&
+        !app.needs_info_requests.some((entry) => entry.step_id === item.step_id)
+      ) {
+        continue;
+      }
+
+      const submissionVersion = item.step_submission_versions;
+      const formDefinition =
+        (submissionVersion.form_version_id
+          ? formDefinitionByVersionId.get(submissionVersion.form_version_id)
+          : null) ?? null;
+
+      filtered.push({
+        id: item.id,
+        queueItemId: item.id,
+        applicationId: app.id,
+        applicantEmail:
+          app.users_applications_applicant_user_idTousers?.email ?? '',
+        applicantName:
+          app.users_applications_applicant_user_idTousers?.applicant_profiles
+            ?.full_name ?? null,
+        stepId: item.step_id,
+        stepTitle: item.workflow_steps?.title || 'Unknown',
+        stepIndex: item.workflow_steps?.step_index ?? 0,
+        status: stepState.status as StepStatus,
+        answers:
+          (submissionVersion.answers_snapshot as Record<string, unknown>) ?? {},
+        formDefinition,
+        submissionVersionId: submissionVersion.id,
+        submissionVersionNumber: submissionVersion.version_number,
+        submittedAt:
+          submissionVersion.submitted_at ??
+          stepState.last_activity_at ??
+          item.updated_at,
+        assignedReviewerId: item.assigned_reviewer_id,
+        queueMode: item.queue_mode === 'direct' ? 'direct' : 'shared',
+        assignmentExpiresAt: item.assignment_expires_at,
+        isOverdue:
+          item.queue_mode === 'direct' &&
+          !!item.assignment_expires_at &&
+          item.assignment_expires_at.getTime() < now,
+        tags: app.tags ?? [],
+        hasOpenNeedsInfo: app.needs_info_requests.some(
+          (ni) => ni.step_id === item.step_id,
+        ),
+        isResubmission: stepState.revision_cycle_count > 0,
+        __cursorUpdatedAt: item.updated_at,
+      });
     }
 
+    const hasMore = filtered.length > limit;
+    const visible = hasMore ? filtered.slice(0, limit) : filtered;
+    const lastVisible = visible[visible.length - 1];
+
     return {
-      data: items as ReviewQueueItem[],
+      data: visible as ReviewQueueItem[],
       meta: {
         nextCursor:
-          hasMore && data.length > 0
+          hasMore && lastVisible
             ? this.encodeQueueCursor({
-                updatedAt: data[data.length - 1].updated_at,
-                id: data[data.length - 1].id,
+                updatedAt: lastVisible.__cursorUpdatedAt,
+                id: lastVisible.id ?? '',
               })
             : null,
         hasMore,
@@ -317,6 +315,9 @@ export class ReviewQueueService {
    * Get queue stats by step
    */
   async getStats(eventId: string): Promise<ReviewQueueStats> {
+    await this.reviewerAssignmentService.syncOpenQueueItemsForEvent(eventId);
+    await this.reviewerAssignmentService.releaseExpiredDirectAssignments(eventId);
+
     // Get all workflow steps that require review
     const steps = await this.prisma.workflow_steps.findMany({
       where: { event_id: eventId, review_required: true },
@@ -616,57 +617,6 @@ export class ReviewQueueService {
   async listAvailableReviewers(eventId: string): Promise<
     Array<{ userId: string; email: string; fullName: string | null; roles: string[] }>
   > {
-    const now = new Date();
-    const assignments = await this.prisma.event_role_assignments.findMany({
-      where: {
-        event_id: eventId,
-        role: { in: ['reviewer', 'organizer'] },
-        AND: [
-          { OR: [{ access_start_at: null }, { access_start_at: { lte: now } }] },
-          { OR: [{ access_end_at: null }, { access_end_at: { gte: now } }] },
-        ],
-      },
-      include: {
-        users: {
-          select: {
-            id: true,
-            email: true,
-            applicant_profiles: { select: { full_name: true } },
-          },
-        },
-      },
-      orderBy: { created_at: 'desc' },
-    });
-
-    const byUserId = new Map<
-      string,
-      { userId: string; email: string; fullName: string | null; roles: Set<string> }
-    >();
-    for (const assignment of assignments) {
-      const user = assignment.users;
-      if (!user?.id || !user.email) continue;
-      const existing = byUserId.get(user.id);
-      if (existing) {
-        existing.roles.add(String(assignment.role).toLowerCase());
-        continue;
-      }
-      byUserId.set(user.id, {
-        userId: user.id,
-        email: user.email,
-        fullName: user.applicant_profiles?.full_name ?? null,
-        roles: new Set([String(assignment.role).toLowerCase()]),
-      });
-    }
-
-    return Array.from(byUserId.values())
-      .map((entry) => ({
-        userId: entry.userId,
-        email: entry.email,
-        fullName: entry.fullName,
-        roles: Array.from(entry.roles).sort((a, b) => a.localeCompare(b)),
-      }))
-      .sort((a, b) =>
-        (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
-      );
+    return await this.reviewerAssignmentService.listEligibleReviewers(eventId);
   }
 }

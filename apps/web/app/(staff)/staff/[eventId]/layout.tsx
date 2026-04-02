@@ -15,6 +15,7 @@ import {
   FileEdit,
   Globe,
   Settings,
+  Shuffle,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
@@ -100,6 +101,12 @@ export default function StaffLayout({
           href: `${base}/reviews`,
           icon: ClipboardCheck,
           visible: hasPermission("event.step.review"),
+        },
+        {
+          label: "Reviewer Assignment",
+          href: `${base}/reviewer-assignment`,
+          icon: Shuffle,
+          visible: hasPermission("event.update"),
         },
         {
           label: "Messages",
