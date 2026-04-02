@@ -165,7 +165,9 @@ describe("buildApplicationsQueryRequest", () => {
     const node = createAdvancedConditionNode("search_text", {
       stepId: STEP_ID,
     });
-    node.value = "ada";
+    if (node.type === "search_text") {
+      node.value = "ada";
+    }
     root.children.push(node);
     const request = buildApplicationsQueryRequest({
       limit: 20,
@@ -183,7 +185,9 @@ describe("buildApplicationsQueryRequest", () => {
     const root = createEmptyAdvancedFilterTree();
     const invalidStep = createAdvancedConditionNode("step_status");
     const validSearch = createAdvancedConditionNode("search_text");
-    validSearch.value = "ada";
+    if (validSearch.type === "search_text") {
+      validSearch.value = "ada";
+    }
     root.children.push(invalidStep);
     root.children.push(validSearch);
 
