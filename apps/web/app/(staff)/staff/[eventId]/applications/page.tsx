@@ -71,7 +71,7 @@ import {
   TableSkeleton,
   ConfirmDialog,
 } from "@/components/shared";
-import { apiClient } from "@/lib/api";
+import { ApiError, apiClient } from "@/lib/api";
 import {
   buildApplicationsQueryRequest,
   buildApplicationsQuerySignature,
@@ -431,6 +431,7 @@ export default function ApplicationsListPage() {
   const hasMoreApplicationsRef = useRef(false);
   const nextCursorRef = useRef<string | null>(null);
   const isLoadingMoreApplicationsRef = useRef(false);
+  const hasResetInvalidFilterStateRef = useRef(false);
   const applicationsQueryRef = useRef<ReturnType<typeof buildApplicationsQueryRequest>>(
     buildApplicationsQueryRequest({
       limit: APPLICATIONS_PAGE_SIZE,
@@ -615,12 +616,36 @@ export default function ApplicationsListPage() {
       nextCursorRef.current = nextCursorValue;
       setHasMoreApplications(hasMore);
       setNextCursor(nextCursorValue);
+      hasResetInvalidFilterStateRef.current = false;
       return { fetched: true };
-    } catch {
+    } catch (error) {
       if (requestVersion === applicationsRequestVersionRef.current) {
-        toast.error(
-          isAppend ? "Could not load more applications." : "Could not load applications."
-        );
+        if (
+          !isAppend &&
+          error instanceof ApiError &&
+          error.status === 400 &&
+          !hasResetInvalidFilterStateRef.current
+        ) {
+          hasResetInvalidFilterStateRef.current = true;
+          setSelectedViewId(NO_SAVED_VIEW_VALUE);
+          setFilterMode("quick");
+          setSearchInput("");
+          setDerivedStatusFilter([]);
+          setDecisionStatusFilter("all");
+          setStepFilterId("__any__");
+          setStepStatusFilter("all");
+          setReviewerFilterId("__any__");
+          setTagsFilterInput("");
+          setHasDraftProgressFilter(false);
+          setCompletionBucketFilter([]);
+          setNeedsRevisionOnlyFilter(false);
+          setAdvancedFilterTree(createEmptyAdvancedFilterTree());
+          toast.error("Invalid filters were reset. Reloading applications...");
+        } else {
+          toast.error(
+            isAppend ? "Could not load more applications." : "Could not load applications."
+          );
+        }
       }
       return { fetched: false };
     } finally {
