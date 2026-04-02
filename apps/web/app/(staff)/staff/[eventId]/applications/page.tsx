@@ -413,7 +413,7 @@ export default function ApplicationsListPage() {
   const [isPublishingDecisions, setIsPublishingDecisions] = useState(false);
   const [showBulkStepAction, setShowBulkStepAction] = useState(false);
   const [bulkStepId, setBulkStepId] = useState("");
-  const [bulkStepAction, setBulkStepAction] = useState<"UNLOCK" | "APPROVE" | "NEEDS_REVISION" | "LOCK">("UNLOCK");
+  const [bulkStepAction, setBulkStepAction] = useState<"UNLOCK" | "APPROVE" | "LOCK">("UNLOCK");
   const [workflowSteps, setWorkflowSteps] = useState<Array<{ id: string; title: string; stepIndex: number }>>([]);
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState("");
@@ -1669,12 +1669,12 @@ export default function ApplicationsListPage() {
   }, [loadApplications, pagination.pageIndex, pagination.pageSize]);
 
   useEffect(() => {
-    const allowedActions: Array<"UNLOCK" | "APPROVE" | "NEEDS_REVISION" | "LOCK"> = [];
+    const allowedActions: Array<"UNLOCK" | "APPROVE" | "LOCK"> = [];
     if (canStepOverride) {
       allowedActions.push("UNLOCK", "LOCK");
     }
     if (canStepReview) {
-      allowedActions.push("APPROVE", "NEEDS_REVISION");
+      allowedActions.push("APPROVE");
     }
     if (allowedActions.length === 0) return;
     if (!allowedActions.includes(bulkStepAction)) {
@@ -3235,9 +3235,6 @@ export default function ApplicationsListPage() {
                   )}
                   {canStepReview && (
                     <SelectItem value="APPROVE">Approve</SelectItem>
-                  )}
-                  {canStepReview && (
-                    <SelectItem value="NEEDS_REVISION">Request revision</SelectItem>
                   )}
                   {canStepOverride && (
                     <SelectItem value="LOCK">Lock</SelectItem>

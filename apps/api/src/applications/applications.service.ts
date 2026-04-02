@@ -2268,7 +2268,7 @@ export class ApplicationsService {
   }
 
   /**
-   * Bulk step action (unlock, approve, needs revision, reject, lock)
+   * Bulk step action (unlock, submitted, approve, reject, lock)
    */
   async bulkStepAction(
     eventId: string,
@@ -2308,6 +2308,39 @@ export class ApplicationsService {
           case 'UNLOCK':
             await this.stepStateService.manualUnlock(app.id, dto.stepId);
             break;
+          case 'SUBMITTED': {
+            const submittedAt = new Date();
+            const submittedResult = await this.prisma.application_step_states.updateMany(
+              {
+                where: {
+                  application_id: app.id,
+                  step_id: dto.stepId,
+                  latest_submission_version_id: { not: null },
+                },
+                data: {
+                  status: StepStatus.SUBMITTED,
+                  current_draft_id: null,
+                  last_activity_at: submittedAt,
+                },
+              },
+            );
+            if (submittedResult.count === 0) {
+              continue;
+            }
+            await this.stepStateService.recomputeAllStepStates(app.id);
+            await this.prisma.needs_info_requests.updateMany({
+              where: {
+                application_id: app.id,
+                step_id: dto.stepId,
+                status: 'OPEN',
+              },
+              data: {
+                status: 'RESOLVED',
+                resolved_at: submittedAt,
+              },
+            });
+            break;
+          }
           case 'APPROVE':
             await this.stepStateService.markApproved(app.id, dto.stepId);
             await this.prisma.needs_info_requests.updateMany({
@@ -2328,9 +2361,6 @@ export class ApplicationsService {
                 // Non-fatal in bulk mode.
               }
             }
-            break;
-          case 'NEEDS_REVISION':
-            await this.stepStateService.markNeedsRevision(app.id, dto.stepId);
             break;
           case 'REJECT':
             await this.stepStateService.markRejectedFinal(app.id, dto.stepId);

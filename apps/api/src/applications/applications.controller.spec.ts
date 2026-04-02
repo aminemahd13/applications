@@ -98,6 +98,21 @@ describe('ApplicationsController bulk step action permissions', () => {
     expect(applicationsService.bulkStepAction).not.toHaveBeenCalled();
   });
 
+  it('rejects SUBMITTED when actor only has unlock override permission', async () => {
+    const { controller, applicationsService } = createController([
+      'event.step.override.unlock',
+    ]);
+
+    await expect(
+      controller.bulkStepAction('event-1', {
+        applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
+        stepId: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
+        action: 'SUBMITTED',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(applicationsService.bulkStepAction).not.toHaveBeenCalled();
+  });
+
   it('allows LOCK when actor has unlock override permission', async () => {
     const { controller, applicationsService } = createController([
       'event.step.override.unlock',
@@ -108,6 +123,21 @@ describe('ApplicationsController bulk step action permissions', () => {
         applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
         stepId: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
         action: 'LOCK',
+      }),
+    ).resolves.toEqual({ data: { updated: 1, skipped: 0 } });
+    expect(applicationsService.bulkStepAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows SUBMITTED when actor has review permission', async () => {
+    const { controller, applicationsService } = createController([
+      'event.step.review',
+    ]);
+
+    await expect(
+      controller.bulkStepAction('event-1', {
+        applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
+        stepId: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
+        action: 'SUBMITTED',
       }),
     ).resolves.toEqual({ data: { updated: 1, skipped: 0 } });
     expect(applicationsService.bulkStepAction).toHaveBeenCalledTimes(1);

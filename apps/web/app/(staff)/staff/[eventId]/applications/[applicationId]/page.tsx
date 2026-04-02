@@ -221,8 +221,8 @@ interface StepFieldDefinition {
 
 type StepStatusAction =
   | "UNLOCK"
+  | "SUBMITTED"
   | "APPROVE"
-  | "NEEDS_REVISION"
   | "REJECT"
   | "LOCK";
 
@@ -866,6 +866,9 @@ export default function ApplicationDetailPage() {
     stepId: string;
     action: StepStatusAction;
   } | null>(null);
+  const [stepActionSelections, setStepActionSelections] = useState<
+    Record<string, StepStatusAction>
+  >({});
 
   // Audit state
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
@@ -1400,7 +1403,9 @@ export default function ApplicationDetailPage() {
     if (!app) return;
 
     const isReviewAction =
-      action === "APPROVE" || action === "NEEDS_REVISION" || action === "REJECT";
+      action === "SUBMITTED" ||
+      action === "APPROVE" ||
+      action === "REJECT";
     if (isReviewAction && !canReviewSteps) {
       toast.error("You do not have permission to review step statuses.");
       return;
@@ -1432,8 +1437,8 @@ export default function ApplicationDetailPage() {
 
       const actionMessage: Record<StepStatusAction, string> = {
         UNLOCK: "Step unlocked",
+        SUBMITTED: "Step marked as submitted",
         APPROVE: "Step approved",
-        NEEDS_REVISION: "Step moved to needs revision",
         REJECT: "Step rejected",
         LOCK: "Step locked",
       };
@@ -1443,6 +1448,12 @@ export default function ApplicationDetailPage() {
       /* handled */
     } finally {
       setStepActionInFlight(null);
+      setStepActionSelections((prev) => {
+        if (!(stepId in prev)) return prev;
+        const next = { ...prev };
+        delete next[stepId];
+        return next;
+      });
     }
   }
 
@@ -2159,77 +2170,59 @@ export default function ApplicationDetailPage() {
                           ? "Ready for review actions"
                           : "No submission yet"}
                       </span>
-                      <div className="flex flex-wrap gap-2">
-                        {canReviewSteps && (
-                          <>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => applyStepStatusAction(step.id, "APPROVE")}
-                              disabled={
-                                !step.latestSubmissionVersionId || stepActionInFlight !== null
-                              }
-                            >
-                              {stepActionInFlight?.stepId === step.id &&
-                              stepActionInFlight.action === "APPROVE"
-                                ? "Approving..."
-                                : "Approve"}
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() =>
-                                applyStepStatusAction(step.id, "NEEDS_REVISION")
-                              }
-                              disabled={
-                                !step.latestSubmissionVersionId || stepActionInFlight !== null
-                              }
-                            >
-                              {stepActionInFlight?.stepId === step.id &&
-                              stepActionInFlight.action === "NEEDS_REVISION"
-                                ? "Applying..."
-                                : "Needs revision"}
-                            </Button>
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              onClick={() => applyStepStatusAction(step.id, "REJECT")}
-                              disabled={
-                                !step.latestSubmissionVersionId || stepActionInFlight !== null
-                              }
-                            >
-                              {stepActionInFlight?.stepId === step.id &&
-                              stepActionInFlight.action === "REJECT"
-                                ? "Rejecting..."
-                                : "Reject"}
-                            </Button>
-                          </>
-                        )}
-                        {canStepOverride && (
-                          <>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => applyStepStatusAction(step.id, "UNLOCK")}
-                              disabled={stepActionInFlight !== null}
-                            >
-                              {stepActionInFlight?.stepId === step.id &&
-                              stepActionInFlight.action === "UNLOCK"
-                                ? "Unlocking..."
-                                : "Unlock"}
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => applyStepStatusAction(step.id, "LOCK")}
-                              disabled={stepActionInFlight !== null}
-                            >
-                              {stepActionInFlight?.stepId === step.id &&
-                              stepActionInFlight.action === "LOCK"
-                                ? "Locking..."
-                                : "Lock"}
-                            </Button>
-                          </>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(canReviewSteps || canStepOverride) && (
+                          <Select
+                            value={stepActionSelections[step.id]}
+                            onValueChange={(value) => {
+                              const action = value as StepStatusAction;
+                              setStepActionSelections((prev) => ({
+                                ...prev,
+                                [step.id]: action,
+                              }));
+                              void applyStepStatusAction(step.id, action);
+                            }}
+                            disabled={
+                              stepActionInFlight !== null ||
+                              (!canStepOverride && !step.latestSubmissionVersionId)
+                            }
+                          >
+                            <SelectTrigger className="h-8 w-[190px]">
+                              <SelectValue placeholder="Step action" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {canReviewSteps && (
+                                <SelectItem
+                                  value="SUBMITTED"
+                                  disabled={!step.latestSubmissionVersionId}
+                                >
+                                  Submitted
+                                </SelectItem>
+                              )}
+                              {canReviewSteps && (
+                                <SelectItem
+                                  value="APPROVE"
+                                  disabled={!step.latestSubmissionVersionId}
+                                >
+                                  Approve
+                                </SelectItem>
+                              )}
+                              {canReviewSteps && (
+                                <SelectItem
+                                  value="REJECT"
+                                  disabled={!step.latestSubmissionVersionId}
+                                >
+                                  Reject
+                                </SelectItem>
+                              )}
+                              {canStepOverride && (
+                                <SelectItem value="UNLOCK">Unlock</SelectItem>
+                              )}
+                              {canStepOverride && (
+                                <SelectItem value="LOCK">Lock</SelectItem>
+                              )}
+                            </SelectContent>
+                          </Select>
                         )}
                         <Button
                           variant="outline"
@@ -2242,7 +2235,7 @@ export default function ApplicationDetailPage() {
                           }
                         >
                           <AlertTriangle className="mr-1.5 h-3.5 w-3.5" />
-                          Request info
+                          Needs revision
                         </Button>
                       </div>
                     </CardFooter>
@@ -2837,7 +2830,7 @@ export default function ApplicationDetailPage() {
       <Dialog open={showRequestInfo} onOpenChange={setShowRequestInfo}>
         <DialogContent className="w-[calc(100vw-2rem)] max-w-lg overflow-x-hidden">
           <DialogHeader>
-            <DialogTitle>Request more information</DialogTitle>
+            <DialogTitle>Needs revision request</DialogTitle>
             <DialogDescription>
               Select the fields that need revision and add a message for the applicant.
             </DialogDescription>
@@ -2982,7 +2975,7 @@ export default function ApplicationDetailPage() {
               {isSubmittingRequest && (
                 <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
               )}
-              Request info
+              Needs revision
             </Button>
           </DialogFooter>
         </DialogContent>
