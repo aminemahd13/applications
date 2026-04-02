@@ -524,6 +524,7 @@ export default function ApplicationsListPage() {
         {
           method: "POST",
           body,
+          csrfToken: csrfToken ?? undefined,
         }
       );
 
@@ -551,7 +552,7 @@ export default function ApplicationsListPage() {
         nextCursor: pageNextCursor,
       };
     },
-    [eventId]
+    [csrfToken, eventId]
   );
 
   const loadApplications = useCallback(async (mode: "replace" | "append" = "replace", options?: {
@@ -796,11 +797,12 @@ export default function ApplicationsListPage() {
   }, [advancedFilterTree, filterMode, pathname, router, searchParams, selectedViewId]);
 
   useEffect(() => {
+    if (!csrfToken) return;
     const timeout = window.setTimeout(() => {
       void refreshApplications({ resetPageIndex: true, clearSelection: true });
     }, 350);
     return () => window.clearTimeout(timeout);
-  }, [filterSignature, refreshApplications]);
+  }, [csrfToken, filterSignature, refreshApplications]);
 
   const filteredData = applications;
 
