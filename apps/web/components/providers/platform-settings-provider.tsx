@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext } from "react";
 import { usePathname } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 
@@ -41,13 +41,8 @@ export function PlatformSettingsProvider({
   children,
   initialSettings,
 }: PlatformSettingsProviderProps) {
-  const [settings] = useState<PublicPlatformSettings>(
-    initialSettings || DEFAULT_SETTINGS
-  );
+  const settings = initialSettings ?? DEFAULT_SETTINGS;
   const pathname = usePathname();
-
-  // If we didn't get initial settings (e.g. error fetching), use defaults
-  // Realistically we might want to refetch client-side but for now server-provided is best
 
   const isMaintenanceMode = settings.maintenanceMode;
   const isExcludedRoute =
