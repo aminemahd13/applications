@@ -1477,3 +1477,93 @@ describe('ApplicationsService saved view authorization', () => {
     });
   });
 });
+
+describe('ApplicationsService resolveByEmails', () => {
+  function createService() {
+    const mockPrisma = {
+      applications: {
+        findMany: jest.fn(),
+      },
+    };
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+    return { service, mockPrisma };
+  }
+
+  it('normalizes, dedupes, and returns unmatched emails', async () => {
+    const { service, mockPrisma } = createService();
+    mockPrisma.applications.findMany.mockResolvedValue([
+      {
+        id: '37a2125b-fdd0-42e2-a273-89d2f8010e4c',
+        applicant_user_id: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
+        users_applications_applicant_user_idTousers: {
+          email: 'Target@Example.com',
+        },
+      },
+    ]);
+
+    const result = await service.resolveByEmails('event-1', [
+      'TARGET@example.com',
+      'target@example.com',
+      'missing@example.com',
+    ]);
+
+    expect(mockPrisma.applications.findMany).toHaveBeenCalledWith({
+      where: {
+        event_id: 'event-1',
+        users_applications_applicant_user_idTousers: {
+          is: {
+            email: { in: ['target@example.com', 'missing@example.com'] },
+          },
+        },
+      },
+      select: {
+        id: true,
+        applicant_user_id: true,
+        users_applications_applicant_user_idTousers: {
+          select: { email: true },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
+      userIds: ['d8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a'],
+      matchedEmails: ['target@example.com'],
+      unmatchedEmails: ['missing@example.com'],
+    });
+  });
+
+  it('dedupes applicationIds, userIds, and matchedEmails', async () => {
+    const { service, mockPrisma } = createService();
+    mockPrisma.applications.findMany.mockResolvedValue([
+      {
+        id: 'app-1',
+        applicant_user_id: 'user-1',
+        users_applications_applicant_user_idTousers: { email: 'A@example.com' },
+      },
+      {
+        id: 'app-1',
+        applicant_user_id: 'user-1',
+        users_applications_applicant_user_idTousers: { email: 'a@example.com' },
+      },
+      {
+        id: 'app-2',
+        applicant_user_id: 'user-1',
+        users_applications_applicant_user_idTousers: { email: 'a@example.com' },
+      },
+    ]);
+
+    const result = await service.resolveByEmails('event-1', ['a@example.com']);
+
+    expect(result).toEqual({
+      applicationIds: ['app-1', 'app-2'],
+      userIds: ['user-1'],
+      matchedEmails: ['a@example.com'],
+      unmatchedEmails: [],
+    });
+  });
+});

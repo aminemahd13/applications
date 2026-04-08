@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Send,
@@ -53,8 +53,10 @@ import {
 import { useAuth, usePermissions } from "@/lib/auth-context";
 import { Permission } from "@event-platform/shared";
 import type { RecipientFilter } from "@event-platform/shared";
+import type { ResolveApplicationsByEmailsResult } from "@event-platform/shared";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
+import { MAX_PASTED_EMAILS, parsePastedEmails } from "@/lib/pasted-emails";
 
 interface SentMessage {
   id: string;
@@ -182,12 +184,16 @@ export default function MessagesPage() {
   const [composeType, setComposeType] = useState<"ANNOUNCEMENT" | "DIRECT">("ANNOUNCEMENT");
   const [composeSubject, setComposeSubject] = useState("");
   const [composeBody, setComposeBody] = useState("");
-  const [composeRecipient, setComposeRecipient] = useState("");
+  const [composeDirectRecipientsText, setComposeDirectRecipientsText] = useState("");
   const [composeSendEmail, setComposeSendEmail] = useState(false);
   const [recipientFilter, setRecipientFilter] = useState<RecipientFilter>({});
   const [previewCount, setPreviewCount] = useState<number | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const parsedDirectRecipients = useMemo(
+    () => parsePastedEmails(composeDirectRecipientsText),
+    [composeDirectRecipientsText],
+  );
 
   const fetchMessages = useCallback(async (
     cursor?: string
@@ -319,11 +325,13 @@ export default function MessagesPage() {
       toast.error("Subject and body are required");
       return;
     }
-    if (composeType === "DIRECT" && !composeRecipient.trim()) {
-      toast.error("Recipient email is required");
+    if (composeType === "DIRECT" && parsedDirectRecipients.emails.length === 0) {
+      toast.error("Paste at least one valid recipient email.");
       return;
     }
+
     setIsSending(true);
+    let directResolution: ResolveApplicationsByEmailsResult | null = null;
     try {
       const payload: Record<string, unknown> = {
         title: composeSubject,
@@ -331,24 +339,73 @@ export default function MessagesPage() {
         bodyText: composeBody,
         sendEmail: composeSendEmail,
       };
-      if (composeType === "DIRECT" && composeRecipient) {
+
+      if (composeType === "DIRECT") {
+        const resolved = await apiClient<{ data?: ResolveApplicationsByEmailsResult }>(
+          `/events/${eventId}/applications/resolve-by-emails`,
+          {
+            method: "POST",
+            body: { emails: parsedDirectRecipients.emails },
+            csrfToken: csrfToken ?? undefined,
+          },
+        );
+        directResolution = resolved.data ?? {
+          applicationIds: [],
+          userIds: [],
+          matchedEmails: [],
+          unmatchedEmails: [],
+        };
+        if (directResolution.userIds.length === 0) {
+          toast.error("No event applicants matched the pasted emails.");
+          return;
+        }
+
+        payload.explicitUserIds = directResolution.userIds;
         payload.recipientFilter = {
-          emails: [composeRecipient.trim().toLowerCase()],
+          emails: directResolution.matchedEmails,
         };
       } else {
         // Use the full audience builder filter for announcements
         payload.recipientFilter = recipientFilter;
       }
+
       await apiClient(`/events/${eventId}/messages`, {
         method: "POST",
         body: payload,
         csrfToken: csrfToken ?? undefined,
       });
-      toast.success("Message sent!");
+
+      if (composeType === "DIRECT") {
+        const matchedCount = directResolution?.userIds.length ?? 0;
+        const unmatchedCount = directResolution?.unmatchedEmails.length ?? 0;
+        const invalidCount = parsedDirectRecipients.invalidTokens.length;
+        toast.success(`Message sent to ${matchedCount} matched recipient(s).`);
+        if (
+          unmatchedCount > 0 ||
+          invalidCount > 0 ||
+          parsedDirectRecipients.overLimit
+        ) {
+          const limitNote = parsedDirectRecipients.overLimit
+            ? `limit ${MAX_PASTED_EMAILS} reached`
+            : null;
+          toast.info(
+            [
+              `${unmatchedCount} unmatched`,
+              `${invalidCount} invalid`,
+              limitNote,
+            ]
+              .filter((part): part is string => Boolean(part))
+              .join(", "),
+          );
+        }
+      } else {
+        toast.success("Message sent!");
+      }
+
       setShowCompose(false);
       setComposeSubject("");
       setComposeBody("");
-      setComposeRecipient("");
+      setComposeDirectRecipientsText("");
       setRecipientFilter({});
       setComposeSendEmail(false);
       // Refresh
@@ -666,13 +723,24 @@ export default function MessagesPage() {
 
               {composeType === "DIRECT" && (
                 <div className="space-y-2">
-                  <Label className="text-sm">Recipient email</Label>
-                  <Input
-                    value={composeRecipient}
-                    onChange={(e) => setComposeRecipient(e.target.value)}
-                    placeholder="applicant@example.com"
-                    type="email"
+                  <Label className="text-sm">Recipient emails</Label>
+                  <Textarea
+                    value={composeDirectRecipientsText}
+                    onChange={(e) => setComposeDirectRecipientsText(e.target.value)}
+                    placeholder={"alice@example.com\nbob@example.com"}
+                    rows={6}
                   />
+                  <div className="rounded-md border border-border/60 p-3 text-xs space-y-1">
+                    <p>{parsedDirectRecipients.emails.length} valid unique email(s)</p>
+                    <p>{parsedDirectRecipients.duplicateEmails.length} duplicate email(s) ignored</p>
+                    <p>{parsedDirectRecipients.invalidTokens.length} invalid token(s)</p>
+                    {parsedDirectRecipients.overLimit && (
+                      <p className="text-destructive">
+                        Only the first {MAX_PASTED_EMAILS} valid unique emails are used (
+                        {parsedDirectRecipients.truncatedCount} ignored).
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
 

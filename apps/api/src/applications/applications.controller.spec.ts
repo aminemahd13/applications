@@ -486,3 +486,72 @@ describe('ApplicationsController advanced query and saved views', () => {
     );
   });
 });
+
+describe('ApplicationsController resolve-by-emails', () => {
+  function createController() {
+    const applicationsService = {
+      resolveByEmails: jest.fn().mockResolvedValue({
+        applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
+        userIds: ['d8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a'],
+        matchedEmails: ['target@example.com'],
+        unmatchedEmails: ['missing@example.com'],
+      }),
+    };
+    const controller = new ApplicationsController(
+      applicationsService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    return { controller, applicationsService };
+  }
+
+  it('forwards parsed payload to resolveByEmails service', async () => {
+    const { controller, applicationsService } = createController();
+
+    await expect(
+      controller.resolveByEmails('event-1', {
+        emails: ['Target@Example.com', 'missing@example.com'],
+      }),
+    ).resolves.toEqual({
+      data: {
+        applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
+        userIds: ['d8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a'],
+        matchedEmails: ['target@example.com'],
+        unmatchedEmails: ['missing@example.com'],
+      },
+    });
+
+    expect(applicationsService.resolveByEmails).toHaveBeenCalledWith('event-1', [
+      'Target@Example.com',
+      'missing@example.com',
+    ]);
+  });
+
+  it('rejects malformed email payload', async () => {
+    const { controller, applicationsService } = createController();
+
+    await expect(
+      controller.resolveByEmails('event-1', {
+        emails: ['not-an-email'],
+      }),
+    ).rejects.toBeInstanceOf(ZodError);
+    expect(applicationsService.resolveByEmails).not.toHaveBeenCalled();
+  });
+
+  it('rejects payloads longer than 2000 emails', async () => {
+    const { controller, applicationsService } = createController();
+    const tooManyEmails = Array.from(
+      { length: 2001 },
+      (_, index) => `user${index}@example.com`,
+    );
+
+    await expect(
+      controller.resolveByEmails('event-1', {
+        emails: tooManyEmails,
+      }),
+    ).rejects.toBeInstanceOf(ZodError);
+    expect(applicationsService.resolveByEmails).not.toHaveBeenCalled();
+  });
+});

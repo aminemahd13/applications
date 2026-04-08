@@ -460,6 +460,25 @@ export const BulkStepActionSchema = BulkApplicationIdsSchema.extend({
 
 export type BulkStepActionDto = z.infer<typeof BulkStepActionSchema>;
 
+export const ResolveApplicationsByEmailsSchema = z.object({
+    emails: z.array(z.string().trim().email()).min(1).max(2000),
+});
+
+export type ResolveApplicationsByEmailsDto = z.infer<
+    typeof ResolveApplicationsByEmailsSchema
+>;
+
+export const ResolveApplicationsByEmailsResultSchema = z.object({
+    applicationIds: z.array(z.string().uuid()),
+    userIds: z.array(z.string().uuid()),
+    matchedEmails: z.array(z.string().email()),
+    unmatchedEmails: z.array(z.string().email()),
+});
+
+export type ResolveApplicationsByEmailsResult = z.infer<
+    typeof ResolveApplicationsByEmailsResultSchema
+>;
+
 export const DecisionTemplateStatusSchema = z.enum([
     DecisionStatus.ACCEPTED,
     DecisionStatus.WAITLISTED,

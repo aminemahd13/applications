@@ -35,6 +35,7 @@ import {
   SubmitStepSchema,
   SetDecisionSchema,
   PublishDecisionsSchema,
+  ResolveApplicationsByEmailsSchema,
   UpdateApplicationSavedViewSchema,
 } from '@event-platform/shared';
 import { ClsService } from 'nestjs-cls';
@@ -89,6 +90,23 @@ export class ApplicationsController {
   ) {
     const dto = ApplicationsQueryRequestSchema.parse(body ?? {});
     return await this.applicationsService.query(eventId, dto);
+  }
+
+  /**
+   * Resolve event applications by pasted email list
+   */
+  @Post('resolve-by-emails')
+  @RequirePermission(Permission.EVENT_APPLICATION_LIST)
+  async resolveByEmails(
+    @Param('eventId') eventId: string,
+    @Body() body: unknown,
+  ) {
+    const dto = ResolveApplicationsByEmailsSchema.parse(body ?? {});
+    const result = await this.applicationsService.resolveByEmails(
+      eventId,
+      dto.emails,
+    );
+    return { data: result };
   }
 
   /**

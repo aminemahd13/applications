@@ -40,6 +40,7 @@ import {
   DecisionTemplateResponse,
   EmailDeliveryStatus,
   MessageType,
+  ResolveApplicationsByEmailsResult,
   StepStatus,
   StepModificationScope,
   UpdateDecisionTemplateDto,
@@ -154,6 +155,73 @@ export class ApplicationsService {
     request: ApplicationsQueryRequestDto,
   ): Promise<PaginatedResponse<ApplicationSummary>> {
     return this.executeApplicationsQuery(eventId, request);
+  }
+
+  async resolveByEmails(
+    eventId: string,
+    emails: string[],
+  ): Promise<ResolveApplicationsByEmailsResult> {
+    const normalizedEmails = Array.from(
+      new Set(
+        emails
+          .map((email) => email.trim().toLowerCase())
+          .filter((email) => email.length > 0),
+      ),
+    );
+
+    if (normalizedEmails.length === 0) {
+      return {
+        applicationIds: [],
+        userIds: [],
+        matchedEmails: [],
+        unmatchedEmails: [],
+      };
+    }
+
+    const matches = await this.prisma.applications.findMany({
+      where: {
+        event_id: eventId,
+        users_applications_applicant_user_idTousers: {
+          is: {
+            email: { in: normalizedEmails },
+          },
+        },
+      },
+      select: {
+        id: true,
+        applicant_user_id: true,
+        users_applications_applicant_user_idTousers: {
+          select: { email: true },
+        },
+      },
+    });
+
+    const applicationIds = Array.from(new Set(matches.map((entry) => entry.id)));
+    const userIds = Array.from(
+      new Set(matches.map((entry) => entry.applicant_user_id)),
+    );
+    const matchedEmails = Array.from(
+      new Set(
+        matches
+          .map((entry) =>
+            entry.users_applications_applicant_user_idTousers?.email
+              ?.trim()
+              .toLowerCase(),
+          )
+          .filter((email): email is string => Boolean(email)),
+      ),
+    );
+    const matchedSet = new Set(matchedEmails);
+    const unmatchedEmails = normalizedEmails.filter(
+      (email) => !matchedSet.has(email),
+    );
+
+    return {
+      applicationIds,
+      userIds,
+      matchedEmails,
+      unmatchedEmails,
+    };
   }
 
   private async executeApplicationsQuery(

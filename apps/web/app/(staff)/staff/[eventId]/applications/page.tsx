@@ -113,7 +113,12 @@ import {
   APPLICATION_EXPORT_CORE_COLUMNS,
   Permission,
   type ApplicationExportCoreColumn,
+  type ResolveApplicationsByEmailsResult,
 } from "@event-platform/shared";
+import {
+  MAX_PASTED_EMAILS,
+  parsePastedEmails,
+} from "@/lib/pasted-emails";
 
 const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 const APPLICATIONS_PAGE_SIZE = 100;
@@ -394,6 +399,11 @@ export default function ApplicationsListPage() {
   const [isDeletingView, setIsDeletingView] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Application | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [showPasteEmailsDialog, setShowPasteEmailsDialog] = useState(false);
+  const [pastedEmailsText, setPastedEmailsText] = useState("");
+  const [isResolvingEmails, setIsResolvingEmails] = useState(false);
+  const [pasteSelectionResult, setPasteSelectionResult] =
+    useState<ResolveApplicationsByEmailsResult | null>(null);
   const [showBulkTags, setShowBulkTags] = useState(false);
   const [showBulkMessage, setShowBulkMessage] = useState(false);
   const [showBulkDecision, setShowBulkDecision] = useState(false);
@@ -859,8 +869,12 @@ export default function ApplicationsListPage() {
 
   const selectedCount = selectedIds.length;
   const selectedApplicationIds = useMemo(
-    () => selectedIds.filter((id) => applications.some((app) => app.id === id)),
-    [applications, selectedIds],
+    () => Array.from(new Set(selectedIds)),
+    [selectedIds],
+  );
+  const parsedPastedEmails = useMemo(
+    () => parsePastedEmails(pastedEmailsText),
+    [pastedEmailsText],
   );
   const decisionTemplatesForStatus = useMemo(
     () =>
@@ -1719,6 +1733,50 @@ export default function ApplicationsListPage() {
     setShowExportDialog(true);
   }
 
+  async function applyPastedEmailSelection() {
+    if (parsedPastedEmails.emails.length === 0) {
+      toast.error("Paste at least one valid email address.");
+      return;
+    }
+
+    setIsResolvingEmails(true);
+    try {
+      const response = await apiClient<{ data?: ResolveApplicationsByEmailsResult }>(
+        `/events/${eventId}/applications/resolve-by-emails`,
+        {
+          method: "POST",
+          body: { emails: parsedPastedEmails.emails },
+          csrfToken: csrfToken ?? undefined,
+        },
+      );
+      const result: ResolveApplicationsByEmailsResult = response.data ?? {
+        applicationIds: [],
+        userIds: [],
+        matchedEmails: [],
+        unmatchedEmails: [],
+      };
+
+      setSelectedIds(result.applicationIds);
+      setPasteSelectionResult(result);
+
+      toast.success(
+        `Selected ${result.applicationIds.length} application(s) from ${result.matchedEmails.length} matched email(s).`,
+      );
+      if (
+        result.unmatchedEmails.length > 0 ||
+        parsedPastedEmails.invalidTokens.length > 0
+      ) {
+        toast.info(
+          `${result.unmatchedEmails.length} unmatched and ${parsedPastedEmails.invalidTokens.length} invalid email token(s).`,
+        );
+      }
+    } catch {
+      toast.error("Could not resolve pasted emails.");
+    } finally {
+      setIsResolvingEmails(false);
+    }
+  }
+
   async function confirmExport() {
     const selectedColumns = Array.from(
       new Set(exportColumns.filter((column) => column.trim().length > 0)),
@@ -2320,6 +2378,16 @@ export default function ApplicationsListPage() {
         <Button
           variant="outline"
           size="sm"
+          onClick={() => {
+            setShowPasteEmailsDialog(true);
+            setPasteSelectionResult(null);
+          }}
+        >
+          Paste emails
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => openExportDialog("all")}
           disabled={isExporting}
         >
@@ -2778,6 +2846,89 @@ export default function ApplicationsListPage() {
             </Button>
             <Button onClick={confirmExport} disabled={isExporting}>
               {isExporting ? "Exporting..." : "Export CSV"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showPasteEmailsDialog}
+        onOpenChange={(open) => {
+          setShowPasteEmailsDialog(open);
+          if (!open) {
+            setPasteSelectionResult(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Select Applications by Pasted Emails</DialogTitle>
+            <DialogDescription>
+              Paste emails from CSV, Excel, or Google Sheets. Matching is scoped
+              to applicants of this event only.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <Textarea
+              rows={9}
+              value={pastedEmailsText}
+              onChange={(event) => {
+                setPastedEmailsText(event.target.value);
+                setPasteSelectionResult(null);
+              }}
+              placeholder={"alice@example.com\nbob@example.com"}
+            />
+
+            <div className="rounded-md border border-border/60 p-3 text-xs space-y-1">
+              <p>{parsedPastedEmails.emails.length} valid unique email(s)</p>
+              <p>{parsedPastedEmails.duplicateEmails.length} duplicate email(s) ignored</p>
+              <p>{parsedPastedEmails.invalidTokens.length} invalid token(s)</p>
+              {parsedPastedEmails.overLimit && (
+                <p className="text-destructive">
+                  Limit reached: only the first {MAX_PASTED_EMAILS} valid unique
+                  emails are used ({parsedPastedEmails.truncatedCount} ignored).
+                </p>
+              )}
+              {parsedPastedEmails.invalidTokens.length > 0 && (
+                <p className="text-muted-foreground">
+                  Invalid sample:{" "}
+                  {parsedPastedEmails.invalidTokens.slice(0, 5).join(", ")}
+                </p>
+              )}
+            </div>
+
+            {pasteSelectionResult && (
+              <div className="rounded-md border border-border/60 p-3 text-xs space-y-1">
+                <p>
+                  Selected {pasteSelectionResult.applicationIds.length} application(s)
+                </p>
+                <p>{pasteSelectionResult.matchedEmails.length} matched email(s)</p>
+                <p>{pasteSelectionResult.unmatchedEmails.length} unmatched email(s)</p>
+                {pasteSelectionResult.unmatchedEmails.length > 0 && (
+                  <p className="text-muted-foreground">
+                    Unmatched sample:{" "}
+                    {pasteSelectionResult.unmatchedEmails.slice(0, 5).join(", ")}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowPasteEmailsDialog(false)}
+            >
+              Close
+            </Button>
+            <Button
+              onClick={applyPastedEmailSelection}
+              disabled={isResolvingEmails || parsedPastedEmails.emails.length === 0}
+            >
+              {isResolvingEmails
+                ? "Selecting..."
+                : `Select ${parsedPastedEmails.emails.length} email(s)`}
             </Button>
           </DialogFooter>
         </DialogContent>
