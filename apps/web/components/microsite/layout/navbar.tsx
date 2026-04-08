@@ -243,7 +243,7 @@ export function Navbar({
           )}
           <div className="min-w-0">
             <span className="block truncate text-base font-semibold tracking-tight text-[var(--mm-text)] sm:text-lg">
-              <MarkdownText content={siteName || "Math&Maroc"} mode="inline" as="span" />
+              <MarkdownText content={siteName ?? ""} mode="inline" as="span" />
             </span>
             {showTagline && tagline && (
               <span className="hidden max-w-[20rem] truncate text-[11px] uppercase tracking-[0.14em] text-[var(--mm-text-muted)] lg:block">

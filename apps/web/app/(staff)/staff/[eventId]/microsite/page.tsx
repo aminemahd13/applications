@@ -885,7 +885,6 @@ export default function MicrositePage_() {
                     branding: { ...(prev.branding ?? {}), siteName: e.target.value },
                   }))
                 }
-                placeholder="Math&Maroc"
               />
             </div>
             <div className="space-y-2">
