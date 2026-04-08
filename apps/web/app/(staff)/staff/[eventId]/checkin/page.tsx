@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   ScanLine,
@@ -14,6 +14,9 @@ import {
   Clock,
   Loader2,
   QrCode,
+  Download,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import {
   Card,
@@ -26,6 +29,23 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -35,8 +55,25 @@ import {
   QrScanner,
 } from "@/components/shared";
 import { apiClient } from "@/lib/api";
+import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
+import {
+  filenameFromContentDisposition,
+  humanizeExportColumnKey,
+  resolvePortalFromPathname,
+} from "@/lib/export-payloads";
+import {
+  buildCheckinAttendeesQuery,
+  buildCheckinExportRequest,
+} from "@/lib/checkin-filters";
 import { useAuth, usePermissions } from "@/lib/auth-context";
 import { toast } from "sonner";
+import {
+  CHECKIN_EXPORT_COLUMNS,
+  type CheckinAttendeeStatus,
+  type CheckinExportColumn,
+} from "@event-platform/shared";
+
+const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 
 interface CheckinStats {
   total: number;
@@ -70,6 +107,43 @@ interface LookupResult {
   checkedInBy?: string;
 }
 
+interface CheckinAttendeeRow {
+  applicationId: string;
+  eventId: string;
+  eventSlug: string;
+  eventTitle: string;
+  applicantUserId: string;
+  applicantName: string;
+  applicantEmail: string;
+  decisionStatus: string;
+  attendanceStatus: string;
+  isCheckedIn: boolean;
+  checkedInAt?: string;
+  checkedInByUserId?: string;
+  checkedInByEmail?: string;
+  tags: string;
+  applicationPath: string;
+  applicationUrl: string;
+  staffApplicationPath: string;
+  adminApplicationPath: string;
+  staffApplicationUrl: string;
+  adminApplicationUrl: string;
+  applicationCreatedAt: string;
+  applicationUpdatedAt: string;
+}
+
+interface CheckinAttendeesResponse {
+  data: CheckinAttendeeRow[];
+  meta: {
+    page?: number;
+    pageSize?: number;
+    total: number;
+    checkedIn: number;
+    notCheckedIn: number;
+    availableTags: string[];
+  };
+}
+
 function normalizeCheckinResult(raw: any): CheckinResult {
   const status = (raw?.status ?? "INVALID_STATUS") as CheckinResult["status"];
   const applicantName =
@@ -94,8 +168,21 @@ function normalizeCheckinResult(raw: any): CheckinResult {
   };
 }
 
+function parseTagList(tags: string): string[] {
+  if (!tags) return [];
+  return Array.from(
+    new Set(
+      tags
+        .split("|")
+        .map((tag) => tag.trim())
+        .filter((tag) => tag.length > 0),
+    ),
+  );
+}
+
 export default function CheckinPage() {
   const params = useParams();
+  const pathname = usePathname();
   const eventId = params.eventId as string;
   const { csrfToken } = useAuth();
   const { hasPermission } = usePermissions(eventId);
@@ -103,11 +190,30 @@ export default function CheckinPage() {
   const canScan = hasPermission("event.checkin.scan");
   const canLookup = hasPermission("event.checkin.manual_lookup");
   const canUndo = hasPermission("event.checkin.undo");
+  const exportPortal = resolvePortalFromPathname(pathname ?? "");
 
   const [stats, setStats] = useState<CheckinStats>({ total: 0, checkedIn: 0, remaining: 0 });
   const [recentCheckins, setRecentCheckins] = useState<CheckinEntry[]>([]);
   const [checkinEnabled, setCheckinEnabled] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
+  const [attendees, setAttendees] = useState<CheckinAttendeeRow[]>([]);
+  const [attendeesTotal, setAttendeesTotal] = useState(0);
+  const [attendeesCheckedIn, setAttendeesCheckedIn] = useState(0);
+  const [attendeesNotCheckedIn, setAttendeesNotCheckedIn] = useState(0);
+  const [attendeeAvailableTags, setAttendeeAvailableTags] = useState<string[]>([]);
+  const [isLoadingAttendees, setIsLoadingAttendees] = useState(false);
+  const [attendeeStatusFilter, setAttendeeStatusFilter] =
+    useState<CheckinAttendeeStatus>("all");
+  const [attendeeSearchInput, setAttendeeSearchInput] = useState("");
+  const [attendeeSearch, setAttendeeSearch] = useState("");
+  const [attendeeTagsFilter, setAttendeeTagsFilter] = useState<string[]>([]);
+  const [attendeesPage, setAttendeesPage] = useState(1);
+  const [attendeesPageSize] = useState(50);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [isExportingAttendeesCsv, setIsExportingAttendeesCsv] = useState(false);
+  const [exportColumns, setExportColumns] = useState<CheckinExportColumn[]>(
+    [...CHECKIN_EXPORT_COLUMNS],
+  );
 
   // Scan / lookup state
   const [scanInput, setScanInput] = useState("");
@@ -175,6 +281,127 @@ export default function CheckinPage() {
     setCheckinEnabled(enabled);
   }, [eventId, canViewDashboard]);
 
+  const refreshAttendees = useCallback(async () => {
+    if (!canViewDashboard || !checkinEnabled) {
+      setAttendees([]);
+      setAttendeesTotal(0);
+      setAttendeesCheckedIn(0);
+      setAttendeesNotCheckedIn(0);
+      setAttendeeAvailableTags([]);
+      return;
+    }
+
+    setIsLoadingAttendees(true);
+    try {
+      const params = buildCheckinAttendeesQuery({
+        status: attendeeStatusFilter,
+        tags: attendeeTagsFilter,
+        search: attendeeSearch,
+        page: attendeesPage,
+        pageSize: attendeesPageSize,
+      });
+      const query = params.toString();
+      const payload = await apiClient<CheckinAttendeesResponse>(
+        `/events/${eventId}/check-in/attendees${query ? `?${query}` : ""}`,
+      );
+      const rows = Array.isArray(payload?.data) ? payload.data : [];
+      const meta = payload?.meta;
+      setAttendees(rows);
+      setAttendeesTotal(Number(meta?.total ?? rows.length));
+      setAttendeesCheckedIn(Number(meta?.checkedIn ?? 0));
+      setAttendeesNotCheckedIn(Number(meta?.notCheckedIn ?? 0));
+      setAttendeeAvailableTags(
+        Array.isArray(meta?.availableTags) ? meta.availableTags : [],
+      );
+    } catch {
+      setAttendees([]);
+      setAttendeesTotal(0);
+      setAttendeesCheckedIn(0);
+      setAttendeesNotCheckedIn(0);
+      setAttendeeAvailableTags([]);
+    } finally {
+      setIsLoadingAttendees(false);
+    }
+  }, [
+    attendeeSearch,
+    attendeeStatusFilter,
+    attendeeTagsFilter,
+    attendeesPage,
+    attendeesPageSize,
+    canViewDashboard,
+    checkinEnabled,
+    eventId,
+  ]);
+
+  function toggleAttendeeTag(tag: string) {
+    setAttendeesPage(1);
+    setAttendeeTagsFilter((previous) =>
+      previous.includes(tag)
+        ? previous.filter((value) => value !== tag)
+        : [...previous, tag],
+    );
+  }
+
+  function toggleExportColumn(column: CheckinExportColumn) {
+    setExportColumns((previous) =>
+      previous.includes(column)
+        ? previous.filter((value) => value !== column)
+        : [...previous, column],
+    );
+  }
+
+  async function exportAttendeesCsv() {
+    const selectedColumns = Array.from(
+      new Set(exportColumns.filter((column) => column.trim().length > 0)),
+    );
+    if (selectedColumns.length === 0) {
+      toast.error("Select at least one column to export.");
+      return;
+    }
+
+    setShowExportDialog(false);
+    setIsExportingAttendeesCsv(true);
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (csrfToken) {
+        headers["X-CSRF-Token"] = csrfToken;
+      }
+      const body = buildCheckinExportRequest({
+        status: attendeeStatusFilter,
+        tags: attendeeTagsFilter,
+        search: attendeeSearch,
+        columns: selectedColumns,
+        portal: exportPortal,
+      });
+      const res = await fetch(`${PUBLIC_API_URL}/events/${eventId}/check-in/export`, {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        throw new Error("Export failed");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filenameFromContentDisposition(
+        res.headers.get("content-disposition"),
+        `checkin-attendees-${eventId}.csv`,
+      );
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Check-in attendees CSV downloaded.");
+    } catch {
+      toast.error("Could not export check-in attendees.");
+    } finally {
+      setIsExportingAttendeesCsv(false);
+    }
+  }
+
   useEffect(() => {
     setIsLoading(true);
     (async () => {
@@ -187,6 +414,16 @@ export default function CheckinPage() {
       }
     })();
   }, [refreshDashboardData]);
+
+  useEffect(() => {
+    void refreshAttendees();
+  }, [refreshAttendees]);
+
+  useEffect(() => {
+    setAttendeeTagsFilter((previous) =>
+      previous.filter((tag) => attendeeAvailableTags.includes(tag)),
+    );
+  }, [attendeeAvailableTags]);
 
   useEffect(() => {
     if (!lookupQuery.trim()) {
@@ -220,6 +457,7 @@ export default function CheckinPage() {
         if (result.status === "SUCCESS") {
           toast.success(`${result.applicantName} checked in!`);
           await refreshDashboardData();
+          await refreshAttendees();
         } else if (result.status === "ALREADY_CHECKED_IN") {
           toast.info(result.message);
         } else {
@@ -233,7 +471,15 @@ export default function CheckinPage() {
         scanRef.current?.focus();
       }
     },
-    [eventId, csrfToken, isScanning, refreshDashboardData, checkinEnabled, canScan]
+    [
+      eventId,
+      csrfToken,
+      isScanning,
+      refreshDashboardData,
+      refreshAttendees,
+      checkinEnabled,
+      canScan,
+    ]
   );
 
   const handleLookup = useCallback(
@@ -303,6 +549,7 @@ export default function CheckinPage() {
         if (result.status === "SUCCESS") {
           toast.success(`${result.applicantName} checked in!`);
           await refreshDashboardData();
+          await refreshAttendees();
         } else if (result.status === "ALREADY_CHECKED_IN") {
           toast.info(result.message);
         } else {
@@ -329,7 +576,15 @@ export default function CheckinPage() {
         setIsScanning(false);
       }
     },
-    [eventId, csrfToken, isScanning, refreshDashboardData, checkinEnabled, canScan]
+    [
+      eventId,
+      csrfToken,
+      isScanning,
+      refreshDashboardData,
+      refreshAttendees,
+      checkinEnabled,
+      canScan,
+    ]
   );
 
   async function handleUndo() {
@@ -341,6 +596,7 @@ export default function CheckinPage() {
         csrfToken: csrfToken ?? undefined,
       });
       await refreshDashboardData();
+      await refreshAttendees();
       toast.success("Check-in undone");
     } catch {
       /* handled */
@@ -355,6 +611,8 @@ export default function CheckinPage() {
   const canUseScanner = checkinEnabled && canScan;
   const canUseLookup = checkinEnabled && canLookup;
   const canUseUndo = checkinEnabled && canUndo;
+  const attendeeCanPrev = attendeesPage > 1;
+  const attendeeCanNext = attendeesPage * attendeesPageSize < attendeesTotal;
 
   if (isLoading) {
     return (
@@ -570,6 +828,208 @@ export default function CheckinPage() {
         </Card>
       </div>
 
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-sm">Attendees</CardTitle>
+              <CardDescription>
+                People expected for check-in (confirmed + already checked-in).
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowExportDialog(true)}
+              disabled={isExportingAttendeesCsv || !checkinEnabled || !canViewDashboard}
+            >
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+              {isExportingAttendeesCsv ? "Exporting..." : "Export attendees CSV"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2 md:grid-cols-[220px_minmax(0,1fr)_auto]">
+            <Select
+              value={attendeeStatusFilter}
+              onValueChange={(value) => {
+                setAttendeesPage(1);
+                setAttendeeStatusFilter(value as CheckinAttendeeStatus);
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All attendees</SelectItem>
+                <SelectItem value="not_checked_in">Not checked in</SelectItem>
+                <SelectItem value="checked_in">Checked in</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <div className="flex gap-2">
+              <Input
+                value={attendeeSearchInput}
+                onChange={(event) => setAttendeeSearchInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    setAttendeesPage(1);
+                    setAttendeeSearch(attendeeSearchInput.trim());
+                  }
+                }}
+                placeholder="Search name, email, phone, application ID..."
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setAttendeesPage(1);
+                  setAttendeeSearch(attendeeSearchInput.trim());
+                }}
+              >
+                <Search className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setAttendeeStatusFilter("all");
+                setAttendeeSearchInput("");
+                setAttendeeSearch("");
+                setAttendeeTagsFilter([]);
+                setAttendeesPage(1);
+              }}
+            >
+              Reset filters
+            </Button>
+          </div>
+
+          {attendeeAvailableTags.length > 0 && (
+            <div className="space-y-2">
+              <Label className="text-sm">Campus / Tags (match all)</Label>
+              <div className="flex flex-wrap gap-2">
+                {attendeeAvailableTags.map((tag) => {
+                  const selected = attendeeTagsFilter.includes(tag);
+                  return (
+                    <Button
+                      key={tag}
+                      type="button"
+                      size="sm"
+                      variant={selected ? "default" : "outline"}
+                      onClick={() => toggleAttendeeTag(tag)}
+                    >
+                      {tag}
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+            <span>
+              <strong className="text-foreground">{attendeesTotal}</strong> matching attendees
+            </span>
+            <span>
+              <strong className="text-foreground">{attendeesCheckedIn}</strong> checked in
+            </span>
+            <span>
+              <strong className="text-foreground">{attendeesNotCheckedIn}</strong> not checked in
+            </span>
+          </div>
+
+          {isLoadingAttendees ? (
+            <p className="text-sm text-muted-foreground py-6">Loading attendees...</p>
+          ) : attendees.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-6">
+              No attendees match the current filters.
+            </p>
+          ) : (
+            <ScrollArea className="max-h-96">
+              <div className="space-y-2">
+                {attendees.map((attendee) => {
+                  const tags = parseTagList(attendee.tags);
+                  const isCheckedIn =
+                    attendee.isCheckedIn || attendee.attendanceStatus === "CHECKED_IN";
+                  const canManualCheckin =
+                    attendee.attendanceStatus === "CONFIRMED" &&
+                    canUseScanner &&
+                    !isScanning;
+                  return (
+                    <div
+                      key={attendee.applicationId}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm"
+                    >
+                      <div className="space-y-1">
+                        <p className="font-medium">{attendee.applicantName}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {attendee.applicantEmail || attendee.applicantUserId}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {isCheckedIn
+                            ? attendee.checkedInAt
+                              ? `Checked in ${new Date(attendee.checkedInAt).toLocaleString("en-GB")}`
+                              : "Checked in"
+                            : "Not checked in"}
+                          {isCheckedIn && attendee.checkedInByEmail
+                            ? ` - ${attendee.checkedInByEmail}`
+                            : ""}
+                        </p>
+                        {tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {tags.map((tag) => (
+                              <Badge key={`${attendee.applicationId}-${tag}`} variant="secondary">
+                                {tag}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => handleManualCheckin(attendee.applicationId)}
+                        disabled={!canManualCheckin}
+                        variant={canManualCheckin ? "default" : "outline"}
+                      >
+                        {canManualCheckin
+                          ? "Check in"
+                          : isCheckedIn
+                            ? "Checked in"
+                            : "Not eligible"}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            </ScrollArea>
+          )}
+
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-muted-foreground">Page {attendeesPage}</p>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setAttendeesPage((previous) => Math.max(previous - 1, 1))}
+                disabled={!attendeeCanPrev}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setAttendeesPage((previous) => previous + 1)}
+                disabled={!attendeeCanNext}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Last result */}
       {lastResult && (
         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
@@ -653,6 +1113,81 @@ export default function CheckinPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Export check-in attendees</DialogTitle>
+            <DialogDescription>
+              Export the attendee list using the current filters and selected columns.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="text-xs text-muted-foreground">
+              Current filters: status <strong>{attendeeStatusFilter}</strong>
+              {attendeeSearch ? (
+                <>
+                  {" "}
+                  - search <strong>{attendeeSearch}</strong>
+                </>
+              ) : null}
+              {attendeeTagsFilter.length > 0 ? (
+                <>
+                  {" "}
+                  - tags <strong>{attendeeTagsFilter.join(", ")}</strong>
+                </>
+              ) : null}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-muted-foreground">
+                {exportColumns.length} column
+                {exportColumns.length === 1 ? "" : "s"} selected
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setExportColumns([...CHECKIN_EXPORT_COLUMNS])}
+                >
+                  Select all
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setExportColumns([])}
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid max-h-80 gap-2 overflow-y-auto rounded-md border border-border/60 p-3 sm:grid-cols-2">
+              {CHECKIN_EXPORT_COLUMNS.map((column) => (
+                <label key={column} className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={exportColumns.includes(column)}
+                    onCheckedChange={() => toggleExportColumn(column)}
+                  />
+                  <span>{humanizeExportColumnKey(column)}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowExportDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={exportAttendeesCsv} disabled={isExportingAttendeesCsv}>
+              {isExportingAttendeesCsv ? "Exporting..." : "Export CSV"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={showUndoConfirm}

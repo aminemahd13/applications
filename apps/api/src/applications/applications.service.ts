@@ -8,7 +8,11 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
 import { Prisma } from '@event-platform/db';
 import {
+  APPLICATION_EXPORT_CORE_COLUMNS,
   ApplicationFilterDto,
+  type ApplicationExportCoreColumn,
+  type ApplicationCsvExportBodyDto,
+  type ApplicationCsvExportQueryDto,
   ApplicationsFilterCondition,
   ApplicationsFilterGroup,
   ApplicationsFilterTreeNode,
@@ -20,6 +24,7 @@ import {
   ApplicationsSavedViewModeSchema,
   ApplicationsFilterGroupSchema,
   ApplicationSavedView,
+  type CsvPortal,
   CreateApplicationSavedViewDto,
   UpdateApplicationSavedViewDto,
   ApplicationSummary,
@@ -43,6 +48,11 @@ import {
 import { StepStateService } from './step-state.service';
 import * as jwt from 'jsonwebtoken';
 import { createHmac } from 'node:crypto';
+import {
+  buildApplicationPortalLinks,
+  buildCsvContent,
+  joinAppUrl,
+} from '../common/utils/export-csv.util';
 
 type ApplicationsListRecord = {
   id: string;
@@ -926,8 +936,16 @@ export class ApplicationsService {
    */
   async exportEventApplicationsCsv(
     eventId: string,
-    applicationIds?: string[],
+    options?: ApplicationCsvExportQueryDto | ApplicationCsvExportBodyDto,
   ): Promise<{ filename: string; csv: string }> {
+    const applicationIds = options?.applicationIds;
+    const includeResponseColumns = options?.includeResponseColumns ?? true;
+    const selectedColumns = this.resolveRequestedColumns(
+      APPLICATION_EXPORT_CORE_COLUMNS,
+      options?.columns,
+    );
+    const portal: CsvPortal = options?.portal === 'admin' ? 'admin' : 'staff';
+
     const event = await this.prisma.events.findUnique({
       where: { id: eventId },
       select: { id: true, slug: true, title: true },
@@ -1133,46 +1151,8 @@ export class ApplicationsService {
 
     const appBaseUrl = this.getAppBaseUrl();
     const headers = [
-      'applicationId',
-      'eventId',
-      'eventSlug',
-      'eventTitle',
-      'applicantUserId',
-      'applicantEmail',
-      'applicantName',
-      'applicantFirstName',
-      'applicantLastName',
-      'applicantDateOfBirth',
-      'phone',
-      'education',
-      'institution',
-      'city',
-      'country',
-      'profileLinks',
-      'decisionStatus',
-      'decisionPublishedAt',
-      'derivedStatus',
-      'tags',
-      'stepStatuses',
-      'uploadedFileCount',
-      'uploadedFileIds',
-      'uploadedFiles',
-      'completionCredentialStatus',
-      'certificateId',
-      'credentialId',
-      'certificatePath',
-      'verificationPath',
-      'certificateUrl',
-      'verificationUrl',
-      'credentialIssuedAt',
-      'credentialRevokedAt',
-      'staffApplicationPath',
-      'adminApplicationPath',
-      'staffApplicationUrl',
-      'adminApplicationUrl',
-      'applicationCreatedAt',
-      'applicationUpdatedAt',
-      ...responseHeaders,
+      ...selectedColumns,
+      ...(includeResponseColumns ? responseHeaders : []),
     ];
 
     const rows: unknown[][] = applications.map((application) => {
@@ -1202,8 +1182,12 @@ export class ApplicationsService {
         })
         .join(' | ');
 
-      const staffApplicationPath = `/staff/${eventId}/applications/${application.id}`;
-      const adminApplicationPath = `/admin/events/${eventId}/applications/${application.id}`;
+      const applicationLinks = buildApplicationPortalLinks({
+        eventId,
+        applicationId: application.id,
+        portal,
+        baseUrl: appBaseUrl,
+      });
       const responseValues = responseValuesByApplicationId.get(application.id);
       const completion = completionCredentialByApplicationId.get(application.id);
       const credentialStatus = completion
@@ -1223,57 +1207,62 @@ export class ApplicationsService {
       const verificationPath = completion
         ? `/credentials/verify/${completion.credential_id}`
         : '';
-
-      return [
-        application.id,
-        event.id,
-        event.slug,
-        event.title,
-        summary.applicantUserId,
-        summary.applicantEmail ?? '',
-        summary.applicantName ?? '',
-        profile?.first_name ?? '',
-        profile?.last_name ?? '',
-        this.toIsoString(profile?.date_of_birth),
-        profile?.phone ?? '',
-        profile?.education_level ?? '',
-        profile?.institution ?? '',
-        profile?.city ?? '',
-        profile?.country ?? '',
-        this.formatProfileLinks(profile?.links),
-        summary.decisionStatus,
-        this.toIsoString(summary.decisionPublishedAt),
-        summary.derivedStatus,
-        (summary.tags ?? []).join(' | '),
+      const coreValues: Record<ApplicationExportCoreColumn, unknown> = {
+        applicationId: application.id,
+        eventId: event.id,
+        eventSlug: event.slug,
+        eventTitle: event.title,
+        applicantUserId: summary.applicantUserId,
+        applicantEmail: summary.applicantEmail ?? '',
+        applicantName: summary.applicantName ?? '',
+        applicantFirstName: profile?.first_name ?? '',
+        applicantLastName: profile?.last_name ?? '',
+        applicantDateOfBirth: this.toIsoString(profile?.date_of_birth),
+        phone: profile?.phone ?? '',
+        education: profile?.education_level ?? '',
+        institution: profile?.institution ?? '',
+        city: profile?.city ?? '',
+        country: profile?.country ?? '',
+        profileLinks: this.formatProfileLinks(profile?.links),
+        decisionStatus: summary.decisionStatus,
+        decisionPublishedAt: this.toIsoString(summary.decisionPublishedAt),
+        derivedStatus: summary.derivedStatus,
+        tags: (summary.tags ?? []).join(' | '),
         stepStatuses,
-        fileIds.length,
-        fileIds.join(' | '),
+        uploadedFileCount: fileIds.length,
+        uploadedFileIds: fileIds.join(' | '),
         uploadedFiles,
-        credentialStatus,
-        completion?.certificate_id ?? '',
-        completion?.credential_id ?? '',
+        completionCredentialStatus: credentialStatus,
+        certificateId: completion?.certificate_id ?? '',
+        credentialId: completion?.credential_id ?? '',
         certificatePath,
         verificationPath,
-        credentialLinks?.certificateUrl ?? '',
-        credentialLinks?.verifiableCredentialUrl ?? '',
-        this.toIsoString(completion?.issued_at),
-        this.toIsoString(completion?.revoked_at),
-        staffApplicationPath,
-        adminApplicationPath,
-        `${appBaseUrl}${staffApplicationPath}`,
-        `${appBaseUrl}${adminApplicationPath}`,
-        this.toIsoString(application.created_at),
-        this.toIsoString(application.updated_at),
-        ...responseColumnKeys.map(
-          (columnKey) => responseValues?.get(columnKey) ?? '',
-        ),
+        certificateUrl: credentialLinks?.certificateUrl ?? '',
+        verificationUrl: credentialLinks?.verifiableCredentialUrl ?? '',
+        credentialIssuedAt: this.toIsoString(completion?.issued_at),
+        credentialRevokedAt: this.toIsoString(completion?.revoked_at),
+        applicationPath: applicationLinks.applicationPath,
+        applicationUrl: applicationLinks.applicationUrl,
+        staffApplicationPath: applicationLinks.staffApplicationPath,
+        adminApplicationPath: applicationLinks.adminApplicationPath,
+        staffApplicationUrl: applicationLinks.staffApplicationUrl,
+        adminApplicationUrl: applicationLinks.adminApplicationUrl,
+        applicationCreatedAt: this.toIsoString(application.created_at),
+        applicationUpdatedAt: this.toIsoString(application.updated_at),
+      };
+
+      return [
+        ...selectedColumns.map((column) => coreValues[column] ?? ''),
+        ...(includeResponseColumns
+          ? responseColumnKeys.map((columnKey) => responseValues?.get(columnKey) ?? '')
+          : []),
       ];
     });
 
     const safeSlug = this.toFilenameSafePart(event.slug || event.id);
     return {
       filename: `applications-${safeSlug}.csv`,
-      csv: this.buildCsv(headers, rows),
+      csv: buildCsvContent(headers, rows),
     };
   }
 
@@ -3464,7 +3453,10 @@ export class ApplicationsService {
   }
 
   private getAppBaseUrl(): string {
-    const baseUrl = process.env.APP_BASE_URL || 'http://localhost:3000';
+    const baseUrl =
+      process.env.APP_BASE_URL ||
+      process.env.CORS_ORIGIN ||
+      'http://localhost:3000';
     return baseUrl.replace(/\/+$/, '');
   }
 
@@ -3486,8 +3478,14 @@ export class ApplicationsService {
   ): { certificateUrl: string; verifiableCredentialUrl: string } {
     const appBaseUrl = this.getAppBaseUrl();
     return {
-      certificateUrl: `${appBaseUrl}/credentials/certificate/${certificateId}`,
-      verifiableCredentialUrl: `${appBaseUrl}/credentials/verify/${credentialId}`,
+      certificateUrl: joinAppUrl(
+        appBaseUrl,
+        `/credentials/certificate/${certificateId}`,
+      ),
+      verifiableCredentialUrl: joinAppUrl(
+        appBaseUrl,
+        `/credentials/verify/${credentialId}`,
+      ),
     };
   }
 
@@ -3552,20 +3550,21 @@ export class ApplicationsService {
     return compact || 'event';
   }
 
-  private csvEscape(value: unknown): string {
-    const normalized =
-      value === null || value === undefined ? '' : String(value);
-    return `"${normalized.replace(/"/g, '""')}"`;
-  }
-
-  private buildCsv(headers: string[], rows: unknown[][]): string {
-    const headerLine = headers
-      .map((header) => this.csvEscape(header))
-      .join(',');
-    const rowLines = rows.map((row) =>
-      row.map((cell) => this.csvEscape(cell)).join(','),
-    );
-    return [headerLine, ...rowLines].join('\n');
+  private resolveRequestedColumns<TColumn extends string>(
+    availableColumns: readonly TColumn[],
+    requestedColumns?: readonly TColumn[],
+  ): TColumn[] {
+    if (!requestedColumns || requestedColumns.length === 0) {
+      return [...availableColumns];
+    }
+    const allowedSet = new Set<string>(availableColumns);
+    const selected: TColumn[] = [];
+    for (const column of requestedColumns) {
+      if (allowedSet.has(column) && !selected.includes(column)) {
+        selected.push(column);
+      }
+    }
+    return selected.length > 0 ? selected : [...availableColumns];
   }
 
   private applyPatches(

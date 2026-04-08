@@ -23,7 +23,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -31,6 +34,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -44,7 +55,16 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { EmptyState, PageHeader, TableSkeleton } from "@/components/shared";
 import { apiClient } from "@/lib/api";
 import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
+import {
+  buildAdminUsersExportQuery,
+  filenameFromContentDisposition,
+  humanizeExportColumnKey,
+} from "@/lib/export-payloads";
 import { toast } from "sonner";
+import {
+  ADMIN_USERS_EXPORT_COLUMNS,
+  type AdminUsersExportColumn,
+} from "@event-platform/shared";
 
 const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 
@@ -177,30 +197,16 @@ function getAccountTypeBadge(user: AdminUserSummary): {
   return { label: "User", variant: "outline" };
 }
 
-function filenameFromContentDisposition(
-  contentDisposition: string | null,
-  fallback: string
-): string {
-  if (!contentDisposition) return fallback;
-  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
-  if (utf8Match?.[1]) {
-    try {
-      return decodeURIComponent(utf8Match[1]);
-    } catch {
-      return utf8Match[1];
-    }
-  }
-  const quotedMatch = contentDisposition.match(/filename=\"([^\"]+)\"/i);
-  if (quotedMatch?.[1]) return quotedMatch[1];
-  const plainMatch = contentDisposition.match(/filename=([^;]+)/i);
-  if (plainMatch?.[1]) return plainMatch[1].trim();
-  return fallback;
-}
-
 export default function AdminPeoplePage() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
   const [isExportingUsersCsv, setIsExportingUsersCsv] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [exportColumns, setExportColumns] = useState<AdminUsersExportColumn[]>(
+    [...ADMIN_USERS_EXPORT_COLUMNS],
+  );
+  const [includeResponseColumnsInExport, setIncludeResponseColumnsInExport] =
+    useState(true);
 
   const [users, setUsers] = useState<AdminUserSummary[]>([]);
   const [usersTotal, setUsersTotal] = useState(0);
@@ -285,12 +291,33 @@ export default function AdminPeoplePage() {
   const eventCanPrev = eventPage > 1;
   const eventCanNext = eventPage * eventPageSize < eventsTotal;
 
+  function toggleExportColumn(column: AdminUsersExportColumn) {
+    setExportColumns((previous) =>
+      previous.includes(column)
+        ? previous.filter((value) => value !== column)
+        : [...previous, column],
+    );
+  }
+
   async function handleExportUsersCsv() {
+    const selectedColumns = Array.from(
+      new Set(exportColumns.filter((column) => column.trim().length > 0)),
+    );
+    if (selectedColumns.length === 0) {
+      toast.error("Select at least one column to export.");
+      return;
+    }
+
+    setShowExportDialog(false);
     setIsExportingUsersCsv(true);
     try {
-      const params = new URLSearchParams();
-      if (userSearch.trim()) params.set("search", userSearch.trim());
-      if (userFilter !== "all") params.set("filter", userFilter);
+      const params = buildAdminUsersExportQuery({
+        search: userSearch,
+        filter: userFilter === "all" ? undefined : userFilter,
+        columns: selectedColumns,
+        includeResponseColumns: includeResponseColumnsInExport,
+        portal: "admin",
+      });
       const queryString = params.toString();
       const endpoint =
         `${PUBLIC_API_URL}/admin/users/export` +
@@ -390,13 +417,85 @@ export default function AdminPeoplePage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={handleExportUsersCsv}
+          onClick={() => setShowExportDialog(true)}
           disabled={isExportingUsersCsv}
         >
           <Download className="mr-1.5 h-3.5 w-3.5" />
           {isExportingUsersCsv ? "Exporting..." : "Export Users CSV"}
         </Button>
       </PageHeader>
+
+      <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Export users CSV</DialogTitle>
+            <DialogDescription>
+              Choose the columns to include in the users and applications export.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 p-3">
+              <div>
+                <Label className="text-sm">Include dynamic response columns</Label>
+                <p className="text-xs text-muted-foreground">
+                  Add one column per form response field from each application.
+                </p>
+              </div>
+              <Switch
+                checked={includeResponseColumnsInExport}
+                onCheckedChange={setIncludeResponseColumnsInExport}
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-muted-foreground">
+                {exportColumns.length} column
+                {exportColumns.length === 1 ? "" : "s"} selected
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setExportColumns([...ADMIN_USERS_EXPORT_COLUMNS])}
+                >
+                  Select all
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setExportColumns([])}
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid max-h-80 gap-2 overflow-y-auto rounded-md border border-border/60 p-3 sm:grid-cols-2">
+              {ADMIN_USERS_EXPORT_COLUMNS.map((column) => (
+                <label key={column} className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={exportColumns.includes(column)}
+                    onCheckedChange={() => toggleExportColumn(column)}
+                  />
+                  <span>{humanizeExportColumnKey(column)}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowExportDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleExportUsersCsv} disabled={isExportingUsersCsv}>
+              {isExportingUsersCsv ? "Exporting..." : "Export CSV"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {statsLoading ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">

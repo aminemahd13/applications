@@ -22,6 +22,8 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { Permission } from '@event-platform/shared';
 import {
   ApplicationFilterSchema,
+  ApplicationCsvExportBodySchema,
+  ApplicationCsvExportQuerySchema,
   ApplicationsQueryRequestSchema,
   BulkApplicationIdsSchema,
   BulkApplicationTagsSchema,
@@ -46,17 +48,6 @@ const UpdateApplicationTagsSchema = z.object({
 const UpdateApplicationNotesSchema = z.object({
   internalNotes: z.string().max(20000).nullable(),
 });
-
-const ExportApplicationIdsCsvSchema = z
-  .string()
-  .transform((value) =>
-    value
-      .split(',')
-      .map((id) => id.trim())
-      .filter((id) => id.length > 0),
-  )
-  .pipe(z.array(z.string().uuid()).max(500))
-  .transform((ids) => Array.from(new Set(ids)));
 
 /**
  * Applications Controller
@@ -163,14 +154,12 @@ export class ApplicationsController {
   @RequirePermission(Permission.EVENT_APPLICATION_EXPORT)
   async exportCsv(
     @Param('eventId') eventId: string,
-    @Query('applicationIds') applicationIds: string | undefined,
+    @Query() query: Record<string, unknown>,
     @Res() res: Response,
   ) {
-    const parsedIds = applicationIds
-      ? ExportApplicationIdsCsvSchema.parse(applicationIds)
-      : undefined;
+    const dto = ApplicationCsvExportQuerySchema.parse(query ?? {});
     const result =
-      await this.applicationsService.exportEventApplicationsCsv(eventId, parsedIds);
+      await this.applicationsService.exportEventApplicationsCsv(eventId, dto);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',
@@ -189,10 +178,10 @@ export class ApplicationsController {
     @Body() body: any,
     @Res() res: Response,
   ) {
-    const dto = BulkApplicationIdsSchema.parse(body);
+    const dto = ApplicationCsvExportBodySchema.parse(body ?? {});
     const result = await this.applicationsService.exportEventApplicationsCsv(
       eventId,
-      dto.applicationIds,
+      dto,
     );
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(

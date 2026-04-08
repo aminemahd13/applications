@@ -5,11 +5,22 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { EventRole } from '@event-platform/shared';
+import {
+  ADMIN_USERS_EXPORT_COLUMNS,
+  EventRole,
+  type AdminUsersCsvExportQueryDto,
+  type AdminUsersExportColumn,
+  type CsvPortal,
+} from '@event-platform/shared';
 import { PasswordResetService } from '../auth/password-reset.service';
 import { RateLimiterService } from '../common/services/rate-limiter.service';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
+import {
+  buildApplicationPortalLinks,
+  buildCsvContent,
+  resolveAppBaseUrl,
+} from '../common/utils/export-csv.util';
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -1074,12 +1085,17 @@ export class AdminService {
     };
   }
 
-  async exportUsersCsv(params?: {
-    search?: string;
-    filter?: string;
-  }): Promise<{ filename: string; csv: string }> {
+  async exportUsersCsv(
+    params?: AdminUsersCsvExportQueryDto,
+  ): Promise<{ filename: string; csv: string }> {
     const search = params?.search?.trim();
     const filter = params?.filter?.trim();
+    const includeResponseColumns = params?.includeResponseColumns ?? true;
+    const selectedColumns = this.resolveRequestedColumns(
+      ADMIN_USERS_EXPORT_COLUMNS,
+      params?.columns,
+    );
+    const portal: CsvPortal = params?.portal === 'staff' ? 'staff' : 'admin';
     const where = this.buildAdminUsersWhere(search, filter);
 
     const users = await this.prisma.users.findMany({
@@ -1281,53 +1297,8 @@ export class AdminService {
 
     const appBaseUrl = this.getAppBaseUrl();
     const headers = [
-      'userId',
-      'email',
-      'accountType',
-      'isGlobalAdmin',
-      'hasStaffRole',
-      'staffRoleCount',
-      'fullName',
-      'phone',
-      'educationLevel',
-      'institution',
-      'city',
-      'country',
-      'profileLinks',
-      'profileCompleteness',
-      'hasPhone',
-      'hasLinks',
-      'isDisabled',
-      'emailVerifiedAt',
-      'userCreatedAt',
-      'userUpdatedAt',
-      'totalApplicationsForUser',
-      'totalEventsForUser',
-      'lastApplicationAt',
-      'allEventSlugsForUser',
-      'allEventTitlesForUser',
-      'applicationId',
-      'eventId',
-      'eventSlug',
-      'eventTitle',
-      'eventStatus',
-      'eventStartAt',
-      'eventEndAt',
-      'decisionStatus',
-      'decisionPublishedAt',
-      'derivedStatus',
-      'tags',
-      'stepStatuses',
-      'uploadedFileCount',
-      'uploadedFileIds',
-      'uploadedFiles',
-      'staffApplicationPath',
-      'adminApplicationPath',
-      'staffApplicationUrl',
-      'adminApplicationUrl',
-      'applicationCreatedAt',
-      'applicationUpdatedAt',
-      ...responseHeaders,
+      ...selectedColumns,
+      ...(includeResponseColumns ? responseHeaders : []),
     ];
 
     const rows: unknown[][] = [];
@@ -1381,62 +1352,95 @@ export class AdminService {
         undefined,
       );
 
-      const sharedUserColumns: unknown[] = [
-        user.id,
-        user.email,
-        resolveAccountType({
+      const sharedUserValues: Pick<
+        Record<AdminUsersExportColumn, unknown>,
+        | 'userId'
+        | 'email'
+        | 'accountType'
+        | 'isGlobalAdmin'
+        | 'hasStaffRole'
+        | 'staffRoleCount'
+        | 'fullName'
+        | 'phone'
+        | 'educationLevel'
+        | 'institution'
+        | 'city'
+        | 'country'
+        | 'profileLinks'
+        | 'profileCompleteness'
+        | 'hasPhone'
+        | 'hasLinks'
+        | 'isDisabled'
+        | 'emailVerifiedAt'
+        | 'userCreatedAt'
+        | 'userUpdatedAt'
+        | 'totalApplicationsForUser'
+        | 'totalEventsForUser'
+        | 'lastApplicationAt'
+        | 'allEventSlugsForUser'
+        | 'allEventTitlesForUser'
+      > = {
+        userId: user.id,
+        email: user.email,
+        accountType: resolveAccountType({
           isGlobalAdmin: user.is_global_admin ?? false,
           hasStaffRole,
           applicationCount: userApplications.length,
         }),
-        user.is_global_admin ?? false,
+        isGlobalAdmin: user.is_global_admin ?? false,
         hasStaffRole,
         staffRoleCount,
-        fullName ?? '',
-        phone ?? '',
-        educationLevel ?? '',
-        institution ?? '',
-        city ?? '',
-        country ?? '',
-        this.formatProfileLinks(profile?.links),
+        fullName: fullName ?? '',
+        phone: phone ?? '',
+        educationLevel: educationLevel ?? '',
+        institution: institution ?? '',
+        city: city ?? '',
+        country: country ?? '',
+        profileLinks: this.formatProfileLinks(profile?.links),
         profileCompleteness,
         hasPhone,
         hasLinks,
-        user.is_disabled ?? false,
-        this.toIsoString(user.email_verified_at),
-        this.toIsoString(user.created_at),
-        this.toIsoString(user.updated_at),
-        userApplications.length,
-        allEventSlugs.length,
-        this.toIsoString(lastApplicationAt),
-        allEventSlugs.join(' | '),
-        allEventTitles.join(' | '),
-      ];
+        isDisabled: user.is_disabled ?? false,
+        emailVerifiedAt: this.toIsoString(user.email_verified_at),
+        userCreatedAt: this.toIsoString(user.created_at),
+        userUpdatedAt: this.toIsoString(user.updated_at),
+        totalApplicationsForUser: userApplications.length,
+        totalEventsForUser: allEventSlugs.length,
+        lastApplicationAt: this.toIsoString(lastApplicationAt),
+        allEventSlugsForUser: allEventSlugs.join(' | '),
+        allEventTitlesForUser: allEventTitles.join(' | '),
+      };
 
       if (userApplications.length === 0) {
+        const rowValues: Record<AdminUsersExportColumn, unknown> = {
+          ...sharedUserValues,
+          applicationId: '',
+          eventId: '',
+          eventSlug: '',
+          eventTitle: '',
+          eventStatus: '',
+          eventStartAt: '',
+          eventEndAt: '',
+          decisionStatus: '',
+          decisionPublishedAt: '',
+          derivedStatus: '',
+          tags: '',
+          stepStatuses: '',
+          uploadedFileCount: 0,
+          uploadedFileIds: '',
+          uploadedFiles: '',
+          applicationPath: '',
+          applicationUrl: '',
+          staffApplicationPath: '',
+          adminApplicationPath: '',
+          staffApplicationUrl: '',
+          adminApplicationUrl: '',
+          applicationCreatedAt: '',
+          applicationUpdatedAt: '',
+        };
         rows.push([
-          ...sharedUserColumns,
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          0,
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          ...responseColumnKeys.map(() => ''),
+          ...selectedColumns.map((column) => rowValues[column] ?? ''),
+          ...(includeResponseColumns ? responseColumnKeys.map(() => '') : []),
         ]);
         continue;
       }
@@ -1465,41 +1469,50 @@ export class AdminService {
           })
           .join(' | ');
 
-        const staffApplicationPath = `/staff/${application.event_id}/applications/${application.id}`;
-        const adminApplicationPath = `/admin/events/${application.event_id}/applications/${application.id}`;
+        const applicationLinks = buildApplicationPortalLinks({
+          eventId: application.event_id,
+          applicationId: application.id,
+          portal,
+          baseUrl: appBaseUrl,
+        });
         const responseValues = responseValuesByApplicationId.get(
           application.id,
         );
-
-        rows.push([
-          ...sharedUserColumns,
-          application.id,
-          application.event_id,
-          application.events?.slug ?? '',
-          application.events?.title ?? '',
-          application.events?.status ?? '',
-          this.toIsoString(application.events?.start_at),
-          this.toIsoString(application.events?.end_at),
-          application.decision_status,
-          this.toIsoString(application.decision_published_at),
-          this.calculateDerivedStatus(
+        const rowValues: Record<AdminUsersExportColumn, unknown> = {
+          ...sharedUserValues,
+          applicationId: application.id,
+          eventId: application.event_id,
+          eventSlug: application.events?.slug ?? '',
+          eventTitle: application.events?.title ?? '',
+          eventStatus: application.events?.status ?? '',
+          eventStartAt: this.toIsoString(application.events?.start_at),
+          eventEndAt: this.toIsoString(application.events?.end_at),
+          decisionStatus: application.decision_status,
+          decisionPublishedAt: this.toIsoString(application.decision_published_at),
+          derivedStatus: this.calculateDerivedStatus(
             application,
             application.application_step_states,
           ),
-          (application.tags ?? []).join(' | '),
+          tags: (application.tags ?? []).join(' | '),
           stepStatuses,
-          fileIds.length,
-          fileIds.join(' | '),
+          uploadedFileCount: fileIds.length,
+          uploadedFileIds: fileIds.join(' | '),
           uploadedFiles,
-          staffApplicationPath,
-          adminApplicationPath,
-          `${appBaseUrl}${staffApplicationPath}`,
-          `${appBaseUrl}${adminApplicationPath}`,
-          this.toIsoString(application.created_at),
-          this.toIsoString(application.updated_at),
-          ...responseColumnKeys.map(
-            (columnKey) => responseValues?.get(columnKey) ?? '',
-          ),
+          applicationPath: applicationLinks.applicationPath,
+          applicationUrl: applicationLinks.applicationUrl,
+          staffApplicationPath: applicationLinks.staffApplicationPath,
+          adminApplicationPath: applicationLinks.adminApplicationPath,
+          staffApplicationUrl: applicationLinks.staffApplicationUrl,
+          adminApplicationUrl: applicationLinks.adminApplicationUrl,
+          applicationCreatedAt: this.toIsoString(application.created_at),
+          applicationUpdatedAt: this.toIsoString(application.updated_at),
+        };
+
+        rows.push([
+          ...selectedColumns.map((column) => rowValues[column] ?? ''),
+          ...(includeResponseColumns
+            ? responseColumnKeys.map((columnKey) => responseValues?.get(columnKey) ?? '')
+            : []),
         ]);
       }
     }
@@ -1507,7 +1520,7 @@ export class AdminService {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     return {
       filename: `users-applications-${timestamp}.csv`,
-      csv: this.buildCsv(headers, rows),
+      csv: buildCsvContent(headers, rows),
     };
   }
 
@@ -2770,24 +2783,24 @@ export class AdminService {
   }
 
   private getAppBaseUrl(): string {
-    const baseUrl = process.env.APP_BASE_URL || 'http://localhost:3000';
-    return baseUrl.replace(/\/+$/, '');
+    return resolveAppBaseUrl(process.env);
   }
 
-  private csvEscape(value: unknown): string {
-    const normalized =
-      value === null || value === undefined ? '' : String(value);
-    return `"${normalized.replace(/"/g, '""')}"`;
-  }
-
-  private buildCsv(headers: string[], rows: unknown[][]): string {
-    const headerLine = headers
-      .map((header) => this.csvEscape(header))
-      .join(',');
-    const rowLines = rows.map((row) =>
-      row.map((cell) => this.csvEscape(cell)).join(','),
-    );
-    return [headerLine, ...rowLines].join('\n');
+  private resolveRequestedColumns<TColumn extends string>(
+    availableColumns: readonly TColumn[],
+    requestedColumns?: readonly TColumn[],
+  ): TColumn[] {
+    if (!requestedColumns || requestedColumns.length === 0) {
+      return [...availableColumns];
+    }
+    const allowedSet = new Set<string>(availableColumns);
+    const selected: TColumn[] = [];
+    for (const column of requestedColumns) {
+      if (allowedSet.has(column) && !selected.includes(column)) {
+        selected.push(column);
+      }
+    }
+    return selected.length > 0 ? selected : [...availableColumns];
   }
 
   private calculateDerivedStatus(

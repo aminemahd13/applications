@@ -13,7 +13,10 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { Permission } from '@event-platform/shared';
+import {
+  AdminUsersCsvExportQuerySchema,
+  Permission,
+} from '@event-platform/shared';
 import { AdminService } from './admin.service';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -59,15 +62,9 @@ export class AdminController {
 
   @Get('users/export')
   @RequirePermission(Permission.ADMIN_SEARCH_GLOBAL)
-  async exportUsers(
-    @Res() res: Response,
-    @Query('search') search?: string,
-    @Query('filter') filter?: string,
-  ) {
-    const result = await this.adminService.exportUsersCsv({
-      search: search || undefined,
-      filter: filter || undefined,
-    });
+  async exportUsers(@Res() res: Response, @Query() query: Record<string, unknown>) {
+    const dto = AdminUsersCsvExportQuerySchema.parse(query ?? {});
+    const result = await this.adminService.exportUsersCsv(dto);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',

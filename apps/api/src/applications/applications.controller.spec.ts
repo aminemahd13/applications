@@ -261,7 +261,11 @@ describe('ApplicationsController export query validation', () => {
     const { controller, applicationsService, res } = createController();
 
     await expect(
-      controller.exportCsv('event-1', 'not-a-uuid,still-bad', res as any),
+      controller.exportCsv(
+        'event-1',
+        { applicationIds: 'not-a-uuid,still-bad' } as any,
+        res as any,
+      ),
     ).rejects.toBeInstanceOf(ZodError);
     expect(applicationsService.exportEventApplicationsCsv).not.toHaveBeenCalled();
   });
@@ -270,11 +274,39 @@ describe('ApplicationsController export query validation', () => {
     const { controller, applicationsService, res } = createController();
     const id = '37a2125b-fdd0-42e2-a273-89d2f8010e4c';
 
-    await controller.exportCsv('event-1', `${id}, ${id}`, res as any);
+    await controller.exportCsv(
+      'event-1',
+      { applicationIds: `${id}, ${id}` } as any,
+      res as any,
+    );
 
     expect(applicationsService.exportEventApplicationsCsv).toHaveBeenCalledWith(
       'event-1',
-      [id],
+      expect.objectContaining({
+        applicationIds: [id],
+      }),
+    );
+  });
+
+  it('parses optional export config query values', async () => {
+    const { controller, applicationsService, res } = createController();
+    await controller.exportCsv(
+      'event-1',
+      {
+        columns: ['applicationId', 'applicationUrl', 'applicationId'],
+        includeResponseColumns: 'false',
+        portal: 'admin',
+      } as any,
+      res as any,
+    );
+
+    expect(applicationsService.exportEventApplicationsCsv).toHaveBeenCalledWith(
+      'event-1',
+      expect.objectContaining({
+        columns: ['applicationId', 'applicationUrl'],
+        includeResponseColumns: false,
+        portal: 'admin',
+      }),
     );
   });
 
@@ -290,7 +322,9 @@ describe('ApplicationsController export query validation', () => {
 
     expect(applicationsService.exportEventApplicationsCsv).toHaveBeenCalledWith(
       'event-1',
-      [id],
+      expect.objectContaining({
+        applicationIds: [id],
+      }),
     );
   });
 

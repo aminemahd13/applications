@@ -7,8 +7,21 @@ import {
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
 import { Prisma } from '@event-platform/db';
+import {
+  CHECKIN_EXPORT_COLUMNS,
+  type CheckinAttendeeStatus,
+  type CheckinAttendeesQueryDto,
+  type CheckinCsvExportRequestDto,
+  type CheckinExportColumn,
+  type CsvPortal,
+} from '@event-platform/shared';
 import * as jwt from 'jsonwebtoken';
 import { ApplicationsService } from '../applications/applications.service';
+import {
+  buildApplicationPortalLinks,
+  buildCsvContent,
+  resolveAppBaseUrl,
+} from '../common/utils/export-csv.util';
 
 @Injectable()
 export class CheckinService {
@@ -154,6 +167,340 @@ export class CheckinService {
         checkedInBy: r.users?.email ?? 'Unknown',
       })),
     };
+  }
+
+  /* ================================================================ */
+  /*  Attendees list + export                                          */
+  /* ================================================================ */
+
+  async listAttendees(eventId: string, query: CheckinAttendeesQueryDto) {
+    const event = await this.prisma.events.findUnique({
+      where: { id: eventId },
+      select: { id: true, slug: true, title: true },
+    });
+    if (!event) {
+      throw new NotFoundException('Event not found');
+    }
+
+    const page = Math.max(1, query.page ?? 1);
+    const pageSize = Math.min(Math.max(query.pageSize ?? 50, 1), 500);
+    const skip = (page - 1) * pageSize;
+    const appBaseUrl = this.getAppBaseUrl();
+    const portal: CsvPortal = 'staff';
+
+    const filters = {
+      status: query.status ?? 'all',
+      tags: query.tags,
+      search: query.search,
+    };
+    const listWhere = this.buildCheckinAttendeesWhere(eventId, filters);
+    const tagsWhere = this.buildCheckinAttendeesWhere(eventId, {
+      status: 'all',
+      search: query.search,
+    });
+
+    const [applications, total, checkedIn, notCheckedIn, tagRows] =
+      await Promise.all([
+        this.prisma.applications.findMany({
+          where: listWhere,
+          orderBy: [{ updated_at: 'desc' }, { id: 'asc' }],
+          skip,
+          take: pageSize,
+          select: this.buildCheckinAttendeeSelect(),
+        }),
+        this.prisma.applications.count({ where: listWhere }),
+        this.prisma.applications.count({
+          where: this.buildCheckinAttendeesWhere(eventId, {
+            ...filters,
+            status: 'checked_in',
+          }),
+        }),
+        this.prisma.applications.count({
+          where: this.buildCheckinAttendeesWhere(eventId, {
+            ...filters,
+            status: 'not_checked_in',
+          }),
+        }),
+        this.prisma.applications.findMany({
+          where: tagsWhere,
+          select: { tags: true },
+        }),
+      ]);
+
+    const availableTags = Array.from(
+      new Set(
+        tagRows.flatMap((row) =>
+          (row.tags ?? [])
+            .map((tag) => tag.trim())
+            .filter((tag) => tag.length > 0),
+        ),
+      ),
+    ).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+    return {
+      data: applications.map((application) =>
+        this.toCheckinExportRowValues({
+          application,
+          event,
+          portal,
+          appBaseUrl,
+        }),
+      ),
+      meta: {
+        page,
+        pageSize,
+        total,
+        checkedIn,
+        notCheckedIn,
+        availableTags,
+      },
+    };
+  }
+
+  async exportAttendeesCsv(
+    eventId: string,
+    body: CheckinCsvExportRequestDto,
+  ): Promise<{ filename: string; csv: string }> {
+    const event = await this.prisma.events.findUnique({
+      where: { id: eventId },
+      select: { id: true, slug: true, title: true },
+    });
+    if (!event) {
+      throw new NotFoundException('Event not found');
+    }
+
+    const portal: CsvPortal = body.portal === 'admin' ? 'admin' : 'staff';
+    const selectedColumns = this.resolveRequestedColumns(
+      CHECKIN_EXPORT_COLUMNS,
+      body.columns,
+    );
+    const where = this.buildCheckinAttendeesWhere(eventId, {
+      status: body.status ?? 'all',
+      tags: body.tags,
+      search: body.search,
+    });
+    const appBaseUrl = this.getAppBaseUrl();
+
+    const applications = await this.prisma.applications.findMany({
+      where,
+      orderBy: [{ updated_at: 'desc' }, { id: 'asc' }],
+      select: this.buildCheckinAttendeeSelect(),
+    });
+
+    const rows = applications.map((application) => {
+      const rowValues = this.toCheckinExportRowValues({
+        application,
+        event,
+        portal,
+        appBaseUrl,
+      });
+      return selectedColumns.map((column) => rowValues[column] ?? '');
+    });
+
+    return {
+      filename: `checkin-attendees-${this.toFilenameSafePart(event.slug || event.id)}.csv`,
+      csv: buildCsvContent([...selectedColumns], rows),
+    };
+  }
+
+  private buildCheckinAttendeeSelect(): Prisma.applicationsSelect {
+    return {
+      id: true,
+      event_id: true,
+      applicant_user_id: true,
+      decision_status: true,
+      tags: true,
+      created_at: true,
+      updated_at: true,
+      attendance_records: {
+        select: {
+          status: true,
+          checked_in_at: true,
+          checked_in_by: true,
+          users: { select: { email: true } },
+        },
+      },
+      users_applications_applicant_user_idTousers: {
+        select: {
+          email: true,
+          applicant_profiles: {
+            select: { first_name: true, last_name: true, full_name: true },
+          },
+        },
+      },
+    };
+  }
+
+  private buildCheckinAttendeesWhere(
+    eventId: string,
+    filters: {
+      status?: CheckinAttendeeStatus;
+      tags?: string[];
+      search?: string;
+    },
+  ): Prisma.applicationsWhereInput {
+    const andConditions: Prisma.applicationsWhereInput[] = [
+      { event_id: eventId },
+      {
+        attendance_records: {
+          is: {
+            status: { in: ['CONFIRMED', 'CHECKED_IN'] },
+          },
+        },
+      },
+    ];
+
+    if (filters.status === 'checked_in') {
+      andConditions.push({
+        attendance_records: { is: { status: 'CHECKED_IN' } },
+      });
+    } else if (filters.status === 'not_checked_in') {
+      andConditions.push({
+        attendance_records: { is: { status: 'CONFIRMED' } },
+      });
+    }
+
+    const tags = (filters.tags ?? [])
+      .map((tag) => tag.trim())
+      .filter((tag) => tag.length > 0);
+    if (tags.length > 0) {
+      andConditions.push({ tags: { hasEvery: tags } });
+    }
+
+    const search = filters.search?.trim();
+    if (search) {
+      const isUuid =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          search,
+        );
+      const orConditions: Prisma.applicationsWhereInput[] = [
+        {
+          users_applications_applicant_user_idTousers: {
+            email: { contains: search, mode: 'insensitive' },
+          },
+        },
+        {
+          users_applications_applicant_user_idTousers: {
+            applicant_profiles: {
+              full_name: { contains: search, mode: 'insensitive' },
+            },
+          },
+        },
+        {
+          users_applications_applicant_user_idTousers: {
+            applicant_profiles: {
+              first_name: { contains: search, mode: 'insensitive' },
+            },
+          },
+        },
+        {
+          users_applications_applicant_user_idTousers: {
+            applicant_profiles: {
+              last_name: { contains: search, mode: 'insensitive' },
+            },
+          },
+        },
+        {
+          users_applications_applicant_user_idTousers: {
+            applicant_profiles: {
+              phone: { contains: search, mode: 'insensitive' },
+            },
+          },
+        },
+      ];
+      if (isUuid) {
+        orConditions.push({ id: search }, { applicant_user_id: search });
+      }
+      andConditions.push({ OR: orConditions });
+    }
+
+    return andConditions.length === 1
+      ? andConditions[0]
+      : { AND: andConditions };
+  }
+
+  private toCheckinExportRowValues(input: {
+    application: any;
+    event: { id: string; slug: string; title: string };
+    portal: CsvPortal;
+    appBaseUrl: string;
+  }): Record<CheckinExportColumn, unknown> {
+    const { application, event, portal, appBaseUrl } = input;
+    const applicant = application.users_applications_applicant_user_idTousers;
+    const attendance = application.attendance_records;
+    const links = buildApplicationPortalLinks({
+      eventId: event.id,
+      applicationId: application.id,
+      portal,
+      baseUrl: appBaseUrl,
+    });
+    const applicantName =
+      ApplicationsService.getDisplayName(applicant?.applicant_profiles) ||
+      'Unknown attendee';
+    const attendanceStatus = attendance?.status ?? 'NONE';
+    const isCheckedIn = attendanceStatus === 'CHECKED_IN';
+
+    return {
+      applicationId: application.id,
+      eventId: event.id,
+      eventSlug: event.slug,
+      eventTitle: event.title,
+      applicantUserId: application.applicant_user_id,
+      applicantName,
+      applicantEmail: applicant?.email ?? '',
+      decisionStatus: application.decision_status,
+      attendanceStatus,
+      isCheckedIn,
+      checkedInAt: this.toIsoString(attendance?.checked_in_at),
+      checkedInByUserId: attendance?.checked_in_by ?? '',
+      checkedInByEmail: attendance?.users?.email ?? '',
+      tags: (application.tags ?? []).join(' | '),
+      applicationPath: links.applicationPath,
+      applicationUrl: links.applicationUrl,
+      staffApplicationPath: links.staffApplicationPath,
+      adminApplicationPath: links.adminApplicationPath,
+      staffApplicationUrl: links.staffApplicationUrl,
+      adminApplicationUrl: links.adminApplicationUrl,
+      applicationCreatedAt: this.toIsoString(application.created_at),
+      applicationUpdatedAt: this.toIsoString(application.updated_at),
+    };
+  }
+
+  private resolveRequestedColumns<TColumn extends string>(
+    availableColumns: readonly TColumn[],
+    requestedColumns?: readonly TColumn[],
+  ): TColumn[] {
+    if (!requestedColumns || requestedColumns.length === 0) {
+      return [...availableColumns];
+    }
+    const allowedSet = new Set<string>(availableColumns);
+    const selected: TColumn[] = [];
+    for (const column of requestedColumns) {
+      if (allowedSet.has(column) && !selected.includes(column)) {
+        selected.push(column);
+      }
+    }
+    return selected.length > 0 ? selected : [...availableColumns];
+  }
+
+  private toIsoString(value: unknown): string {
+    if (!value) return '';
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value === 'string') return value;
+    return '';
+  }
+
+  private getAppBaseUrl(): string {
+    return resolveAppBaseUrl(process.env);
+  }
+
+  private toFilenameSafePart(value: string): string {
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-');
+    const compact = normalized.replace(/-+/g, '-').replace(/^-|-$/g, '');
+    return compact || 'event';
   }
 
   /* ================================================================ */

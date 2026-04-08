@@ -1142,7 +1142,7 @@ describe('ApplicationsService CSV export', () => {
     expect(row).toContain('"Ada"');
     expect(row).toContain('"Lovelace"');
     expect(row).toContain('"2000-01-02T00:00:00.000Z"');
-    expect(row).toContain('"+212600000000"');
+    expect(row).toContain("\"'+212600000000\"");
     expect(row).toContain('"Bachelor"');
     expect(row).toContain('"UM5"');
     expect(row).toContain('"Rabat"');
@@ -1155,7 +1155,9 @@ describe('ApplicationsService CSV export', () => {
   it('applies selected application IDs filter for export', async () => {
     const { service, mockPrisma } = createService();
 
-    await service.exportEventApplicationsCsv('event-1', ['app-1']);
+    await service.exportEventApplicationsCsv('event-1', {
+      applicationIds: ['app-1'],
+    });
 
     expect(mockPrisma.applications.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1164,6 +1166,26 @@ describe('ApplicationsService CSV export', () => {
           id: { in: ['app-1'] },
         },
       }),
+    );
+  });
+
+  it('respects requested core columns and portal link selection', async () => {
+    const { service } = createService();
+
+    const result = await service.exportEventApplicationsCsv('event-1', {
+      columns: ['applicationId', 'applicationPath', 'applicationUrl'],
+      includeResponseColumns: false,
+      portal: 'admin',
+    });
+
+    const lines = result.csv.split('\n');
+    expect(lines[0]).toContain('"applicationId"');
+    expect(lines[0]).toContain('"applicationPath"');
+    expect(lines[0]).toContain('"applicationUrl"');
+    expect(lines[0]).not.toContain('"decisionStatus"');
+    expect(lines[1]).toContain('"/admin/events/event-1/applications/app-1"');
+    expect(lines[1]).toContain(
+      '"https://platform.example.com/admin/events/event-1/applications/app-1"',
     );
   });
 

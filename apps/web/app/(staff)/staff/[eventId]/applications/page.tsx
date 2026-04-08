@@ -101,9 +101,19 @@ import {
   type StepStatusFilterValue,
 } from "@/lib/applications-filters";
 import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
+import {
+  buildApplicationExportRequest,
+  filenameFromContentDisposition,
+  humanizeExportColumnKey,
+  resolvePortalFromPathname,
+} from "@/lib/export-payloads";
 import { toast } from "sonner";
 import { useAuth, usePermissions } from "@/lib/auth-context";
-import { Permission } from "@event-platform/shared";
+import {
+  APPLICATION_EXPORT_CORE_COLUMNS,
+  Permission,
+  type ApplicationExportCoreColumn,
+} from "@event-platform/shared";
 
 const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 const APPLICATIONS_PAGE_SIZE = 100;
@@ -305,26 +315,6 @@ function normalizeApplication(raw: Record<string, unknown>): Application {
   };
 }
 
-function filenameFromContentDisposition(
-  contentDisposition: string | null,
-  fallback: string
-): string {
-  if (!contentDisposition) return fallback;
-  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
-  if (utf8Match?.[1]) {
-    try {
-      return decodeURIComponent(utf8Match[1]);
-    } catch {
-      return utf8Match[1];
-    }
-  }
-  const quotedMatch = contentDisposition.match(/filename=\"([^\"]+)\"/i);
-  if (quotedMatch?.[1]) return quotedMatch[1];
-  const plainMatch = contentDisposition.match(/filename=([^;]+)/i);
-  if (plainMatch?.[1]) return plainMatch[1].trim();
-  return fallback;
-}
-
 export default function ApplicationsListPage() {
   const params = useParams();
   const router = useRouter();
@@ -346,6 +336,7 @@ export default function ApplicationsListPage() {
   const canStepOverride = hasPermission(Permission.EVENT_STEP_OVERRIDE_UNLOCK);
   const canStepReview = hasPermission(Permission.EVENT_STEP_REVIEW);
   const canUseBulkStepActions = canStepOverride || canStepReview;
+  const exportPortal = resolvePortalFromPathname(pathname ?? "");
 
   const [applications, setApplications] = useState<Application[]>([]);
   const [reviewers, setReviewers] = useState<ReviewerOption[]>([]);
@@ -356,6 +347,13 @@ export default function ApplicationsListPage() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [totalMatchingApplications, setTotalMatchingApplications] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [exportScope, setExportScope] = useState<"all" | "selected">("all");
+  const [exportColumns, setExportColumns] = useState<ApplicationExportCoreColumn[]>(
+    [...APPLICATION_EXPORT_CORE_COLUMNS],
+  );
+  const [includeResponseColumnsInExport, setIncludeResponseColumnsInExport] =
+    useState(true);
   const [isIssuingCredentials, setIsIssuingCredentials] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isApplyingBulk, setIsApplyingBulk] = useState(false);
@@ -1704,12 +1702,62 @@ export default function ApplicationsListPage() {
     );
   }
 
-  async function handleExport() {
+  function toggleExportColumn(column: ApplicationExportCoreColumn) {
+    setExportColumns((previous) =>
+      previous.includes(column)
+        ? previous.filter((value) => value !== column)
+        : [...previous, column],
+    );
+  }
+
+  function openExportDialog(scope: "all" | "selected") {
+    if (scope === "selected" && selectedApplicationIds.length === 0) {
+      toast.error("Select at least one application to export.");
+      return;
+    }
+    setExportScope(scope);
+    setShowExportDialog(true);
+  }
+
+  async function confirmExport() {
+    const selectedColumns = Array.from(
+      new Set(exportColumns.filter((column) => column.trim().length > 0)),
+    );
+    if (selectedColumns.length === 0) {
+      toast.error("Select at least one column to export.");
+      return;
+    }
+
+    const selectedIds =
+      exportScope === "selected" ? selectedApplicationIds : [];
+    if (exportScope === "selected" && selectedIds.length === 0) {
+      toast.error("Select at least one application to export.");
+      return;
+    }
+
+    setShowExportDialog(false);
     setIsExporting(true);
     try {
+      const body = buildApplicationExportRequest({
+        applicationIds: selectedIds,
+        columns: selectedColumns,
+        includeResponseColumns: includeResponseColumnsInExport,
+        portal: exportPortal,
+      });
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (csrfToken) {
+        headers["X-CSRF-Token"] = csrfToken;
+      }
       const res = await fetch(
         `${PUBLIC_API_URL}/events/${eventId}/applications/export`,
-        { credentials: "include" },
+        {
+          method: "POST",
+          credentials: "include",
+          headers,
+          body: JSON.stringify(body),
+        },
       );
       if (!res.ok) throw new Error("Export failed");
       const blob = await res.blob();
@@ -1718,13 +1766,23 @@ export default function ApplicationsListPage() {
       a.href = url;
       a.download = filenameFromContentDisposition(
         res.headers.get("content-disposition"),
-        `applications-${eventId}.csv`
+        exportScope === "selected"
+          ? `applications-selected-${eventId}.csv`
+          : `applications-${eventId}.csv`,
       );
       a.click();
       URL.revokeObjectURL(url);
-      toast.success("Applications CSV downloaded.");
+      if (exportScope === "selected") {
+        toast.success(`Exported ${selectedIds.length} application(s)`);
+      } else {
+        toast.success("Applications CSV downloaded.");
+      }
     } catch {
-      toast.error("Could not export applications.");
+      if (exportScope === "selected") {
+        toast.error("Could not export selected applications");
+      } else {
+        toast.error("Could not export applications.");
+      }
     } finally {
       setIsExporting(false);
     }
@@ -1936,44 +1994,6 @@ export default function ApplicationsListPage() {
       toast.error("Could not publish decisions");
     } finally {
       setIsPublishingDecisions(false);
-    }
-  }
-
-  async function handleExportSelected() {
-    if (selectedApplicationIds.length === 0) return;
-    setIsExporting(true);
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (csrfToken) {
-        headers["X-CSRF-Token"] = csrfToken;
-      }
-      const res = await fetch(
-        `${PUBLIC_API_URL}/events/${eventId}/applications/export`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers,
-          body: JSON.stringify({ applicationIds: selectedApplicationIds }),
-        },
-      );
-      if (!res.ok) throw new Error("Export failed");
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filenameFromContentDisposition(
-        res.headers.get("content-disposition"),
-        `applications-selected-${eventId}.csv`,
-      );
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.success(`Exported ${selectedApplicationIds.length} application(s)`);
-    } catch {
-      toast.error("Could not export selected applications");
-    } finally {
-      setIsExporting(false);
     }
   }
 
@@ -2300,7 +2320,7 @@ export default function ApplicationsListPage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={handleExport}
+          onClick={() => openExportDialog("all")}
           disabled={isExporting}
         >
           <Download className="mr-1.5 h-3.5 w-3.5" />
@@ -2682,6 +2702,87 @@ export default function ApplicationsListPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              {exportScope === "selected"
+                ? "Export selected applications"
+                : "Export applications CSV"}
+            </DialogTitle>
+            <DialogDescription>
+              Choose which columns to include in the CSV export.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 p-3">
+              <div>
+                <Label className="text-sm">Include dynamic response columns</Label>
+                <p className="text-xs text-muted-foreground">
+                  Add one column per form response field from workflow submissions.
+                </p>
+              </div>
+              <Switch
+                checked={includeResponseColumnsInExport}
+                onCheckedChange={setIncludeResponseColumnsInExport}
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-muted-foreground">
+                {exportColumns.length} column
+                {exportColumns.length === 1 ? "" : "s"} selected
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    setExportColumns([...APPLICATION_EXPORT_CORE_COLUMNS])
+                  }
+                >
+                  Select all
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setExportColumns([])}
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid max-h-80 gap-2 overflow-y-auto rounded-md border border-border/60 p-3 sm:grid-cols-2">
+              {APPLICATION_EXPORT_CORE_COLUMNS.map((column) => (
+                <label
+                  key={column}
+                  className="flex items-center gap-2 text-sm"
+                >
+                  <Checkbox
+                    checked={exportColumns.includes(column)}
+                    onCheckedChange={() => toggleExportColumn(column)}
+                  />
+                  <span>{humanizeExportColumnKey(column)}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowExportDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmExport} disabled={isExporting}>
+              {isExporting ? "Exporting..." : "Export CSV"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {selectedCount > 0 && (
         <Card>
           <CardContent className="p-3 flex flex-wrap items-center gap-2">
@@ -2748,7 +2849,7 @@ export default function ApplicationsListPage() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={handleExportSelected}
+                onClick={() => openExportDialog("selected")}
                 disabled={isExporting}
               >
                 <Download className="mr-1.5 h-3.5 w-3.5" />

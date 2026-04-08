@@ -1,8 +1,22 @@
-import { Controller, Post, Get, Body, Param, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  Param,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import type { Response } from 'express';
 import { CheckinService } from './checkin.service';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
-import { Permission } from '@event-platform/shared';
+import {
+  CheckinAttendeesQuerySchema,
+  CheckinCsvExportRequestSchema,
+  Permission,
+} from '@event-platform/shared';
 import { z } from 'zod';
 
 const ScanTicketSchema = z.object({
@@ -30,6 +44,33 @@ export class CheckinController {
   @RequirePermission(Permission.EVENT_CHECKIN_DASHBOARD_VIEW)
   async getRecent(@Param('eventId') eventId: string) {
     return this.checkinService.getRecent(eventId);
+  }
+
+  @Get('attendees')
+  @RequirePermission(Permission.EVENT_CHECKIN_DASHBOARD_VIEW)
+  async getAttendees(
+    @Param('eventId') eventId: string,
+    @Query() query: Record<string, unknown>,
+  ) {
+    const dto = CheckinAttendeesQuerySchema.parse(query ?? {});
+    return this.checkinService.listAttendees(eventId, dto);
+  }
+
+  @Post('export')
+  @RequirePermission(Permission.EVENT_CHECKIN_DASHBOARD_VIEW)
+  async exportAttendeesCsv(
+    @Param('eventId') eventId: string,
+    @Body() body: unknown,
+    @Res() res: Response,
+  ) {
+    const dto = CheckinCsvExportRequestSchema.parse(body ?? {});
+    const result = await this.checkinService.exportAttendeesCsv(eventId, dto);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${result.filename}"`,
+    );
+    res.send(result.csv);
   }
 
   @Post('scan')
