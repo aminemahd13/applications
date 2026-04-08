@@ -139,6 +139,55 @@ export class SubmissionsService {
     }
   }
 
+  async submitCurrentDraftAsStaff(
+    eventId: string,
+    applicationId: string,
+    stepId: string,
+  ): Promise<SubmissionVersionResponse> {
+    await this.ensureEventScope(eventId, applicationId, stepId);
+
+    const state = await this.stepStateService.getStepState(applicationId, stepId);
+    if (!state) {
+      throw new NotFoundException('Step state not found');
+    }
+
+    if (!state.currentDraftId) {
+      throw new BadRequestException('No draft found for this step');
+    }
+
+    if (state.latestSubmissionVersionId) {
+      throw new BadRequestException(
+        'Cannot submit draft for this step because a submission version already exists',
+      );
+    }
+
+    const draft = await this.prisma.step_drafts.findFirst({
+      where: {
+        id: state.currentDraftId,
+        application_id: applicationId,
+        step_id: stepId,
+      },
+      select: { answers_draft: true },
+    });
+
+    if (!draft) {
+      throw new BadRequestException('Current draft could not be found for this step');
+    }
+
+    const draftAnswers = this.normalizeAnswersShape(
+      draft.answers_draft as Record<string, any>,
+    );
+
+    return this.submitInternal({
+      eventId,
+      applicationId,
+      stepId,
+      answers: draftAnswers,
+      enforceApplicantOwnership: false,
+      enforceApplicantStepEditability: false,
+    });
+  }
+
   /**
    * Get current draft for a step
    */

@@ -1412,6 +1412,11 @@ export default function ApplicationDetailPage() {
 
   async function applyStepStatusAction(stepId: string, action: StepStatusAction) {
     if (!app) return;
+    const step = app.steps.find((entry) => entry.id === stepId);
+    if (!step) {
+      toast.error("Step not found.");
+      return;
+    }
 
     const isReviewAction =
       action === "SUBMITTED" ||
@@ -1426,8 +1431,34 @@ export default function ApplicationDetailPage() {
       return;
     }
 
+    const hasDraft = step.answersSource === "DRAFT";
+    const hasSubmissionVersion = Boolean(step.latestSubmissionVersionId);
+    const isDraftWithPreviousSubmission = hasDraft && hasSubmissionVersion;
+    const isDraftOnly = hasDraft && !hasSubmissionVersion;
+
+    if (action === "SUBMITTED" && isDraftWithPreviousSubmission) {
+      toast.error(
+        "Cannot submit this step because it has an older submission plus newer draft edits."
+      );
+      return;
+    }
+
     setStepActionInFlight({ stepId, action });
     try {
+      if (action === "SUBMITTED" && isDraftOnly) {
+        await apiClient(
+          `/events/${eventId}/applications/${app.id}/steps/${stepId}/submit-draft`,
+          {
+            method: "POST",
+            csrfToken: csrfToken ?? undefined,
+          }
+        );
+
+        toast.success("Draft submitted");
+        await Promise.all([loadApplication(true), loadNeedsInfo(), loadAudit()]);
+        return;
+      }
+
       const res = await apiClient<{ data?: { updated: number; skipped: number } }>(
         `/events/${eventId}/applications/bulk/step-action`,
         {
@@ -2141,6 +2172,15 @@ export default function ApplicationDetailPage() {
                   return !answeredFieldKeys.has(field.key) && fieldType !== "info_text";
                 });
                 const selectedAddField = addFieldSelections[step.id] || "__none__";
+                const hasDraft = step.answersSource === "DRAFT";
+                const hasSubmissionVersion = Boolean(step.latestSubmissionVersionId);
+                const isDraftWithPreviousSubmission = hasDraft && hasSubmissionVersion;
+                const canSubmitDraftOnly = hasDraft && !hasSubmissionVersion;
+                const canUseSubmittedAction =
+                  hasSubmissionVersion || canSubmitDraftOnly;
+                const hasAnyReviewAction =
+                  hasSubmissionVersion ||
+                  (canUseSubmittedAction && !isDraftWithPreviousSubmission);
                 return (
                   <Card key={step.id}>
                     <CardHeader>
@@ -2288,7 +2328,7 @@ export default function ApplicationDetailPage() {
                             }}
                             disabled={
                               stepActionInFlight !== null ||
-                              (!canStepOverride && !step.latestSubmissionVersionId)
+                              (!canStepOverride && !hasAnyReviewAction)
                             }
                           >
                             <SelectTrigger className="h-8 w-[190px]">
@@ -2298,7 +2338,10 @@ export default function ApplicationDetailPage() {
                               {canReviewSteps && (
                                 <SelectItem
                                   value="SUBMITTED"
-                                  disabled={!step.latestSubmissionVersionId}
+                                  disabled={
+                                    !canUseSubmittedAction ||
+                                    isDraftWithPreviousSubmission
+                                  }
                                 >
                                   Submitted
                                 </SelectItem>

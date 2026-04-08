@@ -752,4 +752,22 @@ export class ApplicationsController {
     );
     return { data: result };
   }
+
+  /**
+   * Submit the current staff draft for a step.
+   */
+  @Post(':applicationId/steps/:stepId/submit-draft')
+  @RequirePermission(Permission.EVENT_STEP_REVIEW)
+  async submitStaffStepDraft(
+    @Param('eventId') eventId: string,
+    @Param('applicationId') applicationId: string,
+    @Param('stepId') stepId: string,
+  ) {
+    const submission = await this.submissionsService.submitCurrentDraftAsStaff(
+      eventId,
+      applicationId,
+      stepId,
+    );
+    return { data: submission };
+  }
 }

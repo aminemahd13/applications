@@ -624,3 +624,174 @@ describe('SubmissionsService staff draft save with best-effort submit', () => {
     expect(prisma.step_drafts.create).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('SubmissionsService submitCurrentDraftAsStaff', () => {
+  function createSubmitDraftHarness(params?: {
+    state?: {
+      status: string;
+      currentDraftId: string | null;
+      latestSubmissionVersionId: string | null;
+    } | null;
+    draftAnswers?: Record<string, unknown> | null;
+    formSchema?: FormDefinition | undefined;
+  }) {
+    const state =
+      params?.state ??
+      ({
+        status: StepStatus.UNLOCKED,
+        currentDraftId: 'draft-1',
+        latestSubmissionVersionId: null,
+      } as const);
+
+    const tx = {
+      step_submission_versions: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: 'submission-1',
+          application_id: 'app-1',
+          step_id: 'step-1',
+          form_version_id: 'form-1',
+          version_number: 1,
+          answers_snapshot: { field: 'value' },
+          submitted_at: new Date('2026-01-01T10:00:00.000Z'),
+          submitted_by: 'staff-1',
+        }),
+      },
+      application_step_states: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+
+    const prisma = {
+      applications: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'app-1' }),
+        findUnique: jest.fn().mockResolvedValue({
+          event_id: 'event-1',
+          applicant_user_id: 'applicant-1',
+        }),
+      },
+      workflow_steps: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'step-1',
+          category: 'APPLICATION',
+          deadline_at: null,
+          form_version_id: 'form-1',
+          review_required: true,
+          allow_applicant_modification: false,
+          modification_scope: 'SUBMITTED_ONLY',
+        }),
+      },
+      step_drafts: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(
+            params?.draftAnswers === null
+              ? null
+              : { answers_draft: params?.draftAnswers ?? { field: 'value' } },
+          ),
+      },
+      form_versions: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'form-1',
+          schema: params?.formSchema,
+        }),
+      },
+      needs_info_requests: {
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      $transaction: jest.fn(async (cb: any) => cb(tx)),
+    };
+
+    const cls = {
+      get: jest.fn((key: string) =>
+        key === 'actorId' ? 'staff-1' : undefined,
+      ),
+    };
+
+    const stepStateService = {
+      getStepState: jest.fn().mockResolvedValue(state),
+      recomputeAllStepStates: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const filesService = {
+      validateAndCommit: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const service = new SubmissionsService(
+      prisma as any,
+      cls as any,
+      stepStateService as any,
+      filesService as any,
+      {} as any,
+    );
+
+    return { service };
+  }
+
+  it('submits when a current draft exists and no submission version exists', async () => {
+    const { service } = createSubmitDraftHarness();
+
+    await expect(
+      service.submitCurrentDraftAsStaff('event-1', 'app-1', 'step-1'),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        id: 'submission-1',
+        stepId: 'step-1',
+      }),
+    );
+  });
+
+  it('throws when no current draft exists', async () => {
+    const { service } = createSubmitDraftHarness({
+      state: {
+        status: StepStatus.UNLOCKED,
+        currentDraftId: null,
+        latestSubmissionVersionId: null,
+      },
+    });
+
+    await expect(
+      service.submitCurrentDraftAsStaff('event-1', 'app-1', 'step-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('throws when a latest submission version already exists', async () => {
+    const { service } = createSubmitDraftHarness({
+      state: {
+        status: StepStatus.SUBMITTED,
+        currentDraftId: 'draft-1',
+        latestSubmissionVersionId: 'submission-existing',
+      },
+    });
+
+    await expect(
+      service.submitCurrentDraftAsStaff('event-1', 'app-1', 'step-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('propagates validation errors from submit pipeline', async () => {
+    const { service } = createSubmitDraftHarness({
+      formSchema: {
+        sections: [
+          {
+            id: 'sec-1',
+            title: 'Info',
+            fields: [
+              {
+                id: 'info-1',
+                key: 'info_1',
+                type: FieldType.INFO_TEXT,
+                label: 'Read this',
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await expect(
+      service.submitCurrentDraftAsStaff('event-1', 'app-1', 'step-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});

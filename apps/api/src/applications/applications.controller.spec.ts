@@ -68,6 +68,7 @@ describe('ApplicationsController staff draft save endpoint', () => {
       saveDraftAsStaff: jest
         .fn()
         .mockResolvedValue({ mode: 'DRAFT_SAVED', draftId: 'draft-1' }),
+      submitCurrentDraftAsStaff: jest.fn(),
     };
     const cls = {};
     const prisma = {};
@@ -125,6 +126,66 @@ describe('ApplicationsController staff draft save endpoint', () => {
       ApplicationsController.prototype.saveStaffStepDraft,
     );
     expect(permissions).toEqual([Permission.EVENT_STEP_PATCH]);
+  });
+});
+
+describe('ApplicationsController staff draft submit endpoint', () => {
+  function createController() {
+    const applicationsService = {};
+    const stepStateService = {};
+    const submissionsService = {
+      saveDraftAsStaff: jest.fn(),
+      submitCurrentDraftAsStaff: jest.fn().mockResolvedValue({
+        id: 'submission-1',
+        applicationId: '37a2125b-fdd0-42e2-a273-89d2f8010e4c',
+        stepId: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
+        formVersionId: 'form-1',
+        versionNumber: 1,
+        answersSnapshot: { field: 'value' },
+        submittedAt: new Date('2026-01-01T10:00:00.000Z'),
+        submittedBy: 'staff-1',
+      }),
+    };
+    const cls = {};
+    const prisma = {};
+
+    const controller = new ApplicationsController(
+      applicationsService as any,
+      stepStateService as any,
+      submissionsService as any,
+      cls as any,
+      prisma as any,
+    );
+
+    return { controller, submissionsService };
+  }
+
+  it('delegates draft submit to submissions service', async () => {
+    const { controller, submissionsService } = createController();
+
+    await expect(
+      controller.submitStaffStepDraft(
+        'event-1',
+        '37a2125b-fdd0-42e2-a273-89d2f8010e4c',
+        'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
+      ),
+    ).resolves.toEqual({
+      data: expect.objectContaining({ id: 'submission-1' }),
+    });
+
+    expect(submissionsService.submitCurrentDraftAsStaff).toHaveBeenCalledWith(
+      'event-1',
+      '37a2125b-fdd0-42e2-a273-89d2f8010e4c',
+      'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
+    );
+  });
+
+  it('requires event.step.review permission metadata', () => {
+    const permissions = Reflect.getMetadata(
+      PERMISSIONS_KEY,
+      ApplicationsController.prototype.submitStaffStepDraft,
+    );
+    expect(permissions).toEqual([Permission.EVENT_STEP_REVIEW]);
   });
 });
 
