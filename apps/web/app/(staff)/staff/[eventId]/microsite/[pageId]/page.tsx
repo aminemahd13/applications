@@ -43,7 +43,6 @@ import {
   Minus,
   Search,
   Settings2,
-  CheckCircle2,
   AlertCircle,
   Trophy,
   Upload,
@@ -5041,7 +5040,6 @@ export default function MicrositePageEditor() {
   const [isMicrositePublished, setIsMicrositePublished] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
-  const [showChecklist, setShowChecklist] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const leftPanelRef = useRef<HTMLElement | null>(null);
   const rightPanelRef = useRef<HTMLElement | null>(null);
@@ -5071,70 +5069,6 @@ export default function MicrositePageEditor() {
     });
   }, [blocks, blockListQuery]);
   const isFilteringBlockList = blockListQuery.trim().length > 0;
-
-  const checklistItems = useMemo(() => {
-    const seoTitle = String(pageSeo.title ?? "").trim();
-    const seoDescription = String(pageSeo.description ?? "").trim();
-    const hasHero = blocks.some((block) => block.type === "HERO");
-    const hasCallToAction = blocks.some((block) => {
-      if (block.type === "CTA") return true;
-      if (block.type !== "HERO") return false;
-      const ctaHref = (block.data as { cta?: { href?: string } })?.cta?.href;
-      return typeof ctaHref === "string" && ctaHref.trim() !== "" && ctaHref.trim() !== "#";
-    });
-
-    return [
-      {
-        id: "title",
-        label: "Page title is set",
-        done: Boolean(page?.title?.trim()),
-        hint: "Give each page a descriptive title for navigation and SEO.",
-      },
-      {
-        id: "slug",
-        label: "Page slug is set",
-        done: Boolean(page?.slug?.trim()),
-        hint: "Use short, readable slugs.",
-      },
-      {
-        id: "content",
-        label: "Page has content blocks",
-        done: blocks.length > 0,
-        hint: "Add at least one section block before publishing.",
-      },
-      {
-        id: "hero",
-        label: "Hero section included",
-        done: hasHero,
-        hint: "Hero sections anchor the page and improve first impression.",
-      },
-      {
-        id: "cta",
-        label: "Call to action is present",
-        done: hasCallToAction,
-        hint: "Add a CTA block or hero CTA to guide visitors.",
-      },
-      {
-        id: "seo-title",
-        label: "SEO title added",
-        done: seoTitle.length >= 20,
-        hint: "Aim for at least 20 characters.",
-      },
-      {
-        id: "seo-description",
-        label: "SEO description added",
-        done: seoDescription.length >= 70,
-        hint: "Aim for around 70-160 characters.",
-      },
-      {
-        id: "visibility",
-        label: "Page is set to public",
-        done: page?.visibility === "PUBLIC",
-        hint: "Keep hidden until content is ready.",
-      },
-    ];
-  }, [blocks, page?.title, page?.slug, page?.visibility, pageSeo.description, pageSeo.title]);
-  const completedChecklistCount = checklistItems.filter((item) => item.done).length;
 
   const filteredCatalog = useMemo(() => {
     const q = catalogQuery.trim().toLowerCase();
@@ -5667,17 +5601,6 @@ export default function MicrositePageEditor() {
               <LayoutGrid className="mr-1.5 h-3.5 w-3.5" />
               Presets
             </Button>
-            <Button variant="outline" size="sm" className="shrink-0" onClick={() => setShowChecklist(true)}>
-              {completedChecklistCount === checklistItems.length ? (
-                <CheckCircle2 className="mr-1.5 h-3.5 w-3.5 text-success" />
-              ) : (
-                <AlertCircle className="mr-1.5 h-3.5 w-3.5 text-amber-500" />
-              )}
-              Checklist
-              <span className="ml-1.5 text-[11px] text-muted-foreground">
-                {completedChecklistCount}/{checklistItems.length}
-              </span>
-            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -6124,16 +6047,6 @@ export default function MicrositePageEditor() {
               <TabsContent value="page" className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden">
                 <ScrollArea className="h-full">
                   <div className="space-y-4 p-4">
-                    <div className="rounded-lg border bg-muted/30 p-3">
-                      <p className="text-sm font-semibold">Publishing Readiness</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {completedChecklistCount}/{checklistItems.length} checks complete
-                      </p>
-                      <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => setShowChecklist(true)}>
-                        Open checklist
-                      </Button>
-                    </div>
-
                     <div className="rounded-lg border p-3">
                       <p className="text-sm font-semibold">Page Actions</p>
                       <div className="mt-3 space-y-2">
@@ -6149,25 +6062,6 @@ export default function MicrositePageEditor() {
                           <Plus className="mr-2 h-3.5 w-3.5" />
                           Add new block
                         </Button>
-                      </div>
-                    </div>
-
-                    <div className="rounded-lg border p-3">
-                      <p className="text-sm font-semibold">Checklist Snapshot</p>
-                      <div className="mt-3 space-y-2">
-                        {checklistItems.map((item) => (
-                          <div key={item.id} className="flex items-start gap-2 rounded-md bg-muted/30 px-2.5 py-2">
-                            {item.done ? (
-                              <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
-                            ) : (
-                              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
-                            )}
-                            <div className="min-w-0">
-                              <p className="text-xs font-medium">{item.label}</p>
-                              <p className="text-[11px] text-muted-foreground">{item.hint}</p>
-                            </div>
-                          </div>
-                        ))}
                       </div>
                     </div>
                   </div>
@@ -6395,45 +6289,6 @@ export default function MicrositePageEditor() {
             <Button onClick={() => void save()} disabled={isSaving || !isDirty}>
               {isSaving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1.5 h-3.5 w-3.5" />}
               {isDirty ? "Save" : "Saved"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showChecklist} onOpenChange={setShowChecklist}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Page Checklist</DialogTitle>
-            <DialogDescription>
-              Validate key content and metadata before publishing.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
-            {checklistItems.map((item) => (
-              <div key={item.id} className="flex items-start justify-between gap-3 rounded-lg border p-3">
-                <div className="flex items-start gap-2">
-                  {item.done ? (
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 text-success shrink-0" />
-                  ) : (
-                    <AlertCircle className="mt-0.5 h-4 w-4 text-amber-500 shrink-0" />
-                  )}
-                  <div>
-                    <p className="text-sm font-medium">{item.label}</p>
-                    <p className="text-xs text-muted-foreground mt-1">{item.hint}</p>
-                  </div>
-                </div>
-                <Badge variant={item.done ? "outline" : "secondary"} className="text-[10px]">
-                  {item.done ? "Done" : "Needs attention"}
-                </Badge>
-              </div>
-            ))}
-          </div>
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-muted-foreground">
-              {completedChecklistCount}/{checklistItems.length} checks complete
-            </p>
-            <Button size="sm" variant="outline" onClick={() => setShowChecklist(false)}>
-              Close
             </Button>
           </div>
         </DialogContent>
