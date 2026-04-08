@@ -439,3 +439,185 @@ describe('SubmissionsService applicant modification scope behavior', () => {
     );
   });
 });
+
+describe('SubmissionsService staff draft save with best-effort submit', () => {
+  function createStaffDraftHarness(params?: {
+    state?: {
+      status: string;
+      currentDraftId: string | null;
+      latestSubmissionVersionId: string | null;
+    };
+    formSchema?: FormDefinition | undefined;
+    transactionError?: Error | null;
+  }) {
+    const stepState =
+      params?.state ?? {
+        status: StepStatus.UNLOCKED,
+        currentDraftId: null,
+        latestSubmissionVersionId: null,
+      };
+
+    const tx = {
+      step_submission_versions: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: 'submission-1',
+          application_id: 'app-1',
+          step_id: 'step-1',
+          form_version_id: 'form-1',
+          version_number: 1,
+          answers_snapshot: { field: 'value' },
+          submitted_at: new Date('2026-01-01T10:00:00.000Z'),
+          submitted_by: 'staff-1',
+        }),
+      },
+      application_step_states: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+
+    const prisma = {
+      applications: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'app-1' }),
+        findUnique: jest.fn().mockResolvedValue({
+          event_id: 'event-1',
+          applicant_user_id: 'applicant-1',
+        }),
+      },
+      workflow_steps: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'step-1',
+          category: 'APPLICATION',
+          deadline_at: null,
+          form_version_id: 'form-1',
+          review_required: true,
+          allow_applicant_modification: false,
+          modification_scope: 'SUBMITTED_ONLY',
+        }),
+      },
+      step_drafts: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'draft-1' }),
+        update: jest.fn(),
+      },
+      application_step_states: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      form_versions: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'form-1',
+          schema: params?.formSchema,
+        }),
+      },
+      needs_info_requests: {
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      $transaction: jest.fn(async (cb: any) => {
+        if (params?.transactionError) {
+          throw params.transactionError;
+        }
+        return cb(tx);
+      }),
+    };
+
+    const cls = {
+      get: jest.fn((key: string) =>
+        key === 'actorId' ? 'staff-1' : undefined,
+      ),
+    };
+
+    const stepStateService = {
+      getStepState: jest.fn().mockResolvedValue(stepState),
+      recomputeAllStepStates: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const filesService = {
+      validateAndCommit: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const service = new SubmissionsService(
+      prisma as any,
+      cls as any,
+      stepStateService as any,
+      filesService as any,
+      {} as any,
+    );
+
+    return { service, prisma, tx, stepStateService };
+  }
+
+  it('returns SUBMITTED for draft-only step when auto-submit succeeds', async () => {
+    const { service, tx } = createStaffDraftHarness({
+      formSchema: undefined,
+    });
+
+    const result = await service.saveDraftAsStaff('event-1', 'app-1', 'step-1', {
+      answers: { field: 'value' },
+    });
+
+    expect(result.mode).toBe('SUBMITTED');
+    expect(result.draftId).toBe('draft-1');
+    expect(result.submission?.submittedBy).toBe('staff-1');
+    expect(tx.step_submission_versions.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns DRAFT_SAVED when auto-submit fails validation', async () => {
+    const { service, prisma, tx } = createStaffDraftHarness({
+      formSchema: {
+        sections: [
+          {
+            id: 'sec-1',
+            title: 'Info',
+            fields: [
+              {
+                id: 'info-1',
+                key: 'info_1',
+                type: FieldType.INFO_TEXT,
+                label: 'Read this',
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const result = await service.saveDraftAsStaff('event-1', 'app-1', 'step-1', {
+      answers: { field: 'value' },
+    });
+
+    expect(result).toEqual({ mode: 'DRAFT_SAVED', draftId: 'draft-1' });
+    expect(tx.step_submission_versions.create).not.toHaveBeenCalled();
+    expect(prisma.step_drafts.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns DRAFT_SAVED without auto-submit when latest submission exists', async () => {
+    const { service, prisma } = createStaffDraftHarness({
+      state: {
+        status: StepStatus.SUBMITTED,
+        currentDraftId: null,
+        latestSubmissionVersionId: 'submission-existing',
+      },
+    });
+
+    const result = await service.saveDraftAsStaff('event-1', 'app-1', 'step-1', {
+      answers: { field: 'value' },
+    });
+
+    expect(result).toEqual({ mode: 'DRAFT_SAVED', draftId: 'draft-1' });
+    expect(prisma.applications.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('rethrows unexpected submit errors after draft save', async () => {
+    const { service, prisma } = createStaffDraftHarness({
+      transactionError: new Error('db failure'),
+    });
+
+    await expect(
+      service.saveDraftAsStaff('event-1', 'app-1', 'step-1', {
+        answers: { field: 'value' },
+      }),
+    ).rejects.toThrow('db failure');
+    expect(prisma.step_drafts.create).toHaveBeenCalledTimes(1);
+  });
+});

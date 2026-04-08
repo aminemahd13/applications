@@ -239,13 +239,23 @@ type FieldEditorKind =
   | "json";
 
 interface FieldEditTarget {
+  mode: "PATCH" | "STAFF_DRAFT";
   stepId: string;
   stepTitle: string;
-  versionId: string;
+  versionId: string | null;
+  stepAnswers: Record<string, unknown>;
   fieldKey: string;
   fieldLabel: string;
   field: StepFieldDefinition | null;
   currentValue: unknown;
+}
+
+interface StaffStepDraftSaveResult {
+  mode: "SUBMITTED" | "DRAFT_SAVED";
+  draftId: string;
+  submission?: {
+    id: string;
+  };
 }
 
 function parseInternalNotes(rawNotes: unknown): NoteEntry[] {
@@ -869,6 +879,7 @@ export default function ApplicationDetailPage() {
   const [stepActionSelections, setStepActionSelections] = useState<
     Record<string, StepStatusAction>
   >({});
+  const [addFieldSelections, setAddFieldSelections] = useState<Record<string, string>>({});
 
   // Audit state
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
@@ -1633,13 +1644,14 @@ export default function ApplicationDetailPage() {
     fieldKey: string,
     currentValue: unknown
   ) {
-    if (!step.latestSubmissionVersionId) return;
     const field = step.fieldDefinitions.find((entry) => entry.key === fieldKey) ?? null;
     const fieldLabel = field?.label ?? fieldKey;
     setFieldEditTarget({
+      mode: step.latestSubmissionVersionId ? "PATCH" : "STAFF_DRAFT",
       stepId: step.id,
       stepTitle: step.title,
       versionId: step.latestSubmissionVersionId,
+      stepAnswers: { ...(step.answers ?? {}) },
       fieldKey,
       fieldLabel,
       field,
@@ -1686,27 +1698,59 @@ export default function ApplicationDetailPage() {
       return;
     }
 
+    const nextAnswers = {
+      ...fieldEditTarget.stepAnswers,
+      [fieldEditTarget.fieldKey]: nextValue,
+    };
+    const hasExistingFieldValue = Object.prototype.hasOwnProperty.call(
+      fieldEditTarget.stepAnswers,
+      fieldEditTarget.fieldKey
+    );
+
     setIsApplyingFieldPatch(true);
     try {
-      await apiClient(
-        `/events/${eventId}/applications/${appId}/steps/${fieldEditTarget.stepId}/versions/${fieldEditTarget.versionId}/patches`,
-        {
-          method: "POST",
-          body: {
-            ops: [
-              {
-                op: "replace",
-                path: `/${escapeJsonPointerSegment(fieldEditTarget.fieldKey)}`,
-                value: nextValue,
-              },
-            ],
-            reason: fieldEditReason.trim(),
-            visibility: "INTERNAL_ONLY",
-          },
-          csrfToken: csrfToken ?? undefined,
+      if (fieldEditTarget.mode === "PATCH") {
+        if (!fieldEditTarget.versionId) {
+          toast.error("No submission version found for this field.");
+          return;
         }
-      );
-      toast.success("Application field updated and logged in audit.");
+        await apiClient(
+          `/events/${eventId}/applications/${appId}/steps/${fieldEditTarget.stepId}/versions/${fieldEditTarget.versionId}/patches`,
+          {
+            method: "POST",
+            body: {
+              ops: [
+                {
+                  op: hasExistingFieldValue ? "replace" : "add",
+                  path: `/${escapeJsonPointerSegment(fieldEditTarget.fieldKey)}`,
+                  value: nextValue,
+                },
+              ],
+              reason: fieldEditReason.trim(),
+              visibility: "INTERNAL_ONLY",
+            },
+            csrfToken: csrfToken ?? undefined,
+          }
+        );
+        toast.success("Application field updated and logged in audit.");
+      } else {
+        const res = await apiClient<
+          { data?: StaffStepDraftSaveResult } | StaffStepDraftSaveResult
+        >(`/events/${eventId}/applications/${appId}/steps/${fieldEditTarget.stepId}/draft`, {
+          method: "PATCH",
+          body: { answers: nextAnswers },
+          csrfToken: csrfToken ?? undefined,
+        });
+        const payload =
+          res && typeof res === "object" && "data" in res && res.data
+            ? (res.data as StaffStepDraftSaveResult)
+            : (res as StaffStepDraftSaveResult);
+        if (payload?.mode === "SUBMITTED") {
+          toast.success("Field updated and step submitted.");
+        } else {
+          toast.success("Field updated in draft (not submitted yet).");
+        }
+      }
       setFieldEditTarget(null);
       setFieldEditValue("");
       setFieldEditReason("");
@@ -2079,6 +2123,17 @@ export default function ApplicationDetailPage() {
                 const fieldDefinitionByKey = new Map(
                   step.fieldDefinitions.map((field) => [field.key, field])
                 );
+                const visibleAnswerEntries = step.answers
+                  ? getVisibleAnswerEntries(step.answers)
+                  : [];
+                const answeredFieldKeys = new Set(
+                  visibleAnswerEntries.map(([key]) => key)
+                );
+                const missingFieldOptions = step.fieldDefinitions.filter((field) => {
+                  const fieldType = normalizeFieldType(field.type);
+                  return !answeredFieldKeys.has(field.key) && fieldType !== "info_text";
+                });
+                const selectedAddField = addFieldSelections[step.id] || "__none__";
                 return (
                   <Card key={step.id}>
                     <CardHeader>
@@ -2104,10 +2159,10 @@ export default function ApplicationDetailPage() {
                         </p>
                       )}
                     </CardHeader>
-                    {step.answers && getVisibleAnswerEntries(step.answers).length > 0 && (
+                    {step.answers && visibleAnswerEntries.length > 0 && (
                       <CardContent>
                         <div className="space-y-3">
-                          {getVisibleAnswerEntries(step.answers).map(([key, val]) => {
+                          {visibleAnswerEntries.map(([key, val]) => {
                             const fieldDefinition = fieldDefinitionByKey.get(key);
                             const fieldLabel = fieldDefinition?.label ?? key;
                             const isRequired = requiredFieldKeys.has(key);
@@ -2131,7 +2186,7 @@ export default function ApplicationDetailPage() {
                                       </span>
                                     )}
                                   </p>
-                                  {canPatchSteps && step.latestSubmissionVersionId && (
+                                  {canPatchSteps && (
                                     <Button
                                       variant="ghost"
                                       size="sm"
@@ -2171,6 +2226,48 @@ export default function ApplicationDetailPage() {
                           : "No submission yet"}
                       </span>
                       <div className="flex flex-wrap items-center gap-2">
+                        {canPatchSteps && missingFieldOptions.length > 0 && (
+                          <>
+                            <Select
+                              value={selectedAddField}
+                              onValueChange={(value) =>
+                                setAddFieldSelections((prev) => ({
+                                  ...prev,
+                                  [step.id]: value === "__none__" ? "" : value,
+                                }))
+                              }
+                              disabled={stepActionInFlight !== null}
+                            >
+                              <SelectTrigger className="h-8 w-[190px]">
+                                <SelectValue placeholder="Pick field to add" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__none__">Pick field to add</SelectItem>
+                                {missingFieldOptions.map((field) => (
+                                  <SelectItem key={field.key} value={field.key}>
+                                    {field.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                if (!selectedAddField || selectedAddField === "__none__") return;
+                                const currentValue = step.answers?.[selectedAddField];
+                                openFieldPatchEditor(step, selectedAddField, currentValue);
+                              }}
+                              disabled={
+                                stepActionInFlight !== null ||
+                                selectedAddField === "__none__"
+                              }
+                            >
+                              <Plus className="mr-1.5 h-3.5 w-3.5" />
+                              Add field
+                            </Button>
+                          </>
+                        )}
                         {(canReviewSteps || canStepOverride) && (
                           <Select
                             value={stepActionSelections[step.id]}
@@ -2991,7 +3088,8 @@ export default function ApplicationDetailPage() {
           <DialogHeader>
             <DialogTitle>Edit application field</DialogTitle>
             <DialogDescription>
-              Make a staff-side correction to this answer.
+              Make a staff-side correction. Draft-only steps are saved first and
+              may auto-submit if the step is valid.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -3221,7 +3319,7 @@ export default function ApplicationDetailPage() {
               {isApplyingFieldPatch && (
                 <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
               )}
-              Apply patch
+              {fieldEditTarget?.mode === "PATCH" ? "Apply patch" : "Save change"}
             </Button>
           </DialogFooter>
         </DialogContent>

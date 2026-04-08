@@ -739,4 +739,28 @@ export class ApplicationsController {
     );
     return { data: submission };
   }
+
+  /**
+   * Save staff draft for an application step with best-effort auto-submit.
+   *
+   * Kept below `me/steps/:stepId/draft` to avoid matching applicant self routes
+   * with `applicationId = "me"`.
+   */
+  @Patch(':applicationId/steps/:stepId/draft')
+  @RequirePermission(Permission.EVENT_STEP_PATCH)
+  async saveStaffStepDraft(
+    @Param('eventId') eventId: string,
+    @Param('applicationId') applicationId: string,
+    @Param('stepId') stepId: string,
+    @Body() body: any,
+  ) {
+    const dto = SaveDraftSchema.parse(body);
+    const result = await this.submissionsService.saveDraftAsStaff(
+      eventId,
+      applicationId,
+      stepId,
+      dto,
+    );
+    return { data: result };
+  }
 }

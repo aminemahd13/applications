@@ -606,6 +606,12 @@ export interface SubmissionVersionResponse {
     submittedBy: string;
 }
 
+export interface StaffStepDraftUpdateResponse {
+    mode: 'SUBMITTED' | 'DRAFT_SAVED';
+    draftId: string;
+    submission?: SubmissionVersionResponse;
+}
+
 export interface EffectiveDataResponse {
     stepId: string;
     formVersionId: string;

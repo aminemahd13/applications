@@ -26,6 +26,12 @@ import {
 } from '@event-platform/schemas';
 import { isDeepStrictEqual } from 'node:util';
 
+export interface StaffStepDraftUpdateResponse {
+  mode: 'SUBMITTED' | 'DRAFT_SAVED';
+  draftId: string;
+  submission?: SubmissionVersionResponse;
+}
+
 @Injectable()
 export class SubmissionsService {
   constructor(
@@ -72,56 +78,69 @@ export class SubmissionsService {
         step.allow_applicant_modification,
         step.modification_scope,
       )
-    ) {
+      ) {
       throw new ForbiddenException('Step is not open for editing');
     }
 
-    if (!step.form_version_id) {
-      if (step.category === 'INFO_ONLY') {
-        // Info-only steps intentionally do not persist answer drafts.
-        await this.prisma.application_step_states.updateMany({
-          where: { application_id: applicationId, step_id: stepId },
-          data: { last_activity_at: new Date() },
-        });
-        return { draftId: state.currentDraftId ?? '' };
-      }
+    return this.upsertDraftForStep(applicationId, stepId, normalizedAnswers, {
+      category: step.category,
+      formVersionId: step.form_version_id,
+      currentDraftId: state.currentDraftId ?? null,
+    });
+  }
 
-      throw new BadRequestException('Step has no form attached');
+  async saveDraftAsStaff(
+    eventId: string,
+    applicationId: string,
+    stepId: string,
+    dto: SaveDraftDto,
+  ): Promise<StaffStepDraftUpdateResponse> {
+    await this.ensureEventScope(eventId, applicationId, stepId);
+    const normalizedAnswers = this.normalizeAnswersShape(dto.answers);
+
+    const state = await this.stepStateService.getStepState(applicationId, stepId);
+    if (!state) throw new NotFoundException('Step state not found');
+
+    const step = await this.prisma.workflow_steps.findFirst({
+      where: { id: stepId, event_id: eventId },
+      select: {
+        category: true,
+        form_version_id: true,
+      },
+    });
+    if (!step) {
+      throw new NotFoundException('Step not found');
     }
 
-    // Upsert draft
-    let draft = await this.prisma.step_drafts.findFirst({
-      where: { application_id: applicationId, step_id: stepId },
+    const draft = await this.upsertDraftForStep(applicationId, stepId, normalizedAnswers, {
+      category: step.category,
+      formVersionId: step.form_version_id,
+      currentDraftId: state.currentDraftId ?? null,
     });
 
-    if (draft) {
-      draft = await this.prisma.step_drafts.update({
-        where: { id: draft.id },
-        data: {
-          answers_draft: normalizedAnswers,
-          form_version_id: step.form_version_id,
-          updated_at: new Date(),
-        },
-      });
-    } else {
-      draft = await this.prisma.step_drafts.create({
-        data: {
-          id: crypto.randomUUID(),
-          application_id: applicationId,
-          step_id: stepId,
-          form_version_id: step.form_version_id,
-          answers_draft: normalizedAnswers,
-        },
-      });
-
-      // Link draft to step state
-      await this.prisma.application_step_states.updateMany({
-        where: { application_id: applicationId, step_id: stepId },
-        data: { current_draft_id: draft.id },
-      });
+    if (state.latestSubmissionVersionId) {
+      return { mode: 'DRAFT_SAVED', draftId: draft.draftId };
     }
 
-    return { draftId: draft.id };
+    try {
+      const submission = await this.submitInternal({
+        eventId,
+        applicationId,
+        stepId,
+        answers: normalizedAnswers,
+        enforceApplicantOwnership: false,
+        enforceApplicantStepEditability: false,
+      });
+      return { mode: 'SUBMITTED', draftId: draft.draftId, submission };
+    } catch (error) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof ForbiddenException
+      ) {
+        return { mode: 'DRAFT_SAVED', draftId: draft.draftId };
+      }
+      throw error;
+    }
   }
 
   /**
@@ -149,8 +168,27 @@ export class SubmissionsService {
     stepId: string,
     dto: SubmitStepDto,
   ): Promise<SubmissionVersionResponse> {
+    return this.submitInternal({
+      eventId,
+      applicationId,
+      stepId,
+      answers: dto.answers,
+      enforceApplicantOwnership: true,
+      enforceApplicantStepEditability: true,
+    });
+  }
+
+  private async submitInternal(params: {
+    eventId: string;
+    applicationId: string;
+    stepId: string;
+    answers: Record<string, any>;
+    enforceApplicantOwnership: boolean;
+    enforceApplicantStepEditability: boolean;
+  }): Promise<SubmissionVersionResponse> {
     const userId = this.cls.get('actorId');
-    const normalizedAnswers = this.normalizeAnswersShape(dto.answers);
+    const { eventId, applicationId, stepId } = params;
+    const normalizedAnswers = this.normalizeAnswersShape(params.answers);
     let answersForSubmission = normalizedAnswers;
 
     // Verify application belongs to event
@@ -162,7 +200,10 @@ export class SubmissionsService {
     if (!application) throw new NotFoundException('Application not found');
     if (application.event_id !== eventId)
       throw new ForbiddenException('Application does not belong to this event');
-    if (application.applicant_user_id !== userId) {
+    if (
+      params.enforceApplicantOwnership &&
+      application.applicant_user_id !== userId
+    ) {
       throw new ForbiddenException('Cannot submit for another applicant');
     }
 
@@ -193,6 +234,7 @@ export class SubmissionsService {
     }
 
     if (
+      params.enforceApplicantStepEditability &&
       !canApplicantEditStep(
         state.status,
         step.allow_applicant_modification,
@@ -379,6 +421,64 @@ export class SubmissionsService {
       submittedAt: submission.submitted_at,
       submittedBy: submission.submitted_by,
     };
+  }
+
+  private async upsertDraftForStep(
+    applicationId: string,
+    stepId: string,
+    normalizedAnswers: Record<string, any>,
+    params: {
+      category: string;
+      formVersionId: string | null;
+      currentDraftId: string | null;
+    },
+  ): Promise<{ draftId: string }> {
+    if (!params.formVersionId) {
+      if (params.category === 'INFO_ONLY') {
+        // Info-only steps intentionally do not persist answer drafts.
+        await this.prisma.application_step_states.updateMany({
+          where: { application_id: applicationId, step_id: stepId },
+          data: { last_activity_at: new Date() },
+        });
+        return { draftId: params.currentDraftId ?? '' };
+      }
+
+      throw new BadRequestException('Step has no form attached');
+    }
+
+    // Upsert draft
+    let draft = await this.prisma.step_drafts.findFirst({
+      where: { application_id: applicationId, step_id: stepId },
+    });
+
+    if (draft) {
+      draft = await this.prisma.step_drafts.update({
+        where: { id: draft.id },
+        data: {
+          answers_draft: normalizedAnswers,
+          form_version_id: params.formVersionId,
+          updated_at: new Date(),
+        },
+      });
+    } else {
+      draft = await this.prisma.step_drafts.create({
+        data: {
+          id: crypto.randomUUID(),
+          application_id: applicationId,
+          step_id: stepId,
+          form_version_id: params.formVersionId,
+          answers_draft: normalizedAnswers,
+        },
+      });
+
+      // Link draft to step state
+      await this.prisma.application_step_states.updateMany({
+        where: { application_id: applicationId, step_id: stepId },
+        data: { current_draft_id: draft.id },
+      });
+    }
+
+    return { draftId: draft.id };
   }
 
   /**
