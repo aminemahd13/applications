@@ -118,10 +118,6 @@ export class SubmissionsService {
       currentDraftId: state.currentDraftId ?? null,
     });
 
-    if (state.latestSubmissionVersionId) {
-      return { mode: 'DRAFT_SAVED', draftId: draft.draftId };
-    }
-
     try {
       const submission = await this.submitInternal({
         eventId,

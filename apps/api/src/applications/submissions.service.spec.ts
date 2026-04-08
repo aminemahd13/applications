@@ -591,8 +591,8 @@ describe('SubmissionsService staff draft save with best-effort submit', () => {
     expect(prisma.step_drafts.create).toHaveBeenCalledTimes(1);
   });
 
-  it('returns DRAFT_SAVED without auto-submit when latest submission exists', async () => {
-    const { service, prisma } = createStaffDraftHarness({
+  it('returns SUBMITTED when latest submission exists and resubmit succeeds', async () => {
+    const { service, prisma, tx } = createStaffDraftHarness({
       state: {
         status: StepStatus.SUBMITTED,
         currentDraftId: null,
@@ -604,8 +604,11 @@ describe('SubmissionsService staff draft save with best-effort submit', () => {
       answers: { field: 'value' },
     });
 
-    expect(result).toEqual({ mode: 'DRAFT_SAVED', draftId: 'draft-1' });
-    expect(prisma.applications.findUnique).not.toHaveBeenCalled();
+    expect(result.mode).toBe('SUBMITTED');
+    expect(result.draftId).toBe('draft-1');
+    expect(result.submission?.id).toBe('submission-1');
+    expect(prisma.applications.findUnique).toHaveBeenCalledTimes(1);
+    expect(tx.step_submission_versions.create).toHaveBeenCalledTimes(1);
   });
 
   it('rethrows unexpected submit errors after draft save', async () => {

@@ -1646,8 +1646,15 @@ export default function ApplicationDetailPage() {
   ) {
     const field = step.fieldDefinitions.find((entry) => entry.key === fieldKey) ?? null;
     const fieldLabel = field?.label ?? fieldKey;
+    const hasExistingFieldValue = Object.prototype.hasOwnProperty.call(
+      step.answers ?? {},
+      fieldKey
+    );
     setFieldEditTarget({
-      mode: step.latestSubmissionVersionId ? "PATCH" : "STAFF_DRAFT",
+      mode:
+        step.latestSubmissionVersionId && hasExistingFieldValue
+          ? "PATCH"
+          : "STAFF_DRAFT",
       stepId: step.id,
       stepTitle: step.title,
       versionId: step.latestSubmissionVersionId,
@@ -3088,8 +3095,8 @@ export default function ApplicationDetailPage() {
           <DialogHeader>
             <DialogTitle>Edit application field</DialogTitle>
             <DialogDescription>
-              Make a staff-side correction. Draft-only steps are saved first and
-              may auto-submit if the step is valid.
+              Make a staff-side correction. Draft edits are saved first and may
+              auto-submit when the step is valid.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
