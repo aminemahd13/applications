@@ -1,4 +1,5 @@
 import { apiClient } from "@/lib/api";
+import { optimizeMicrositeImageForUpload } from "@/lib/microsite-image-optimizer";
 
 export type MicrositeMediaItem = {
   id: string;
@@ -23,6 +24,8 @@ export async function uploadMicrositeAsset(
   file: File,
   csrfToken?: string,
 ): Promise<string> {
+  const uploadFile = await optimizeMicrositeImageForUpload(file);
+
   const upload = await apiClient<{
     id: string;
     uploadUrl: string;
@@ -30,9 +33,9 @@ export async function uploadMicrositeAsset(
   }>(`/admin/events/${eventId}/microsite/media/uploads`, {
     method: "POST",
     body: {
-      originalFilename: file.name,
-      mimeType: file.type || "application/octet-stream",
-      sizeBytes: file.size,
+      originalFilename: uploadFile.name,
+      mimeType: uploadFile.type || "application/octet-stream",
+      sizeBytes: uploadFile.size,
     },
     csrfToken,
   });
@@ -40,9 +43,9 @@ export async function uploadMicrositeAsset(
   const putRes = await fetch(upload.uploadUrl, {
     method: "PUT",
     headers: {
-      "Content-Type": file.type || "application/octet-stream",
+      "Content-Type": uploadFile.type || "application/octet-stream",
     },
-    body: file,
+    body: uploadFile,
   });
 
   if (!putRes.ok) {

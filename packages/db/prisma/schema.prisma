@@ -285,6 +285,10 @@ model file_objects {
   created_at          DateTime              @default(now()) @db.Timestamptz(6)
   expires_at          DateTime?             @db.Timestamptz(6)
   status              String                @default("STAGED")
+  media_optimization_status     String      @default("DONE")
+  media_optimization_attempts   Int         @default(0)
+  media_optimized_at            DateTime?   @db.Timestamptz(6)
+  media_optimization_last_error String?
   field_verifications field_verifications[]
   users               users                 @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   events              events                @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)

@@ -229,6 +229,55 @@ export class StorageService implements OnModuleInit {
     return await this.s3Client.send(command);
   }
 
+  async getObjectBuffer(key: string): Promise<Buffer> {
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+    });
+    const result = await this.s3Client.send(command);
+    const body = result.Body as
+      | AsyncIterable<Uint8Array>
+      | { transformToByteArray?: () => Promise<Uint8Array> }
+      | undefined;
+
+    if (!body) {
+      throw new Error('Storage object body is not readable');
+    }
+
+    const bodyWithTransform = body as {
+      transformToByteArray?: () => Promise<Uint8Array>;
+    };
+    if (typeof bodyWithTransform.transformToByteArray === 'function') {
+      const bytes = await bodyWithTransform.transformToByteArray();
+      return Buffer.from(bytes);
+    }
+
+    if (!(Symbol.asyncIterator in body)) {
+      throw new Error('Storage object body is not readable');
+    }
+
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of body) {
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+  }
+
+  async putObjectBuffer(
+    key: string,
+    body: Buffer,
+    contentType: string,
+  ): Promise<void> {
+    const command = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      ContentLength: body.byteLength,
+    });
+    await this.s3Client.send(command);
+  }
+
   async deleteObject(key: string): Promise<void> {
     const command = new DeleteObjectCommand({
       Bucket: this.bucket,

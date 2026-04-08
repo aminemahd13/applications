@@ -84,7 +84,10 @@ export class MicrositeMediaService {
       throw new ForbiddenException('Access denied');
     }
 
-    if (file.status === 'COMMITTED') return file;
+    if (file.status === 'COMMITTED') {
+      await this.ensureCommittedOptimizationState(file.id, file.mime_type);
+      return file;
+    }
 
     let head;
     try {
@@ -96,7 +99,10 @@ export class MicrositeMediaService {
     if (!head) throw new BadRequestException('File not found in storage');
 
     const actualSize = head.ContentLength || 0;
-    const actualMime = head.ContentType || 'application/octet-stream';
+    const actualMime = this.normalizeMimeType(
+      head.ContentType || 'application/octet-stream',
+    );
+    const expectedMime = this.normalizeMimeType(file.mime_type);
 
     const MAX_SIZE = 150 * 1024 * 1024;
     if (actualSize > MAX_SIZE) {
@@ -104,10 +110,10 @@ export class MicrositeMediaService {
       throw new BadRequestException('File too large (Max 150MB).');
     }
 
-    if (actualMime !== file.mime_type) {
+    if (actualMime !== expectedMime) {
       await this.cleanupFailedUpload(file.storage_key, fileId);
       throw new BadRequestException(
-        `File type mismatch. Expected ${file.mime_type}, got ${actualMime}`,
+        `File type mismatch. Expected ${expectedMime}, got ${actualMime}`,
       );
     }
 
@@ -123,15 +129,33 @@ export class MicrositeMediaService {
     }
 
     const sha256 = await this.storageService.computeSha256(file.storage_key);
+    const optimizationStatus = actualMime.startsWith('image/') ? 'PENDING' : 'DONE';
 
-    return this.prisma.file_objects.update({
-      where: { id: fileId },
-      data: {
-        status: 'COMMITTED',
-        size_bytes: BigInt(actualSize),
-        expires_at: null,
-        sha256,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const committed = await tx.file_objects.update({
+        where: { id: fileId },
+        data: {
+          status: 'COMMITTED',
+          size_bytes: BigInt(actualSize),
+          expires_at: null,
+          sha256,
+        },
+      });
+
+      await tx.$executeRawUnsafe(
+        `
+        UPDATE "file_objects"
+        SET "media_optimization_status" = $2,
+            "media_optimization_attempts" = 0,
+            "media_optimized_at" = CASE WHEN $2 = 'DONE' THEN NOW() ELSE NULL END,
+            "media_optimization_last_error" = NULL
+        WHERE "id" = $1
+        `,
+        fileId,
+        optimizationStatus,
+      );
+
+      return committed;
     });
   }
 
@@ -229,5 +253,52 @@ export class MicrositeMediaService {
       // ignore
     }
     await this.prisma.file_objects.delete({ where: { id: fileId } });
+  }
+
+  private normalizeMimeType(rawMimeType: string | undefined): string {
+    const normalized = String(rawMimeType ?? 'application/octet-stream')
+      .trim()
+      .toLowerCase();
+    if (normalized === 'image/jpg' || normalized === 'image/pjpeg') {
+      return 'image/jpeg';
+    }
+    return normalized;
+  }
+
+  private async ensureCommittedOptimizationState(
+    fileId: string,
+    rawMimeType: string | undefined,
+  ): Promise<void> {
+    const isImage = this.normalizeMimeType(rawMimeType).startsWith('image/');
+    if (isImage) {
+      await this.prisma.$executeRawUnsafe(
+        `
+        UPDATE "file_objects"
+        SET "media_optimization_status" = 'PENDING',
+            "media_optimization_attempts" = 0,
+            "media_optimized_at" = NULL,
+            "media_optimization_last_error" = NULL
+        WHERE "id" = $1
+          AND "status" = 'COMMITTED'
+          AND "media_optimization_status" = 'DONE'
+          AND "media_optimized_at" IS NULL
+        `,
+        fileId,
+      );
+      return;
+    }
+
+    await this.prisma.$executeRawUnsafe(
+      `
+      UPDATE "file_objects"
+      SET "media_optimization_status" = 'DONE',
+          "media_optimized_at" = COALESCE("media_optimized_at", NOW()),
+          "media_optimization_last_error" = NULL
+      WHERE "id" = $1
+        AND "status" = 'COMMITTED'
+        AND "media_optimization_status" <> 'PROCESSING'
+      `,
+      fileId,
+    );
   }
 }
