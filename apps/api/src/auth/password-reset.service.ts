@@ -10,6 +10,7 @@ import * as crypto from 'crypto';
 import * as argon2 from 'argon2';
 
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
+const STAFF_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const HEX_TOKEN_RE = /^[a-f0-9]{64}$/i;
 
@@ -23,6 +24,7 @@ export class PasswordResetService {
 
   private async createPasswordResetToken(
     userId: string,
+    ttlMs = PASSWORD_RESET_TTL_MS,
   ): Promise<{ token: string; expiresAt: Date }> {
     // Invalidate previous unused tokens for this user
     await this.prisma.password_reset_tokens.updateMany({
@@ -43,7 +45,7 @@ export class PasswordResetService {
       .digest('hex');
 
     // Store hashed token
-    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
+    const expiresAt = new Date(Date.now() + ttlMs);
 
     await this.prisma.password_reset_tokens.create({
       data: {
@@ -110,6 +112,7 @@ export class PasswordResetService {
     try {
       const { token: rawToken, expiresAt } = await this.createPasswordResetToken(
         params.userId,
+        STAFF_INVITE_TTL_MS,
       );
       await this.emailService.sendStaffInvite(normalizedEmail, rawToken, {
         userName: params.userName,

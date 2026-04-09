@@ -813,7 +813,7 @@ export default function RolesPage() {
                       An invitation email will be sent so they can set a
                       password and activate staff access.
                     </p>
-                    <p>The link expires in 1 hour.</p>
+                    <p>The link expires in 1 week.</p>
                   </AlertDescription>
                 </Alert>
               )

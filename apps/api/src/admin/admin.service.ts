@@ -22,6 +22,8 @@ import {
   resolveAppBaseUrl,
 } from '../common/utils/export-csv.util';
 
+const STAFF_INVITE_FALLBACK_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
+
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
@@ -2018,7 +2020,7 @@ export class AdminService {
         inviteLastSentAt: inviteResult.invitationSent ? attemptedAt : null,
         inviteLastExpiresAt: inviteResult.invitationSent
           ? inviteResult.expiresAt ??
-            new Date(attemptedAt.getTime() + 60 * 60 * 1000)
+            new Date(attemptedAt.getTime() + STAFF_INVITE_FALLBACK_TTL_MS)
           : null,
       };
     };
@@ -2310,7 +2312,7 @@ export class AdminService {
         inviteLastExpiresAt: inviteResult.invitationSent
           ? (
               inviteResult.expiresAt ??
-              new Date(attemptedAt.getTime() + 60 * 60 * 1000)
+              new Date(attemptedAt.getTime() + STAFF_INVITE_FALLBACK_TTL_MS)
             ).toISOString()
           : null,
       };
@@ -2354,7 +2356,7 @@ export class AdminService {
         invite_last_sent_at: inviteResult.invitationSent ? attemptedAt : null,
         invite_last_expires_at: inviteResult.invitationSent
           ? inviteResult.expiresAt ??
-            new Date(attemptedAt.getTime() + 60 * 60 * 1000)
+            new Date(attemptedAt.getTime() + STAFF_INVITE_FALLBACK_TTL_MS)
           : null,
         invite_resend_count: { increment: 1 },
       },

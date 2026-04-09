@@ -277,7 +277,7 @@ export class EmailService implements OnModuleInit {
                     <p style="text-align:center;margin:32px 0;">
                         <a href="${inviteUrl}" style="display:inline-block;padding:12px 32px;background:#2563eb;color:#fff;text-decoration:none;border-radius:6px;font-weight:500;">Set Password</a>
                     </p>
-                    <p style="color:#64748b;font-size:14px;">This link expires in 1 hour. If you were not expecting this invite, you can safely ignore this email.</p>
+                    <p style="color:#64748b;font-size:14px;">This link expires in 1 week. If you were not expecting this invite, you can safely ignore this email.</p>
                 </div>
             `,
     });
