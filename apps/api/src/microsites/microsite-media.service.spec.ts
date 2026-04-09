@@ -61,7 +61,7 @@ describe('MicrositeMediaService', () => {
     await service.commitUpload('event-1', 'file-1');
 
     expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
-      expect.stringContaining('"media_optimization_status" = $2'),
+      expect.stringContaining('WHERE "id" = $1::uuid'),
       'file-1',
       'PENDING',
     );
@@ -88,7 +88,7 @@ describe('MicrositeMediaService', () => {
     await service.commitUpload('event-1', 'file-2');
 
     expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
-      expect.stringContaining('"media_optimization_status" = $2'),
+      expect.stringContaining('WHERE "id" = $1::uuid'),
       'file-2',
       'DONE',
     );
@@ -111,7 +111,7 @@ describe('MicrositeMediaService', () => {
     expect(storage.getHeadObject).not.toHaveBeenCalled();
     expect(prisma.file_objects.update).not.toHaveBeenCalled();
     expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
-      expect.stringContaining('"media_optimization_status" = \'PENDING\''),
+      expect.stringContaining('WHERE "id" = $1::uuid'),
       'file-3',
     );
     expect(result).toMatchObject({ id: 'file-3', status: 'COMMITTED' });

@@ -137,7 +137,7 @@ export class MicrositeMediaOptimizationSchedulerService {
             "media_optimization_status" = 'DONE',
             "media_optimized_at" = NOW(),
             "media_optimization_last_error" = NULL
-        WHERE "id" = $1
+        WHERE "id" = $1::uuid
         `,
         row.id,
         outputBuffer.byteLength,
@@ -155,7 +155,7 @@ export class MicrositeMediaOptimizationSchedulerService {
         UPDATE "file_objects"
         SET "media_optimization_status" = $2,
             "media_optimization_last_error" = $3
-        WHERE "id" = $1
+        WHERE "id" = $1::uuid
         `,
         row.id,
         status,

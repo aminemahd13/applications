@@ -104,7 +104,7 @@ describe('MicrositeMediaOptimizationSchedulerService', () => {
       'image/jpeg',
     );
     expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
-      expect.stringContaining('"media_optimization_status" = \'DONE\''),
+      expect.stringContaining('WHERE "id" = $1::uuid'),
       'file-1',
       Buffer.from('optimized-bytes').byteLength,
       'image/jpeg',
@@ -159,7 +159,7 @@ describe('MicrositeMediaOptimizationSchedulerService', () => {
     await service.optimizePendingMicrositeImages();
 
     expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
-      expect.stringContaining('"media_optimization_status" = $2'),
+      expect.stringContaining('WHERE "id" = $1::uuid'),
       'file-2',
       'FAILED',
       expect.stringContaining('cannot read object'),

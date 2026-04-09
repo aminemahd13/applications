@@ -149,7 +149,7 @@ export class MicrositeMediaService {
             "media_optimization_attempts" = 0,
             "media_optimized_at" = CASE WHEN $2 = 'DONE' THEN NOW() ELSE NULL END,
             "media_optimization_last_error" = NULL
-        WHERE "id" = $1
+        WHERE "id" = $1::uuid
         `,
         fileId,
         optimizationStatus,
@@ -278,7 +278,7 @@ export class MicrositeMediaService {
             "media_optimization_attempts" = 0,
             "media_optimized_at" = NULL,
             "media_optimization_last_error" = NULL
-        WHERE "id" = $1
+        WHERE "id" = $1::uuid
           AND "status" = 'COMMITTED'
           AND "media_optimization_status" = 'DONE'
           AND "media_optimized_at" IS NULL
@@ -294,7 +294,7 @@ export class MicrositeMediaService {
       SET "media_optimization_status" = 'DONE',
           "media_optimized_at" = COALESCE("media_optimized_at", NOW()),
           "media_optimization_last_error" = NULL
-      WHERE "id" = $1
+      WHERE "id" = $1::uuid
         AND "status" = 'COMMITTED'
         AND "media_optimization_status" <> 'PROCESSING'
       `,
