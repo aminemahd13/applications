@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { Reorder } from "framer-motion";
 import {
@@ -35,6 +35,12 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 
 import {
   PageHeader,
@@ -42,6 +48,7 @@ import {
   CardSkeleton,
   ConfirmDialog,
 } from "@/components/shared";
+import { FormRenderer } from "@/components/forms/FormRenderer";
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
@@ -518,6 +525,9 @@ export default function FormsPage() {
   const [bulkOptionsText, setBulkOptionsText] = useState("");
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const [collapsedFields, setCollapsedFields] = useState<Record<string, boolean>>({});
+  const [previewAccordionValue, setPreviewAccordionValue] = useState<string | undefined>(
+    undefined,
+  );
 
   useEffect(() => {
     (async () => {
@@ -554,6 +564,7 @@ export default function FormsPage() {
       setFormVersions(rawVersions.map(toFormVersion));
       setCollapsedSections({});
       setCollapsedFields({});
+      setPreviewAccordionValue(undefined);
     } catch {
       /* handled */
     } finally {
@@ -573,6 +584,7 @@ export default function FormsPage() {
       setFormVersions([]);
       setCollapsedSections({});
       setCollapsedFields({});
+      setPreviewAccordionValue(undefined);
       setForms((prev) => [...prev, toFormDef(res?.data ?? res)]);
     } catch {
       /* handled */
@@ -657,6 +669,7 @@ export default function FormsPage() {
         setFormVersions([]);
         setCollapsedSections({});
         setCollapsedFields({});
+        setPreviewAccordionValue(undefined);
       }
       toast.success("Form deleted");
     } catch {
@@ -848,6 +861,11 @@ export default function FormsPage() {
       )
     : [];
 
+  const previewDefinition = useMemo(
+    () => (editingForm ? toDraftSchema(editingForm.sections) : null),
+    [editingForm],
+  );
+
   // If editing a form, show the editor
   if (editingForm) {
     return (
@@ -862,6 +880,7 @@ export default function FormsPage() {
                 setFormVersions([]);
                 setCollapsedSections({});
                 setCollapsedFields({});
+                setPreviewAccordionValue(undefined);
               }}
               className="mb-2"
             >
@@ -952,6 +971,38 @@ export default function FormsPage() {
             </p>
           </CardContent>
         </Card>
+
+        <Accordion
+          type="single"
+          collapsible
+          value={previewAccordionValue}
+          onValueChange={(value) => setPreviewAccordionValue(value || undefined)}
+        >
+          <AccordionItem value="form-preview" className="rounded-lg border px-4">
+            <AccordionTrigger className="py-3 text-sm font-semibold hover:no-underline">
+              Form preview
+            </AccordionTrigger>
+            <AccordionContent className="space-y-3 pt-1">
+              <p className="text-xs text-muted-foreground">
+                Interactive preview with live validation. File uploads are disabled
+                in preview mode.
+              </p>
+              {previewDefinition ? (
+                <FormRenderer
+                  key={`form-preview-${editingForm.id}`}
+                  definition={previewDefinition}
+                  eventId={eventId}
+                  onSubmit={() => {
+                    /* no-op for preview */
+                  }}
+                  showSubmit={false}
+                  liveValidation
+                  disableFileUploads
+                />
+              ) : null}
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
 
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => setAllSectionCollapse(true)}>

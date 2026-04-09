@@ -1,12 +1,14 @@
 'use client';
 
 import React from 'react';
-import { useForm, Controller, type Resolver } from 'react-hook-form';
+import { useForm, useWatch, Controller, type Resolver } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   FormDefinition,
   FieldType,
   generateFormSchema,
+  isFieldRequired,
+  isFieldVisible,
   normalizeFormDefinition,
 } from '@event-platform/schemas';
 import { cn } from '../../lib/utils';
@@ -25,6 +27,9 @@ interface FormRendererProps {
   initialData?: FormValues;
   onSubmit: (data: FormValues) => void;
   readOnly?: boolean;
+  showSubmit?: boolean;
+  liveValidation?: boolean;
+  disableFileUploads?: boolean;
 }
 
 export function FormRenderer({
@@ -35,6 +40,9 @@ export function FormRenderer({
   initialData,
   onSubmit,
   readOnly,
+  showSubmit,
+  liveValidation,
+  disableFileUploads,
 }: FormRendererProps) {
   const normalizedDefinition = React.useMemo(
     () => normalizeFormDefinition(definition),
@@ -53,7 +61,12 @@ export function FormRenderer({
   } = useForm<FormValues>({
     resolver: zodResolver(schema) as Resolver<FormValues>,
     defaultValues: initialData ?? {},
+    mode: liveValidation ? 'onChange' : 'onSubmit',
+    reValidateMode: liveValidation ? 'onChange' : 'onChange',
   });
+
+  const values = (useWatch({ control }) ?? {}) as FormValues;
+  const shouldShowSubmit = showSubmit ?? !readOnly;
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
@@ -69,6 +82,10 @@ export function FormRenderer({
           
           <div className="grid gap-4">
             {section.fields.map((field) => {
+              if (!isFieldVisible(field, values)) {
+                return null;
+              }
+
               if (field.type === FieldType.INFO_TEXT) {
                   return (
                       <div key={field.id} className="prose prose-sm max-w-none text-muted-foreground">
@@ -83,11 +100,12 @@ export function FormRenderer({
                 fieldError && typeof fieldError.message === 'string'
                   ? fieldError.message
                   : undefined;
+              const isRequired = isFieldRequired(field, values);
               
               return (
                 <div key={field.id} className="grid gap-2">
                   <label htmlFor={fieldKey} className="font-medium">
-                    {field.label} {field.validation?.required && <span className="text-red-500">*</span>}
+                    {field.label} {isRequired && <span className="text-red-500">*</span>}
                   </label>
                   
                   {field.type === FieldType.TEXTAREA ? (
@@ -95,6 +113,7 @@ export function FormRenderer({
                       {...register(fieldKey)}
                       id={fieldKey}
                       disabled={readOnly}
+                      placeholder={field.ui?.placeholder}
                       className={cn("border p-2 rounded", error && "border-red-500")}
                     />
                   ) : field.type === FieldType.SELECT ? (
@@ -174,43 +193,62 @@ export function FormRenderer({
                     />
                   ) : field.type === FieldType.FILE_UPLOAD ? (
                     <div className="grid gap-2">
+                      {disableFileUploads ? (
+                        <div className="border-border bg-muted/40 rounded-md border border-dashed p-3 text-sm">
+                          <p className="font-medium">File upload disabled in preview</p>
+                          <p className="text-muted-foreground mt-1 text-xs">
+                            Configure limits below:
+                            {` max ${typeof field.ui?.maxFileSizeMB === 'number' ? field.ui.maxFileSizeMB : 50} MB`}
+                            {typeof field.ui?.maxFiles === 'number'
+                              ? `, up to ${field.ui.maxFiles} file${field.ui.maxFiles === 1 ? '' : 's'}`
+                              : ''}
+                            {Array.isArray(field.ui?.allowedMimeTypes) && field.ui.allowedMimeTypes.length > 0
+                              ? `, allowed ${field.ui.allowedMimeTypes.join(', ')}`
+                              : Array.isArray(field.validation?.allowedTypes) && field.validation.allowedTypes.length > 0
+                                ? `, allowed ${field.validation.allowedTypes.join(', ')}`
+                                : ''}
+                            .
+                          </p>
+                        </div>
+                      ) : (
                         <Controller
-                            control={control}
-                            name={fieldKey}
-                            render={({ field: { onChange, value } }) => {
-                                const uploadValue = Array.isArray(value)
-                                  ? (value as FileUploadValue[])
-                                  : value &&
-                                    typeof value === 'object'
-                                    ? (value as FileUploadValue)
-                                    : null;
-                                const maxFiles = field.ui?.maxFiles;
-                                const multiple =
-                                  typeof maxFiles === 'number' ? maxFiles > 1 : false;
-                                return (
-                                <FileUpload
-                                    value={uploadValue}
-                                    onChange={onChange}
-                                    eventId={eventId}
-                                    applicationId={applicationId}
-                                    stepId={stepId}
-                                    fieldId={fieldKey}
-                                    readOnly={readOnly}
-                                    accept={
-                                      field.ui?.allowedMimeTypes?.join(',') ??
-                                      field.validation?.allowedTypes?.join(',')
-                                    }
-                                    multiple={multiple}
-                                    maxFiles={typeof maxFiles === 'number' ? maxFiles : undefined}
-                                    maxFileSizeMB={
-                                      typeof field.ui?.maxFileSizeMB === 'number'
-                                        ? field.ui.maxFileSizeMB
-                                        : undefined
-                                    }
-                                />
-                                );
-                              }}
+                          control={control}
+                          name={fieldKey}
+                          render={({ field: { onChange, value } }) => {
+                            const uploadValue = Array.isArray(value)
+                              ? (value as FileUploadValue[])
+                              : value &&
+                                  typeof value === 'object'
+                                ? (value as FileUploadValue)
+                                : null;
+                            const maxFiles = field.ui?.maxFiles;
+                            const multiple =
+                              typeof maxFiles === 'number' ? maxFiles > 1 : false;
+                            return (
+                              <FileUpload
+                                value={uploadValue}
+                                onChange={onChange}
+                                eventId={eventId}
+                                applicationId={applicationId}
+                                stepId={stepId}
+                                fieldId={fieldKey}
+                                readOnly={readOnly}
+                                accept={
+                                  field.ui?.allowedMimeTypes?.join(',') ??
+                                  field.validation?.allowedTypes?.join(',')
+                                }
+                                multiple={multiple}
+                                maxFiles={typeof maxFiles === 'number' ? maxFiles : undefined}
+                                maxFileSizeMB={
+                                  typeof field.ui?.maxFileSizeMB === 'number'
+                                    ? field.ui.maxFileSizeMB
+                                    : undefined
+                                }
+                              />
+                            );
+                          }}
                         />
+                      )}
                     </div>
                   ) : (
                     <input
@@ -218,6 +256,7 @@ export function FormRenderer({
                       {...register(fieldKey)}
                       id={fieldKey}
                       disabled={readOnly}
+                      placeholder={field.ui?.placeholder}
                       className={cn("border p-2 rounded", error && "border-red-500")}
                     />
                   )}
@@ -236,7 +275,7 @@ export function FormRenderer({
         </div>
       ))}
       
-      {!readOnly && (
+      {shouldShowSubmit && (
         <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
           Submit
         </button>
