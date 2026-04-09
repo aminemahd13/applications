@@ -1688,7 +1688,10 @@ export class MessagesService {
   private richToHtml(richContent: any): string {
     if (!richContent || typeof richContent !== 'object') return '';
     const renderNode = (node: any): string => {
-      if (node.type === 'text') return node.text || '';
+      if (node.type === 'text') {
+        return this.escapeHtml(String(node.text ?? '')).replace(/\r?\n/g, '<br />');
+      }
+      if (node.type === 'hardBreak') return '<br />';
       if (node.type === 'paragraph') {
         const inner = (node.content || []).map(renderNode).join('');
         return `<p>${inner}</p>`;

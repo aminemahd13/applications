@@ -100,6 +100,20 @@ interface QueryBatchOptions {
 @Injectable()
 export class ApplicationsService {
   private static readonly HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+  private static readonly DECISION_TEMPLATE_TOKEN_PATTERN =
+    /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;
+  private static readonly DECISION_TEMPLATE_ALLOWED_VARIABLE_KEYS = [
+    'eventTitle',
+    'eventSlug',
+    'eventId',
+    'applicantName',
+    'applicantEmail',
+    'applicationId',
+    'decisionStatus',
+    'decisionLabel',
+  ] as const;
+  private static readonly DECISION_TEMPLATE_ALLOWED_VARIABLE_SET: ReadonlySet<string> =
+    new Set(ApplicationsService.DECISION_TEMPLATE_ALLOWED_VARIABLE_KEYS);
   private static readonly DEFAULT_CERTIFICATE_TEMPLATE = {
     text: {
       title: 'Certificate of Completion',
@@ -1837,6 +1851,21 @@ export class ApplicationsService {
           status,
         );
 
+        const renderedSubject = this.renderDecisionTemplateString(
+          template.subject_template,
+          variables,
+        );
+        const renderedBody = this.renderDecisionTemplateString(
+          template.body_template,
+          variables,
+        );
+        const unresolvedVariables = Array.from(
+          new Set([
+            ...renderedSubject.unresolvedVariables,
+            ...renderedBody.unresolvedVariables,
+          ]),
+        );
+
         data.decision_draft = {
           templateId: template.id,
           templateName: template.name,
@@ -1844,16 +1873,19 @@ export class ApplicationsService {
           subjectTemplate: template.subject_template,
           bodyTemplate: template.body_template,
           rendered: {
-            subject: this.renderDecisionTemplateString(
-              template.subject_template,
-              variables,
-            ),
-            body: this.renderDecisionTemplateString(
-              template.body_template,
-              variables,
-            ),
+            subject: renderedSubject.value,
+            body: renderedBody.value,
           },
           variables,
+          ...(unresolvedVariables.length > 0
+            ? {
+                warnings: {
+                  unresolvedVariables,
+                  message:
+                    'This template includes unsupported placeholders. Update to flat variables (for example {{eventTitle}}).',
+                },
+              }
+            : {}),
           updatedAt: now.toISOString(),
         };
       }
@@ -2041,6 +2073,21 @@ export class ApplicationsService {
             event,
             dto.status,
           );
+          const renderedSubject = this.renderDecisionTemplateString(
+            template.subject_template,
+            variables,
+          );
+          const renderedBody = this.renderDecisionTemplateString(
+            template.body_template,
+            variables,
+          );
+          const unresolvedVariables = Array.from(
+            new Set([
+              ...renderedSubject.unresolvedVariables,
+              ...renderedBody.unresolvedVariables,
+            ]),
+          );
+
           decisionDraft = {
             templateId: template.id,
             templateName: template.name,
@@ -2048,16 +2095,19 @@ export class ApplicationsService {
             subjectTemplate: template.subject_template,
             bodyTemplate: template.body_template,
             rendered: {
-              subject: this.renderDecisionTemplateString(
-                template.subject_template,
-                variables,
-              ),
-              body: this.renderDecisionTemplateString(
-                template.body_template,
-                variables,
-              ),
+              subject: renderedSubject.value,
+              body: renderedBody.value,
             },
             variables,
+            ...(unresolvedVariables.length > 0
+              ? {
+                  warnings: {
+                    unresolvedVariables,
+                    message:
+                      'This template includes unsupported placeholders. Update to flat variables (for example {{eventTitle}}).',
+                  },
+                }
+              : {}),
             updatedAt: now.toISOString(),
           } as Prisma.InputJsonValue;
         }
@@ -2110,6 +2160,11 @@ export class ApplicationsService {
       select: { id: true },
     });
     if (!event) throw new NotFoundException('Event not found');
+    this.assertSupportedDecisionTemplateVariables(
+      dto.subjectTemplate,
+      'subjectTemplate',
+    );
+    this.assertSupportedDecisionTemplateVariables(dto.bodyTemplate, 'bodyTemplate');
 
     try {
       const created = await this.prisma.decision_templates.create({
@@ -2162,6 +2217,18 @@ export class ApplicationsService {
       select: { id: true },
     });
     if (!existing) throw new NotFoundException('Decision template not found');
+    if (dto.subjectTemplate !== undefined) {
+      this.assertSupportedDecisionTemplateVariables(
+        dto.subjectTemplate,
+        'subjectTemplate',
+      );
+    }
+    if (dto.bodyTemplate !== undefined) {
+      this.assertSupportedDecisionTemplateVariables(
+        dto.bodyTemplate,
+        'bodyTemplate',
+      );
+    }
 
     try {
       const updated = await this.prisma.decision_templates.update({
@@ -3713,14 +3780,63 @@ export class ApplicationsService {
     };
   }
 
+  private getDecisionTemplateVariableTokens(): string[] {
+    return ApplicationsService.DECISION_TEMPLATE_ALLOWED_VARIABLE_KEYS.map(
+      (key) => `{{${key}}}`,
+    );
+  }
+
+  private extractDecisionTemplateKeys(template: string): string[] {
+    const keys: string[] = [];
+    const seen = new Set<string>();
+    let match: RegExpExecArray | null = null;
+    while (
+      (match = ApplicationsService.DECISION_TEMPLATE_TOKEN_PATTERN.exec(template)) !==
+      null
+    ) {
+      const key = match[1];
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      keys.push(key);
+    }
+    ApplicationsService.DECISION_TEMPLATE_TOKEN_PATTERN.lastIndex = 0;
+    return keys;
+  }
+
+  private assertSupportedDecisionTemplateVariables(
+    template: string,
+    field: 'subjectTemplate' | 'bodyTemplate',
+  ): void {
+    const unsupportedKeys = this.extractDecisionTemplateKeys(template).filter(
+      (key) => !ApplicationsService.DECISION_TEMPLATE_ALLOWED_VARIABLE_SET.has(key),
+    );
+    if (unsupportedKeys.length === 0) return;
+
+    const unsupportedTokens = unsupportedKeys.map((key) => `{{${key}}}`);
+    const supportedTokens = this.getDecisionTemplateVariableTokens().join(', ');
+    throw new BadRequestException(
+      `Unsupported ${field} variable(s): ${unsupportedTokens.join(
+        ', ',
+      )}. Supported variables: ${supportedTokens}. Dotted placeholders are not supported and must be updated manually.`,
+    );
+  }
+
   private renderDecisionTemplateString(
     template: string,
     variables: Record<string, string>,
-  ): string {
-    return template.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_, key) => {
+  ): { value: string; unresolvedVariables: string[] } {
+    const unresolved = new Set<string>();
+    const value = template.replace(
+      ApplicationsService.DECISION_TEMPLATE_TOKEN_PATTERN,
+      (match, key) => {
       const value = variables[key];
-      return value !== undefined ? value : '';
-    });
+      if (value !== undefined) return value;
+      unresolved.add(key);
+      return match;
+    },
+    );
+    ApplicationsService.DECISION_TEMPLATE_TOKEN_PATTERN.lastIndex = 0;
+    return { value, unresolvedVariables: [...unresolved] };
   }
 
   private readBoolean(value: unknown, fallback: boolean): boolean {

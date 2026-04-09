@@ -123,6 +123,10 @@ interface ApplicationDetail {
       subject?: string;
       body?: string;
     };
+    warnings?: {
+      unresolvedVariables?: string[];
+      message?: string;
+    };
   } | null;
   tags: string[];
   notes: NoteEntry[];
@@ -2479,6 +2483,17 @@ export default function ApplicationDetailPage() {
                           {app.decisionDraft.rendered.body}
                         </p>
                       )}
+                      {Array.isArray(app.decisionDraft.warnings?.unresolvedVariables) &&
+                        app.decisionDraft.warnings?.unresolvedVariables.length > 0 && (
+                          <p className="text-xs text-amber-700">
+                            {app.decisionDraft.warnings?.message ??
+                              "Template contains unsupported placeholders."}{" "}
+                            Unresolved:{" "}
+                            {app.decisionDraft.warnings.unresolvedVariables
+                              .map((key) => `{{${key}}}`)
+                              .join(", ")}
+                          </p>
+                        )}
                     </div>
                   )}
 

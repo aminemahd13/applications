@@ -238,6 +238,48 @@ describe('MessagesService', () => {
       );
     });
 
+    it('preserves rich-text newlines and hard breaks in email HTML', async () => {
+      mockPrisma.message_recipients.findMany.mockResolvedValue([
+        {
+          id: 'recipient-1',
+          message_id: 'message-1',
+          email_attempts: 0,
+          users: { email: 'target@example.com' },
+          messages: {
+            title: 'Subject line',
+            body_rich: {
+              type: 'doc',
+              content: [
+                {
+                  type: 'paragraph',
+                  content: [
+                    { type: 'text', text: 'Line 1\nLine 2' },
+                    { type: 'hardBreak' },
+                    { type: 'text', text: 'Line 3' },
+                  ],
+                },
+              ],
+            },
+            body_text: 'fallback text',
+            action_buttons: [],
+          },
+        },
+      ]);
+      mockPrisma.message_recipients.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.message_recipients.update.mockResolvedValue({});
+      mockEmailService.sendAnnouncement.mockResolvedValue(undefined);
+
+      const result = await service.processQueuedEmails(10);
+
+      expect(result).toEqual({ attempted: 1, sent: 1, failed: 0, deferred: 0 });
+      expect(mockEmailService.sendAnnouncement).toHaveBeenCalledWith(
+        'target@example.com',
+        'Subject line',
+        '<p>Line 1<br />Line 2<br />Line 3</p>',
+        [],
+      );
+    });
+
     it('defers rate-limited recipients with next attempt scheduling', async () => {
       mockPrisma.message_recipients.findMany.mockResolvedValue([
         buildRecipient('recipient-1'),

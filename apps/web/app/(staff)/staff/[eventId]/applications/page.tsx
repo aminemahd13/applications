@@ -206,6 +206,17 @@ const DECISION_STATUS_OPTIONS: Array<{
   { value: "REJECTED", label: "Rejected" },
 ];
 
+const DECISION_TEMPLATE_VARIABLE_TOKENS = [
+  "{{eventTitle}}",
+  "{{eventSlug}}",
+  "{{eventId}}",
+  "{{applicantName}}",
+  "{{applicantEmail}}",
+  "{{applicationId}}",
+  "{{decisionStatus}}",
+  "{{decisionLabel}}",
+] as const;
+
 const INITIAL_ADVANCED_FILTERS: ApplicationsAdvancedFilters = {
   derivedStatus: [],
   decisionStatus: "all",
@@ -3376,7 +3387,7 @@ export default function ApplicationsListPage() {
                 <Input
                   value={templateSubject}
                   onChange={(event) => setTemplateSubject(event.target.value)}
-                  placeholder="Decision for {{event.title}}"
+                  placeholder="Decision for {{eventTitle}}"
                 />
               </div>
               <div className="space-y-2">
@@ -3385,7 +3396,7 @@ export default function ApplicationsListPage() {
                   rows={7}
                   value={templateBody}
                   onChange={(event) => setTemplateBody(event.target.value)}
-                  placeholder="Hello {{applicant.name}}, ..."
+                  placeholder="Hello {{applicantName}}, ..."
                 />
               </div>
               <div className="flex items-center gap-2">
@@ -3397,7 +3408,11 @@ export default function ApplicationsListPage() {
                 <Label htmlFor="decision-template-active">Active</Label>
               </div>
               <p className="text-xs text-muted-foreground">
-                Variables: {"{{event.title}}"}, {"{{event.slug}}"}, {"{{applicant.name}}"}, {"{{applicant.email}}"}, {"{{application.id}}"}, {"{{decision.status}}"}
+                Variables: {DECISION_TEMPLATE_VARIABLE_TOKENS.join(", ")}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Legacy dotted placeholders like {"{{event.title}}"} are not supported.
+                Update them manually to flat keys.
               </p>
               <DialogFooter>
                 <Button variant="outline" onClick={resetTemplateEditor}>

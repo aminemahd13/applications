@@ -1,5 +1,10 @@
 import { ApplicationsService } from './applications.service';
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import { DecisionStatus } from '@event-platform/shared';
 
 describe('ApplicationsService completion credentials', () => {
   let service: ApplicationsService;
@@ -1565,5 +1570,122 @@ describe('ApplicationsService resolveByEmails', () => {
       matchedEmails: ['a@example.com'],
       unmatchedEmails: [],
     });
+  });
+});
+
+describe('ApplicationsService decision template variables', () => {
+  function createTemplateService() {
+    const mockPrisma = {
+      events: {
+        findUnique: jest.fn(),
+      },
+      decision_templates: {
+        create: jest.fn(),
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
+      applications: {
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
+    };
+    const mockCls = {
+      get: jest.fn((key: string) =>
+        key === 'actorId' ? 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a' : undefined,
+      ),
+    };
+    const stepStateService = {
+      recomputeAllStepStates: jest.fn(),
+    };
+
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      mockCls as any,
+      stepStateService as any,
+    );
+    jest.spyOn(service as any, 'findById').mockResolvedValue({
+      id: '37a2125b-fdd0-42e2-a273-89d2f8010e4c',
+    });
+
+    return { service, mockPrisma, stepStateService };
+  }
+
+  it('rejects dotted placeholders when creating decision templates', async () => {
+    const { service, mockPrisma } = createTemplateService();
+    mockPrisma.events.findUnique.mockResolvedValue({ id: 'event-1' });
+
+    await expect(
+      service.createDecisionTemplate('event-1', {
+        name: 'Accepted template',
+        status: DecisionStatus.ACCEPTED,
+        subjectTemplate: 'Decision for {{event.title}}',
+        bodyTemplate: 'Hello {{applicantName}}',
+        isActive: true,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(mockPrisma.decision_templates.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects dotted placeholders when updating decision templates', async () => {
+    const { service, mockPrisma } = createTemplateService();
+    mockPrisma.decision_templates.findFirst.mockResolvedValue({ id: 'template-1' });
+
+    await expect(
+      service.updateDecisionTemplate('event-1', 'template-1', {
+        bodyTemplate: 'Hello {{applicant.name}}',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(mockPrisma.decision_templates.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps unresolved legacy placeholders and records warning metadata in drafts', async () => {
+    const { service, mockPrisma } = createTemplateService();
+    mockPrisma.events.findUnique.mockResolvedValue({
+      id: 'event-1',
+      title: 'Math Event',
+      slug: 'math-event',
+      decision_config: {},
+    });
+    mockPrisma.applications.findFirst.mockResolvedValue({
+      id: '37a2125b-fdd0-42e2-a273-89d2f8010e4c',
+      users_applications_applicant_user_idTousers: {
+        email: 'applicant@example.com',
+        applicant_profiles: {
+          full_name: 'Ada Lovelace',
+        },
+      },
+    });
+    mockPrisma.decision_templates.findFirst.mockResolvedValue({
+      id: 'template-1',
+      name: 'Legacy accepted',
+      status: DecisionStatus.ACCEPTED,
+      subject_template: 'Decision for {{event.title}}',
+      body_template: 'Hello {{applicantName}}, status: {{decision.status}}',
+    });
+    mockPrisma.applications.update.mockResolvedValue({});
+
+    await service.setDecision(
+      'event-1',
+      '37a2125b-fdd0-42e2-a273-89d2f8010e4c',
+      DecisionStatus.ACCEPTED,
+      true,
+      'template-1',
+    );
+
+    const decisionDraft =
+      mockPrisma.applications.update.mock.calls[0][0]?.data?.decision_draft;
+    expect(decisionDraft.rendered.subject).toContain('{{event.title}}');
+    expect(decisionDraft.rendered.body).toContain('{{decision.status}}');
+    expect(decisionDraft.rendered.body).toContain('Ada Lovelace');
+    expect(decisionDraft.warnings).toEqual(
+      expect.objectContaining({
+        unresolvedVariables: expect.arrayContaining([
+          'event.title',
+          'decision.status',
+        ]),
+      }),
+    );
   });
 });
