@@ -6,6 +6,7 @@ import {
   Globe,
   Shield,
   Palette,
+  Mail,
   Save,
   Loader2,
   RotateCcw,
@@ -45,7 +46,10 @@ interface PlatformSettings {
   footerText: string;
   smtpHost: string;
   smtpPort: number;
+  smtpSecure: boolean;
+  smtpUser: string;
   smtpSender: string;
+  smtpPasswordConfigured: boolean;
 }
 
 const DEFAULT_SETTINGS: PlatformSettings = {
@@ -63,25 +67,32 @@ const DEFAULT_SETTINGS: PlatformSettings = {
   footerText: "",
   smtpHost: "",
   smtpPort: 587,
+  smtpSecure: false,
+  smtpUser: "",
   smtpSender: "",
+  smtpPasswordConfigured: false,
 };
 
 export default function AdminSettingsPage() {
   const { csrfToken } = useAuth();
   const [settings, setSettings] = useState<PlatformSettings>(DEFAULT_SETTINGS);
   const [original, setOriginal] = useState<PlatformSettings>(DEFAULT_SETTINGS);
+  const [smtpPassInput, setSmtpPassInput] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [showReset, setShowReset] = useState(false);
 
-  const hasChanges = JSON.stringify(settings) !== JSON.stringify(original);
+  const hasPasswordChange = smtpPassInput.trim().length > 0;
+  const hasChanges =
+    JSON.stringify(settings) !== JSON.stringify(original) || hasPasswordChange;
 
   useEffect(() => {
     (async () => {
       try {
         const data = await apiClient<PlatformSettings>("/admin/settings");
-        setSettings(data);
-        setOriginal(data);
+        const normalized = { ...DEFAULT_SETTINGS, ...data };
+        setSettings(normalized);
+        setOriginal(normalized);
       } catch {
         /* use defaults */
       } finally {
@@ -97,13 +108,19 @@ export default function AdminSettingsPage() {
   async function saveSettings() {
     setIsSaving(true);
     try {
+      const payload = {
+        ...settings,
+        ...(hasPasswordChange ? { smtpPass: smtpPassInput } : {}),
+      };
       const data = await apiClient<PlatformSettings>("/admin/settings", {
         method: "PATCH",
-        body: settings,
+        body: payload,
         csrfToken: csrfToken ?? undefined,
       });
-      setSettings(data);
-      setOriginal(data);
+      const normalized = { ...DEFAULT_SETTINGS, ...data };
+      setSettings(normalized);
+      setOriginal(normalized);
+      setSmtpPassInput("");
       toast.success("Settings saved successfully");
     } catch {
       /* handled */
@@ -114,6 +131,7 @@ export default function AdminSettingsPage() {
 
   function resetToOriginal() {
     setSettings(original);
+    setSmtpPassInput("");
     setShowReset(false);
     toast.info("Changes reverted");
   }
@@ -214,8 +232,85 @@ export default function AdminSettingsPage() {
           </Card>
         </motion.div>
 
+        {/* SMTP */} 
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Mail className="h-4 w-4" />
+                SMTP
+              </CardTitle>
+              <CardDescription>Configure outbound email transport</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>SMTP host</Label>
+                <Input
+                  value={settings.smtpHost}
+                  onChange={(e) => update("smtpHost", e.target.value)}
+                  placeholder="smtp.sendgrid.net"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>SMTP port</Label>
+                <Input
+                  type="number"
+                  value={settings.smtpPort}
+                  onChange={(e) =>
+                    update("smtpPort", e.target.value ? Number(e.target.value) : 587)
+                  }
+                  placeholder="587"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>SMTP username</Label>
+                <Input
+                  value={settings.smtpUser}
+                  onChange={(e) => update("smtpUser", e.target.value)}
+                  placeholder="apikey"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>SMTP sender (From)</Label>
+                <Input
+                  value={settings.smtpSender}
+                  onChange={(e) => update("smtpSender", e.target.value)}
+                  placeholder="noreply@mathmaroc.org"
+                />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label>SMTP password</Label>
+                <Input
+                  type="password"
+                  value={smtpPassInput}
+                  onChange={(e) => setSmtpPassInput(e.target.value)}
+                  placeholder="Leave empty to keep existing password"
+                  autoComplete="new-password"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {settings.smtpPasswordConfigured
+                    ? "A password is currently configured. Enter a new value to replace it."
+                    : "No password configured yet. Enter one to enable authenticated SMTP."}
+                </p>
+              </div>
+              <div className="flex items-center justify-between rounded-md border p-3 sm:col-span-2">
+                <div>
+                  <p className="text-sm font-medium">Implicit TLS (secure)</p>
+                  <p className="text-xs text-muted-foreground">
+                    Enable for SMTPS (typically port 465). Disable for STARTTLS (typically 587).
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.smtpSecure}
+                  onCheckedChange={(v) => update("smtpSecure", v)}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
         {/* Access & Security */}
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}>
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
@@ -268,7 +363,7 @@ export default function AdminSettingsPage() {
         </motion.div>
 
         {/* Branding */}
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">

@@ -17,6 +17,10 @@ const REDACTED_FIELDS = new Set([
   'secret',
   'api_key',
   'signed_url',
+  'smtpPass',
+  'smtp_pass',
+  'smtpPassword',
+  'smtp_password',
 ]);
 
 // Large JSON fields that should be summarized, not logged in full

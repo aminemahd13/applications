@@ -1,64 +1,58 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
+import { OrgSettingsService } from '../../admin/org-settings.service';
+
+type SmtpConfig = {
+  host: string;
+  port: number;
+  secure: boolean;
+  user?: string;
+  pass?: string;
+  from: string;
+  hostSource: 'admin' | 'env' | 'default';
+};
 
 @Injectable()
 export class EmailService implements OnModuleInit {
   private readonly logger = new Logger(EmailService.name);
-  private transporter: nodemailer.Transporter;
-  private readonly smtpHost: string;
-  private readonly smtpPort: number;
-  private readonly smtpSecure: boolean;
+  private transporter: nodemailer.Transporter | null = null;
+  private transporterConfigKey: string | null = null;
+  private fromAddress = 'noreply@mathmaroc.org';
 
-  constructor() {
-    this.smtpHost = process.env.SMTP_HOST || 'localhost';
-    this.smtpPort = this.parsePort(process.env.SMTP_PORT);
-    this.smtpSecure = this.parseSecure(process.env.SMTP_SECURE, this.smtpPort);
-
-    this.transporter = nodemailer.createTransport({
-      host: this.smtpHost,
-      port: this.smtpPort,
-      secure: this.smtpSecure,
-      ...(process.env.SMTP_USER
-        ? {
-            auth: {
-              user: process.env.SMTP_USER,
-              pass: process.env.SMTP_PASS,
-            },
-          }
-        : {}),
-    });
-
-    this.logger.log(
-      `SMTP transport configured host=${this.smtpHost} port=${this.smtpPort} secure=${this.smtpSecure} auth=${process.env.SMTP_USER ? 'on' : 'off'} from=${this.fromAddress}`,
-    );
-  }
+  constructor(private readonly orgSettingsService: OrgSettingsService) {}
 
   async onModuleInit(): Promise<void> {
-    if (!process.env.SMTP_HOST) {
-      this.logger.warn(
-        'SMTP_HOST is not set. Falling back to localhost; outbound email will fail unless an SMTP server is running in this container.',
-      );
-    }
-    if (process.env.NODE_ENV === 'test') {
-      this.logger.log('Skipping SMTP connectivity verification in test mode.');
-      return;
-    }
-
-    try {
-      await this.transporter.verify();
-      this.logger.log('SMTP connection verified successfully.');
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      this.logger.error(`SMTP verification failed: ${reason}`);
-    }
+    await this.ensureTransporter({ verifyConnectivity: true });
   }
 
-  private parsePort(value: string | undefined): number {
-    const parsed = parseInt(value ?? '1025', 10);
-    return Number.isFinite(parsed) ? parsed : 1025;
+  private parsePort(value: unknown): number {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const normalized = Math.trunc(value);
+      return normalized > 0 ? normalized : 1025;
+    }
+
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.length > 0) {
+        const parsed = Number.parseInt(trimmed, 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          return parsed;
+        }
+      }
+    }
+
+    return 1025;
   }
 
-  private parseSecure(rawValue: string | undefined, port: number): boolean {
+  private parseSecure(rawValue: unknown, port: number): boolean {
+    if (typeof rawValue === 'boolean') {
+      return rawValue;
+    }
+
+    if (typeof rawValue === 'number') {
+      return rawValue !== 0;
+    }
+
     if (typeof rawValue === 'string' && rawValue.trim().length > 0) {
       const normalized = rawValue.trim().toLowerCase();
       if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
@@ -67,11 +61,155 @@ export class EmailService implements OnModuleInit {
         `SMTP_SECURE value "${rawValue}" is invalid; falling back to port-based default.`,
       );
     }
+
     return port === 465;
   }
 
-  private get fromAddress(): string {
-    return process.env.SMTP_FROM || 'noreply@mathmaroc.org';
+  private readNonEmptyString(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    if (value.trim().length === 0) return undefined;
+    return value;
+  }
+
+  private shouldUseAdminValue(value: unknown): boolean {
+    if (value === undefined || value === null) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    return true;
+  }
+
+  private pickStringSetting(adminValue: unknown, envValue?: string): string | undefined {
+    return this.shouldUseAdminValue(adminValue)
+      ? this.readNonEmptyString(adminValue)
+      : this.readNonEmptyString(envValue);
+  }
+
+  private resolveHost(
+    emailSettings: Record<string, unknown>,
+  ): { host: string; hostSource: 'admin' | 'env' | 'default' } {
+    const adminHost = this.readNonEmptyString(emailSettings.smtpHost);
+    if (adminHost) return { host: adminHost, hostSource: 'admin' };
+
+    const envHost = this.readNonEmptyString(process.env.SMTP_HOST);
+    if (envHost) return { host: envHost, hostSource: 'env' };
+
+    return { host: 'localhost', hostSource: 'default' };
+  }
+
+  private resolvePort(emailSettings: Record<string, unknown>): number {
+    if (this.shouldUseAdminValue(emailSettings.smtpPort)) {
+      return this.parsePort(emailSettings.smtpPort);
+    }
+    return this.parsePort(process.env.SMTP_PORT);
+  }
+
+  private resolveSecure(
+    emailSettings: Record<string, unknown>,
+    port: number,
+  ): boolean {
+    if (this.shouldUseAdminValue(emailSettings.smtpSecure)) {
+      return this.parseSecure(emailSettings.smtpSecure, port);
+    }
+    return this.parseSecure(process.env.SMTP_SECURE, port);
+  }
+
+  private resolveFrom(emailSettings: Record<string, unknown>): string {
+    const adminFrom = this.pickStringSetting(
+      emailSettings.smtpSender ??
+        emailSettings.smtpFrom ??
+        emailSettings.from,
+    );
+    if (adminFrom) return adminFrom;
+
+    return this.readNonEmptyString(process.env.SMTP_FROM) ?? 'noreply@mathmaroc.org';
+  }
+
+  private async resolveSmtpConfig(): Promise<SmtpConfig> {
+    const settings = await this.orgSettingsService.getSettings();
+    const emailSettings =
+      settings?.email && typeof settings.email === 'object'
+        ? (settings.email as Record<string, unknown>)
+        : {};
+
+    const { host, hostSource } = this.resolveHost(emailSettings);
+    const port = this.resolvePort(emailSettings);
+    const secure = this.resolveSecure(emailSettings, port);
+    const user = this.pickStringSetting(emailSettings.smtpUser, process.env.SMTP_USER);
+    const pass = this.pickStringSetting(emailSettings.smtpPass, process.env.SMTP_PASS);
+    const from = this.resolveFrom(emailSettings);
+
+    return {
+      host,
+      hostSource,
+      port,
+      secure,
+      user,
+      pass,
+      from,
+    };
+  }
+
+  private buildTransporterConfigKey(config: SmtpConfig): string {
+    return JSON.stringify({
+      host: config.host,
+      port: config.port,
+      secure: config.secure,
+      user: config.user ?? '',
+      pass: config.pass ?? '',
+      from: config.from,
+    });
+  }
+
+  private async ensureTransporter(options?: {
+    verifyConnectivity?: boolean;
+  }): Promise<void> {
+    const config = await this.resolveSmtpConfig();
+    const nextKey = this.buildTransporterConfigKey(config);
+    const hasChanged =
+      this.transporter == null || this.transporterConfigKey !== nextKey;
+
+    if (hasChanged) {
+      this.transporter = nodemailer.createTransport({
+        host: config.host,
+        port: config.port,
+        secure: config.secure,
+        ...(config.user
+          ? {
+              auth: {
+                user: config.user,
+                pass: config.pass ?? '',
+              },
+            }
+          : {}),
+      });
+      this.fromAddress = config.from;
+      this.transporterConfigKey = nextKey;
+
+      this.logger.log(
+        `SMTP transport configured host=${config.host} port=${config.port} secure=${config.secure} auth=${config.user ? 'on' : 'off'} from=${this.fromAddress}`,
+      );
+
+      if (config.hostSource === 'default') {
+        this.logger.warn(
+          'SMTP host is not configured in admin settings or environment. Falling back to localhost; outbound email will fail unless an SMTP server is available in this environment.',
+        );
+      }
+    }
+
+    if (options?.verifyConnectivity && process.env.NODE_ENV !== 'test') {
+      const transporter = this.transporter;
+      if (!transporter) {
+        throw new Error('SMTP transporter is not initialized');
+      }
+      try {
+        await transporter.verify();
+        this.logger.log('SMTP connection verified successfully.');
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.logger.error(`SMTP verification failed: ${reason}`);
+      }
+    } else if (options?.verifyConnectivity) {
+      this.logger.log('Skipping SMTP connectivity verification in test mode.');
+    }
   }
 
   async sendPasswordReset(
@@ -207,8 +345,14 @@ export class EmailService implements OnModuleInit {
     subject: string;
     html: string;
   }): Promise<void> {
+    await this.ensureTransporter();
+    const transporter = this.transporter;
+    if (!transporter) {
+      throw new Error('SMTP transporter is not initialized');
+    }
+
     try {
-      await this.transporter.sendMail({
+      await transporter.sendMail({
         from: this.fromAddress,
         to: options.to,
         subject: options.subject,

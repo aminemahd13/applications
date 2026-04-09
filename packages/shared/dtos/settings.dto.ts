@@ -16,7 +16,11 @@ export const PlatformSettingsSchema = z.object({
     footerText: z.string().optional(),
     smtpHost: z.string().optional(),
     smtpPort: z.coerce.number().int().optional(),
+    smtpSecure: z.coerce.boolean().optional(),
+    smtpUser: z.string().optional(),
+    smtpPass: z.string().optional(),
     smtpSender: z.string().optional(),
+    smtpPasswordConfigured: z.boolean().optional(),
 });
 
 export type PlatformSettingsDto = z.infer<typeof PlatformSettingsSchema>;
@@ -38,6 +42,9 @@ export const UpdateOrgSettingsSchema = z.object({
         supportEmail: z.string().optional(),
         smtpHost: z.string().optional(),
         smtpPort: z.number().int().optional(),
+        smtpSecure: z.boolean().optional(),
+        smtpUser: z.string().optional(),
+        smtpPass: z.string().optional(),
         smtpSender: z.string().optional(),
     }).optional(),
     storage: z.object({

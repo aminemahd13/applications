@@ -79,7 +79,14 @@ export class OrgSettingsController {
       supportEmail: e.supportEmail ?? '',
       smtpHost: e.smtpHost ?? '',
       smtpPort: e.smtpPort ?? 587,
+      smtpSecure: this.readBoolean(
+        e.smtpSecure,
+        (e.smtpPort ?? 587) === 465,
+      ),
+      smtpUser: e.smtpUser ?? '',
       smtpSender: e.smtpSender ?? '',
+      smtpPasswordConfigured:
+        typeof e.smtpPass === 'string' && e.smtpPass.trim().length > 0,
       maxEventsPerOrganizer: st.maxEventsPerOrganizer ?? 10,
       maxApplicationsPerUser: st.maxApplicationsPerUser ?? 5,
       defaultApplicationDeadlineDays: st.defaultApplicationDeadlineDays ?? 30,
@@ -88,6 +95,9 @@ export class OrgSettingsController {
   }
 
   private toCategorized(dto: PlatformSettingsDto) {
+    const shouldUpdateSmtpPass =
+      typeof dto.smtpPass === 'string' && dto.smtpPass.trim().length > 0;
+
     return {
       branding: {
         platformName: dto.platformName,
@@ -104,6 +114,9 @@ export class OrgSettingsController {
         supportEmail: dto.supportEmail,
         smtpHost: dto.smtpHost,
         smtpPort: dto.smtpPort,
+        smtpSecure: dto.smtpSecure,
+        smtpUser: dto.smtpUser,
+        ...(shouldUpdateSmtpPass ? { smtpPass: dto.smtpPass } : {}),
         smtpSender: dto.smtpSender,
       },
       storage: {
