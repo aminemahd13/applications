@@ -420,9 +420,16 @@ export default function CheckinPage() {
   }, [refreshAttendees]);
 
   useEffect(() => {
-    setAttendeeTagsFilter((previous) =>
-      previous.filter((tag) => attendeeAvailableTags.includes(tag)),
-    );
+    setAttendeeTagsFilter((previous) => {
+      const next = previous.filter((tag) => attendeeAvailableTags.includes(tag));
+      if (
+        next.length === previous.length &&
+        next.every((tag, index) => tag === previous[index])
+      ) {
+        return previous;
+      }
+      return next;
+    });
   }, [attendeeAvailableTags]);
 
   useEffect(() => {
