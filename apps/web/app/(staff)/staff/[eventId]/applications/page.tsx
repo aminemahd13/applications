@@ -3410,10 +3410,7 @@ export default function ApplicationsListPage() {
               <p className="text-xs text-muted-foreground">
                 Variables: {DECISION_TEMPLATE_VARIABLE_TOKENS.join(", ")}
               </p>
-              <p className="text-xs text-muted-foreground">
-                Legacy dotted placeholders like {"{{event.title}}"} are not supported.
-                Update them manually to flat keys.
-              </p>
+  
               <DialogFooter>
                 <Button variant="outline" onClick={resetTemplateEditor}>
                   Reset
