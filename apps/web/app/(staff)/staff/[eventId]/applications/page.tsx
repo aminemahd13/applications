@@ -86,6 +86,7 @@ import {
   parseTagFilterInput,
   quickFiltersToApiFilterTree,
   quickFiltersToAdvancedTree,
+  quickFiltersToSavedViewQuickState,
   toApiFilterTree,
   type ApplicationsApiFilterGroup,
   type ApplicationsFilterConditionNode,
@@ -1160,7 +1161,7 @@ export default function ApplicationsListPage() {
         filterMode === "quick"
           ? quickFiltersToApiFilterTree(quickFilters)
           : toApiFilterTree(advancedFilterTree),
-      quickState: quickFilters,
+      quickState: quickFiltersToSavedViewQuickState(quickFilters),
     }),
     [advancedFilterTree, filterMode, quickFilters]
   );

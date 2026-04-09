@@ -46,6 +46,19 @@ export interface ApplicationsQuickFilters extends ApplicationsAdvancedFilters {
   searchQuery: string;
 }
 
+export interface ApplicationsSavedViewQuickState {
+  searchQuery?: string;
+  derivedStatus?: DerivedStatusFilterValue[];
+  decisionStatus?: DecisionStatusFilterValue;
+  stepId?: string;
+  stepStatus?: StepStatusFilterValue;
+  reviewerId?: "__any__" | string;
+  tagsInput?: string;
+  hasDraftProgress?: boolean;
+  completionBucket?: CompletionBucketValue[];
+  needsRevisionOnly?: boolean;
+}
+
 export type ApplicationsSavedViewMode = "quick" | "advanced";
 export type ApplicationsFilterMode = "all" | "any";
 export type ApplicationsAssignedReviewerMatcher = "any" | "unassigned" | "specific";
@@ -571,6 +584,27 @@ export function createQuickFilters(
       ? pickAllowedValues(merged.completionBucket, isCompletionBucketValue)
       : [],
     needsRevisionOnly: Boolean(merged.needsRevisionOnly),
+  };
+}
+
+export function quickFiltersToSavedViewQuickState(
+  partial?: Partial<ApplicationsQuickFilters>,
+): ApplicationsSavedViewQuickState {
+  const normalized = createQuickFilters(partial);
+  const stepId = normalized.stepId.trim();
+  const reviewerId = normalized.reviewerId.trim();
+
+  return {
+    searchQuery: normalized.searchQuery,
+    derivedStatus: [...normalized.derivedStatus],
+    decisionStatus: normalized.decisionStatus,
+    ...(isUuid(stepId) ? { stepId } : {}),
+    stepStatus: normalized.stepStatus,
+    ...(reviewerId === "__any__" || isUuid(reviewerId) ? { reviewerId } : {}),
+    tagsInput: normalized.tagsInput,
+    hasDraftProgress: normalized.hasDraftProgress,
+    completionBucket: [...normalized.completionBucket],
+    needsRevisionOnly: normalized.needsRevisionOnly,
   };
 }
 

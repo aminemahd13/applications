@@ -11,12 +11,14 @@ import {
   getFilterTreeStats,
   quickFiltersToApiFilterTree,
   quickFiltersToAdvancedTree,
+  quickFiltersToSavedViewQuickState,
   toApiFilterTree,
   type ApplicationsAdvancedFilters,
 } from "./applications-filters";
+import { CreateApplicationSavedViewSchema } from "@event-platform/shared";
 
-const STEP_ID = "11111111-1111-1111-1111-111111111111";
-const REVIEWER_ID = "22222222-2222-2222-2222-222222222222";
+const STEP_ID = "11111111-1111-4111-8111-111111111111";
+const REVIEWER_ID = "22222222-2222-4222-8222-222222222222";
 
 function createLegacyFilters(
   partial?: Partial<ApplicationsAdvancedFilters>,
@@ -141,6 +143,69 @@ describe("quickFiltersToApiFilterTree", () => {
         matcher: "unassigned",
       },
     ]);
+  });
+});
+
+describe("quickFiltersToSavedViewQuickState", () => {
+  it("produces quickState that passes create saved view schema for default filters", () => {
+    const quickFilters = createQuickFilters();
+    const payload = {
+      name: "My View",
+      mode: "quick" as const,
+      filterTree: quickFiltersToApiFilterTree(quickFilters),
+      quickState: quickFiltersToSavedViewQuickState(quickFilters),
+    };
+
+    const result = CreateApplicationSavedViewSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+
+  it("preserves valid selected stepId values", () => {
+    const quickFilters = createQuickFilters({
+      stepId: STEP_ID,
+      stepStatus: "SUBMITTED",
+    });
+    const quickState = quickFiltersToSavedViewQuickState(quickFilters);
+
+    expect(quickState.stepId).toBe(STEP_ID);
+    const result = CreateApplicationSavedViewSchema.safeParse({
+      name: "With Step",
+      mode: "quick",
+      filterTree: quickFiltersToApiFilterTree(quickFilters),
+      quickState,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("omits sentinel and invalid stepId values", () => {
+    const sentinelState = quickFiltersToSavedViewQuickState(
+      createQuickFilters({
+        stepId: "__any__",
+        stepStatus: "SUBMITTED",
+      }),
+    );
+    const invalidState = quickFiltersToSavedViewQuickState(
+      createQuickFilters({
+        stepId: "not-a-uuid",
+        stepStatus: "SUBMITTED",
+      }),
+    );
+
+    expect(sentinelState.stepId).toBeUndefined();
+    expect(invalidState.stepId).toBeUndefined();
+
+    const invalidPayloadResult = CreateApplicationSavedViewSchema.safeParse({
+      name: "Without Invalid Step",
+      mode: "quick",
+      filterTree: quickFiltersToApiFilterTree(
+        createQuickFilters({
+          stepId: "not-a-uuid",
+          stepStatus: "SUBMITTED",
+        }),
+      ),
+      quickState: invalidState,
+    });
+    expect(invalidPayloadResult.success).toBe(true);
   });
 });
 
