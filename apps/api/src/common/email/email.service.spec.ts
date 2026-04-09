@@ -64,6 +64,7 @@ describe('EmailService', () => {
         smtpUser: 'admin-user',
         smtpPass: 'admin-pass',
         smtpSender: 'admin-from@test.com',
+        smtpFromName: 'Admin Sender',
       },
     });
 
@@ -77,7 +78,10 @@ describe('EmailService', () => {
     });
     expect(sendMailMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        from: 'admin-from@test.com',
+        from: {
+          name: 'Admin Sender',
+          address: 'admin-from@test.com',
+        },
       }),
     );
   });
@@ -104,12 +108,15 @@ describe('EmailService', () => {
     });
     expect(sendMailMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        from: 'env-from@test.com',
+        from: {
+          name: 'Math&Maroc',
+          address: 'env-from@test.com',
+        },
       }),
     );
   });
 
-  it('rebuilds transporter only when effective SMTP config changes', async () => {
+  it('rebuilds transporter when only sender name changes', async () => {
     orgSettingsService.getSettings
       .mockResolvedValueOnce({
         email: {
@@ -117,6 +124,7 @@ describe('EmailService', () => {
           smtpPort: 587,
           smtpSecure: false,
           smtpSender: 'from-one@test.com',
+          smtpFromName: 'Sender One',
         },
       })
       .mockResolvedValueOnce({
@@ -125,14 +133,16 @@ describe('EmailService', () => {
           smtpPort: 587,
           smtpSecure: false,
           smtpSender: 'from-one@test.com',
+          smtpFromName: 'Sender One',
         },
       })
       .mockResolvedValueOnce({
         email: {
-          smtpHost: 'smtp.two.test',
+          smtpHost: 'smtp.one.test',
           smtpPort: 587,
           smtpSecure: false,
-          smtpSender: 'from-two@test.com',
+          smtpSender: 'from-one@test.com',
+          smtpFromName: 'Sender Two',
         },
       });
 
@@ -143,23 +153,33 @@ describe('EmailService', () => {
     expect(mockedNodemailer.createTransport).toHaveBeenCalledTimes(2);
     expect(sendMailMock).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ from: 'from-one@test.com', subject: 'S2' }),
+      expect.objectContaining({
+        from: { name: 'Sender One', address: 'from-one@test.com' },
+        subject: 'S2',
+      }),
     );
     expect(sendMailMock).toHaveBeenNthCalledWith(
       3,
-      expect.objectContaining({ from: 'from-two@test.com', subject: 'S3' }),
+      expect.objectContaining({
+        from: { name: 'Sender Two', address: 'from-one@test.com' },
+        subject: 'S3',
+      }),
     );
   });
 
-  it('uses effective sender address from fallback source', async () => {
+  it('uses platform name fallback for sender name when smtpFromName is empty', async () => {
     process.env.SMTP_HOST = 'env.smtp.test';
     process.env.SMTP_PORT = '587';
     process.env.SMTP_FROM = 'env-from@test.com';
 
     orgSettingsService.getSettings.mockResolvedValue({
+      branding: {
+        platformName: 'Math Maroc Platform',
+      },
       email: {
         smtpHost: '',
         smtpSender: '',
+        smtpFromName: '',
       },
     });
 
@@ -167,7 +187,10 @@ describe('EmailService', () => {
 
     expect(sendMailMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        from: 'env-from@test.com',
+        from: {
+          name: 'Math Maroc Platform',
+          address: 'env-from@test.com',
+        },
       }),
     );
   });

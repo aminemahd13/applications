@@ -85,6 +85,7 @@ export class OrgSettingsController {
       ),
       smtpUser: e.smtpUser ?? '',
       smtpSender: e.smtpSender ?? '',
+      smtpFromName: e.smtpFromName ?? '',
       smtpPasswordConfigured:
         typeof e.smtpPass === 'string' && e.smtpPass.trim().length > 0,
       maxEventsPerOrganizer: st.maxEventsPerOrganizer ?? 10,
@@ -118,6 +119,7 @@ export class OrgSettingsController {
         smtpUser: dto.smtpUser,
         ...(shouldUpdateSmtpPass ? { smtpPass: dto.smtpPass } : {}),
         smtpSender: dto.smtpSender,
+        smtpFromName: dto.smtpFromName,
       },
       storage: {
         maxEventsPerOrganizer: dto.maxEventsPerOrganizer,

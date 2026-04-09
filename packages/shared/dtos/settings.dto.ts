@@ -20,6 +20,7 @@ export const PlatformSettingsSchema = z.object({
     smtpUser: z.string().optional(),
     smtpPass: z.string().optional(),
     smtpSender: z.string().optional(),
+    smtpFromName: z.string().optional(),
     smtpPasswordConfigured: z.boolean().optional(),
 });
 
@@ -46,6 +47,7 @@ export const UpdateOrgSettingsSchema = z.object({
         smtpUser: z.string().optional(),
         smtpPass: z.string().optional(),
         smtpSender: z.string().optional(),
+        smtpFromName: z.string().optional(),
     }).optional(),
     storage: z.object({
         maxEventsPerOrganizer: z.number().int().min(1).optional(),

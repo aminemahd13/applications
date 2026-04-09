@@ -25,6 +25,7 @@ describe('OrgSettingsController', () => {
         smtpUser: 'apikey',
         smtpPass: 'secret-value',
         smtpSender: 'noreply@test.com',
+        smtpFromName: 'Math Maroc Team',
       },
       storage: {},
       retention: {},
@@ -36,6 +37,7 @@ describe('OrgSettingsController', () => {
     expect(result.smtpUser).toBe('apikey');
     expect(result.smtpSecure).toBe(false);
     expect(result.smtpSender).toBe('noreply@test.com');
+    expect(result.smtpFromName).toBe('Math Maroc Team');
     expect(result.smtpPasswordConfigured).toBe(true);
     expect(result).not.toHaveProperty('smtpPass');
   });
@@ -52,6 +54,7 @@ describe('OrgSettingsController', () => {
         smtpUser: 'apikey',
         smtpPass: 'new-secret',
         smtpSender: 'noreply@test.com',
+        smtpFromName: 'Math Maroc Team',
       },
       storage: {},
       retention: {},
@@ -64,6 +67,7 @@ describe('OrgSettingsController', () => {
       smtpUser: 'apikey',
       smtpPass: 'new-secret',
       smtpSender: 'noreply@test.com',
+      smtpFromName: 'Math Maroc Team',
     });
 
     expect(service.updateSettings).toHaveBeenCalledWith(
@@ -75,6 +79,7 @@ describe('OrgSettingsController', () => {
           smtpUser: 'apikey',
           smtpPass: 'new-secret',
           smtpSender: 'noreply@test.com',
+          smtpFromName: 'Math Maroc Team',
         }),
       }),
     );
@@ -94,6 +99,7 @@ describe('OrgSettingsController', () => {
         smtpUser: 'apikey',
         smtpPass: 'existing-secret',
         smtpSender: 'noreply@test.com',
+        smtpFromName: 'Math Maroc Team',
       },
       storage: {},
       retention: {},
@@ -106,6 +112,7 @@ describe('OrgSettingsController', () => {
       smtpUser: 'apikey',
       smtpPass: '   ',
       smtpSender: 'noreply@test.com',
+      smtpFromName: 'Math Maroc Team',
     });
 
     const categorized = service.updateSettings.mock.calls[0][0];
@@ -125,6 +132,7 @@ describe('OrgSettingsController', () => {
         smtpSecure: false,
         smtpUser: 'mailer-user',
         smtpSender: 'mailer@example.org',
+        smtpFromName: 'Mailer Team',
       },
       storage: {},
       retention: {},
@@ -136,6 +144,7 @@ describe('OrgSettingsController', () => {
       smtpSecure: false,
       smtpUser: 'mailer-user',
       smtpSender: 'mailer@example.org',
+      smtpFromName: 'Mailer Team',
     });
 
     expect(service.updateSettings).toHaveBeenCalledWith(
@@ -146,6 +155,7 @@ describe('OrgSettingsController', () => {
           smtpSecure: false,
           smtpUser: 'mailer-user',
           smtpSender: 'mailer@example.org',
+          smtpFromName: 'Mailer Team',
         }),
       }),
     );
@@ -154,6 +164,7 @@ describe('OrgSettingsController', () => {
     expect(result.smtpSecure).toBe(false);
     expect(result.smtpUser).toBe('mailer-user');
     expect(result.smtpSender).toBe('mailer@example.org');
+    expect(result.smtpFromName).toBe('Mailer Team');
     expect(result.smtpPasswordConfigured).toBe(false);
   });
 });

@@ -9,7 +9,13 @@ type SmtpConfig = {
   user?: string;
   pass?: string;
   from: string;
+  fromName: string;
   hostSource: 'admin' | 'env' | 'default';
+};
+
+type SenderAddress = {
+  name: string;
+  address: string;
 };
 
 @Injectable()
@@ -17,7 +23,10 @@ export class EmailService implements OnModuleInit {
   private readonly logger = new Logger(EmailService.name);
   private transporter: nodemailer.Transporter | null = null;
   private transporterConfigKey: string | null = null;
-  private fromAddress = 'noreply@mathmaroc.org';
+  private fromAddress: SenderAddress = {
+    name: 'Math&Maroc',
+    address: 'noreply@mathmaroc.org',
+  };
 
   constructor(private readonly orgSettingsService: OrgSettingsService) {}
 
@@ -123,11 +132,32 @@ export class EmailService implements OnModuleInit {
     return this.readNonEmptyString(process.env.SMTP_FROM) ?? 'noreply@mathmaroc.org';
   }
 
+  private resolveFromName(
+    emailSettings: Record<string, unknown>,
+    brandingSettings: Record<string, unknown>,
+  ): string {
+    const adminFromName = this.pickStringSetting(
+      emailSettings.smtpFromName ?? emailSettings.fromName,
+    );
+    if (adminFromName) return adminFromName;
+
+    const brandingFromName = this.pickStringSetting(
+      brandingSettings.platformName ?? brandingSettings.name,
+    );
+    if (brandingFromName) return brandingFromName;
+
+    return 'Math&Maroc';
+  }
+
   private async resolveSmtpConfig(): Promise<SmtpConfig> {
     const settings = await this.orgSettingsService.getSettings();
     const emailSettings =
       settings?.email && typeof settings.email === 'object'
         ? (settings.email as Record<string, unknown>)
+        : {};
+    const brandingSettings =
+      settings?.branding && typeof settings.branding === 'object'
+        ? (settings.branding as Record<string, unknown>)
         : {};
 
     const { host, hostSource } = this.resolveHost(emailSettings);
@@ -136,6 +166,7 @@ export class EmailService implements OnModuleInit {
     const user = this.pickStringSetting(emailSettings.smtpUser, process.env.SMTP_USER);
     const pass = this.pickStringSetting(emailSettings.smtpPass, process.env.SMTP_PASS);
     const from = this.resolveFrom(emailSettings);
+    const fromName = this.resolveFromName(emailSettings, brandingSettings);
 
     return {
       host,
@@ -145,6 +176,7 @@ export class EmailService implements OnModuleInit {
       user,
       pass,
       from,
+      fromName,
     };
   }
 
@@ -156,6 +188,7 @@ export class EmailService implements OnModuleInit {
       user: config.user ?? '',
       pass: config.pass ?? '',
       from: config.from,
+      fromName: config.fromName,
     });
   }
 
@@ -181,11 +214,14 @@ export class EmailService implements OnModuleInit {
             }
           : {}),
       });
-      this.fromAddress = config.from;
+      this.fromAddress = {
+        name: config.fromName,
+        address: config.from,
+      };
       this.transporterConfigKey = nextKey;
 
       this.logger.log(
-        `SMTP transport configured host=${config.host} port=${config.port} secure=${config.secure} auth=${config.user ? 'on' : 'off'} from=${this.fromAddress}`,
+        `SMTP transport configured host=${config.host} port=${config.port} secure=${config.secure} auth=${config.user ? 'on' : 'off'} from="${this.fromAddress.name} <${this.fromAddress.address}>"`,
       );
 
       if (config.hostSource === 'default') {

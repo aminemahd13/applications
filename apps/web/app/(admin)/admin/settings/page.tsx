@@ -49,6 +49,7 @@ interface PlatformSettings {
   smtpSecure: boolean;
   smtpUser: string;
   smtpSender: string;
+  smtpFromName: string;
   smtpPasswordConfigured: boolean;
 }
 
@@ -70,6 +71,7 @@ const DEFAULT_SETTINGS: PlatformSettings = {
   smtpSecure: false,
   smtpUser: "",
   smtpSender: "",
+  smtpFromName: "",
   smtpPasswordConfigured: false,
 };
 
@@ -276,6 +278,14 @@ export default function AdminSettingsPage() {
                   value={settings.smtpSender}
                   onChange={(e) => update("smtpSender", e.target.value)}
                   placeholder="noreply@mathmaroc.org"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>SMTP from name</Label>
+                <Input
+                  value={settings.smtpFromName}
+                  onChange={(e) => update("smtpFromName", e.target.value)}
+                  placeholder="Math&Maroc"
                 />
               </div>
               <div className="space-y-2 sm:col-span-2">
