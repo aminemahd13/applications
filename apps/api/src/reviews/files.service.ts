@@ -656,7 +656,11 @@ export class FilesService {
       ) {
         throw new ForbiddenException('Step is not open for file uploads');
       }
-      if (step.deadline_at && new Date() > new Date(step.deadline_at)) {
+      if (
+        stepState.status !== 'NEEDS_REVISION' &&
+        step.deadline_at &&
+        new Date() > new Date(step.deadline_at)
+      ) {
         throw new ForbiddenException('Step deadline has passed');
       }
     }

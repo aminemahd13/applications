@@ -7,6 +7,7 @@ describe('FilesService applicant upload guard', () => {
     stepStatus: string;
     allowApplicantModification: boolean;
     modificationScope: 'SUBMITTED_ONLY' | 'SUBMITTED_OR_APPROVED';
+    deadlineAt?: Date | null;
   }) {
     const prisma = {
       applications: {
@@ -19,7 +20,7 @@ describe('FilesService applicant upload guard', () => {
         findFirst: jest.fn().mockResolvedValue({
           id: 'step-1',
           form_version_id: 'form-1',
-          deadline_at: null,
+          deadline_at: params.deadlineAt ?? null,
           allow_applicant_modification: params.allowApplicantModification,
           modification_scope: params.modificationScope,
         }),
@@ -121,6 +122,32 @@ describe('FilesService applicant upload guard', () => {
 
     await expect(resolveContext(service)).resolves.toEqual(
       expect.objectContaining({ fieldId: 'resume' }),
+    );
+  });
+
+  it('allows uploads during needs-revision when the base step deadline has passed', async () => {
+    const service = createService({
+      stepStatus: 'NEEDS_REVISION',
+      allowApplicantModification: false,
+      modificationScope: 'SUBMITTED_ONLY',
+      deadlineAt: new Date('2020-01-01T00:00:00.000Z'),
+    });
+
+    await expect(resolveContext(service)).resolves.toEqual(
+      expect.objectContaining({ fieldId: 'resume' }),
+    );
+  });
+
+  it('still blocks uploads after deadline when step is not in needs-revision', async () => {
+    const service = createService({
+      stepStatus: 'UNLOCKED',
+      allowApplicantModification: false,
+      modificationScope: 'SUBMITTED_ONLY',
+      deadlineAt: new Date('2020-01-01T00:00:00.000Z'),
+    });
+
+    await expect(resolveContext(service)).rejects.toBeInstanceOf(
+      ForbiddenException,
     );
   });
 });

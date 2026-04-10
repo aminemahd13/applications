@@ -95,7 +95,57 @@ export class StepStateService {
     const states = app.application_step_states;
 
     const now = new Date();
+    const relockableStatuses = new Set<string>([
+      StepStatus.UNLOCKED,
+      'UNLOCKED_DRAFT',
+      'READY_TO_SUBMIT',
+    ]);
+    const blockingRevisionIndexes = states
+      .filter(
+        (state) =>
+          state.status === StepStatus.NEEDS_REVISION &&
+          Boolean(state.workflow_steps?.strict_gating) &&
+          !Boolean(state.workflow_steps?.allow_next_steps_while_revising),
+      )
+      .map((state) => state.workflow_steps?.step_index)
+      .filter((index): index is number => typeof index === 'number');
+    const relockStepIds: string[] = [];
     const unlockStepIds: string[] = [];
+
+    // Re-lock editable downstream steps when a revising strict-gating step blocks pass-through.
+    for (const state of states) {
+      const status = String(state.status ?? '');
+      if (!relockableStatuses.has(status)) continue;
+
+      const stepIndex = state.workflow_steps?.step_index;
+      if (typeof stepIndex !== 'number') continue;
+
+      const blockedByRevision = blockingRevisionIndexes.some(
+        (index) => stepIndex > index,
+      );
+      if (!blockedByRevision) continue;
+
+      const unlockPolicy = String(state.workflow_steps?.unlock_policy ?? '');
+      const isManualUnlock = unlockPolicy === String(UnlockPolicy.ADMIN_MANUAL);
+      if (isManualUnlock) continue;
+
+      relockStepIds.push(state.id);
+      // Keep in-memory sequence consistent for unlock checks below.
+      state.status = StepStatus.LOCKED;
+    }
+
+    if (relockStepIds.length > 0) {
+      await this.prisma.application_step_states.updateMany({
+        where: {
+          id: { in: relockStepIds },
+          status: { in: Array.from(relockableStatuses) },
+        },
+        data: {
+          status: StepStatus.LOCKED,
+          last_activity_at: now,
+        },
+      });
+    }
 
     // Process each step in order
     for (let i = 0; i < states.length; i++) {
@@ -109,6 +159,16 @@ export class StepStateService {
         state.status === StepStatus.APPROVED ||
         state.status === StepStatus.NEEDS_REVISION
       ) {
+        continue;
+      }
+
+      const stepIndex = step?.step_index;
+      const blockedByRevision =
+        state.status === StepStatus.LOCKED &&
+        typeof stepIndex === 'number' &&
+        blockingRevisionIndexes.some((index) => stepIndex > index) &&
+        String(step?.unlock_policy ?? '') !== String(UnlockPolicy.ADMIN_MANUAL);
+      if (blockedByRevision) {
         continue;
       }
 
