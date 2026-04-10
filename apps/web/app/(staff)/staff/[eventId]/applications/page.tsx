@@ -374,6 +374,7 @@ export default function ApplicationsListPage() {
   const [isIssuingCredentials, setIsIssuingCredentials] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isApplyingBulk, setIsApplyingBulk] = useState(false);
+  const [isSelectingAllMatching, setIsSelectingAllMatching] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
@@ -879,11 +880,15 @@ export default function ApplicationsListPage() {
     });
   }, [filteredData.length]);
 
-  const selectedCount = selectedIds.length;
   const selectedApplicationIds = useMemo(
     () => Array.from(new Set(selectedIds)),
     [selectedIds],
   );
+  const selectedIdSet = useMemo(
+    () => new Set(selectedApplicationIds),
+    [selectedApplicationIds],
+  );
+  const selectedCount = selectedApplicationIds.length;
   const parsedPastedEmails = useMemo(
     () => parsePastedEmails(pastedEmailsText),
     [pastedEmailsText],
@@ -1703,6 +1708,53 @@ export default function ApplicationsListPage() {
     }
   }, [loadApplications, pagination.pageIndex, pagination.pageSize]);
 
+  const selectAllMatchingApplications = useCallback(async () => {
+    if (isSelectingAllMatching) return;
+    if (totalMatchingApplications <= 0) {
+      setSelectedIds([]);
+      return;
+    }
+
+    setIsSelectingAllMatching(true);
+    try {
+      const allIds = new Set<string>();
+      const seenCursors = new Set<string>();
+      let cursor: string | null = null;
+      let hasMore = true;
+
+      while (hasMore) {
+        const page = await fetchApplicationsPage({ cursor });
+        for (const application of page.applications) {
+          allIds.add(application.id);
+        }
+
+        hasMore = page.hasMore;
+        if (!hasMore) break;
+
+        if (!page.nextCursor) {
+          throw new Error("Missing next cursor while selecting all applications");
+        }
+        if (seenCursors.has(page.nextCursor)) {
+          throw new Error("Detected repeated cursor while selecting all applications");
+        }
+
+        seenCursors.add(page.nextCursor);
+        cursor = page.nextCursor;
+      }
+
+      setSelectedIds(Array.from(allIds));
+      toast.success(`Selected ${allIds.size} application(s).`);
+    } catch {
+      toast.error("Could not select all matching applications.");
+    } finally {
+      setIsSelectingAllMatching(false);
+    }
+  }, [
+    fetchApplicationsPage,
+    isSelectingAllMatching,
+    totalMatchingApplications,
+  ]);
+
   useEffect(() => {
     const allowedActions: Array<"UNLOCK" | "APPROVE" | "LOCK"> = [];
     if (canStepOverride) {
@@ -2178,31 +2230,34 @@ export default function ApplicationsListPage() {
       {
         id: "select",
         header: () => {
-          const visibleIds = filteredData.map((row) => row.id);
-          const selectedVisibleCount = visibleIds.filter((id) =>
-            selectedIds.includes(id),
-          ).length;
-          const allSelected =
-            visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+          const allMatchingSelected =
+            totalMatchingApplications > 0 &&
+            selectedApplicationIds.length >= totalMatchingApplications;
+          const headerChecked: boolean | "indeterminate" = allMatchingSelected
+            ? true
+            : selectedApplicationIds.length > 0
+              ? "indeterminate"
+              : false;
+
           return (
             <Checkbox
-              checked={allSelected}
+              checked={headerChecked}
+              disabled={isSelectingAllMatching || totalMatchingApplications === 0}
               onCheckedChange={(checked) => {
                 const nextChecked = checked === true;
-                setSelectedIds((prev) => {
-                  const withoutVisible = prev.filter((id) => !visibleIds.includes(id));
-                  return nextChecked
-                    ? Array.from(new Set([...withoutVisible, ...visibleIds]))
-                    : withoutVisible;
-                });
+                if (!nextChecked) {
+                  setSelectedIds([]);
+                  return;
+                }
+                void selectAllMatchingApplications();
               }}
-              aria-label="Select all applications"
+              aria-label="Select all matching applications"
             />
           );
         },
         cell: ({ row }) => (
           <Checkbox
-            checked={selectedIds.includes(row.original.id)}
+            checked={selectedIdSet.has(row.original.id)}
             onCheckedChange={(checked) => {
               const nextChecked = checked === true;
               setSelectedIds((prev) =>
@@ -2335,10 +2390,13 @@ export default function ApplicationsListPage() {
       basePath,
       canDeleteApplications,
       deleteTarget?.id,
-      filteredData,
+      isSelectingAllMatching,
       isDeleting,
       router,
-      selectedIds,
+      selectAllMatchingApplications,
+      selectedApplicationIds,
+      selectedIdSet,
+      totalMatchingApplications,
     ]
   );
 
