@@ -50,6 +50,8 @@ describe('WorkflowController', () => {
         title: 'Profile',
         category: 'APPLICATION',
         stepIndex: 0,
+        allowNextStepsWhileRevising: true,
+        revisionDeadlineAt: '2026-05-01T00:00:00.000Z',
         allowApplicantModification: true,
         modificationScope: 'SUBMITTED_OR_APPROVED',
       }),
@@ -58,6 +60,9 @@ describe('WorkflowController', () => {
     const controller = new WorkflowController(workflowService as any);
     const result = await controller.createStep('event-1', {
       title: 'Profile',
+      reviewRequired: true,
+      allowNextStepsWhileRevising: true,
+      revisionDeadlineAt: '2026-05-01T00:00:00.000Z',
       allowApplicantModification: true,
       modificationScope: 'SUBMITTED_OR_APPROVED',
     });
@@ -66,12 +71,17 @@ describe('WorkflowController', () => {
       'event-1',
       expect.objectContaining({
         title: 'Profile',
+        reviewRequired: true,
+        allowNextStepsWhileRevising: true,
+        revisionDeadlineAt: new Date('2026-05-01T00:00:00.000Z'),
         allowApplicantModification: true,
         modificationScope: 'SUBMITTED_OR_APPROVED',
       }),
     );
     expect(result).toEqual({
       data: expect.objectContaining({
+        allowNextStepsWhileRevising: true,
+        revisionDeadlineAt: '2026-05-01T00:00:00.000Z',
         allowApplicantModification: true,
         modificationScope: 'SUBMITTED_OR_APPROVED',
       }),

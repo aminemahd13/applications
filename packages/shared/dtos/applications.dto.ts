@@ -601,6 +601,8 @@ export interface StepStateResponse {
     category?: string;
     status: StepStatus;
     deadlineAt?: Date | null;
+    revisionDeadlineAt?: Date | null;
+    revisionOverdue?: boolean;
     instructions?: string;
     formDefinition?: Record<string, any>;
     answers?: Record<string, any>;

@@ -118,6 +118,17 @@ export class ReviewsService {
       }
     }
 
+    const effectiveRevisionDeadline =
+      dto.outcome === ReviewOutcome.REQUEST_INFO
+        ? this.resolveEffectiveRevisionDeadline(
+            step.revision_deadline_at,
+            dto.deadline,
+          )
+        : dto.outcome === ReviewOutcome.REJECT &&
+            step.reject_behavior !== 'FINAL'
+          ? this.resolveEffectiveRevisionDeadline(step.revision_deadline_at)
+          : null;
+
     // Create review record
     const review = await this.prisma.review_records.create({
       data: {
@@ -139,7 +150,12 @@ export class ReviewsService {
       }
 
       case ReviewOutcome.REJECT:
-        await this.handleReject(applicationId, stepId, step.reject_behavior);
+        await this.handleReject(
+          applicationId,
+          stepId,
+          step.reject_behavior,
+          effectiveRevisionDeadline,
+        );
         break;
 
       case ReviewOutcome.REQUEST_INFO: {
@@ -149,7 +165,7 @@ export class ReviewsService {
           versionId,
           dto.targetFieldIds || [],
           dto.messageToApplicant || '',
-          dto.deadline,
+          effectiveRevisionDeadline,
           reviewerId,
         );
         break;
@@ -172,6 +188,34 @@ export class ReviewsService {
       notesInternal: review.notes_internal,
       createdAt: review.created_at,
     };
+  }
+
+  private resolveEffectiveRevisionDeadline(
+    stepRevisionDeadlineAt: Date | null | undefined,
+    reviewerDeadlineAt?: Date,
+  ): Date | null {
+    if (!stepRevisionDeadlineAt && !reviewerDeadlineAt) {
+      return null;
+    }
+
+    if (!stepRevisionDeadlineAt) {
+      return reviewerDeadlineAt ?? null;
+    }
+
+    if (!reviewerDeadlineAt) {
+      return stepRevisionDeadlineAt;
+    }
+
+    if (
+      new Date(reviewerDeadlineAt).getTime() >
+      new Date(stepRevisionDeadlineAt).getTime()
+    ) {
+      throw new BadRequestException(
+        'Review deadline can only shorten the configured revision deadline for this step',
+      );
+    }
+
+    return reviewerDeadlineAt;
   }
 
   /**
@@ -223,12 +267,15 @@ export class ReviewsService {
     applicationId: string,
     stepId: string,
     rejectBehavior: string | null,
+    revisionDeadlineAt: Date | null,
   ): Promise<void> {
     if (rejectBehavior === 'FINAL') {
       await this.stepStateService.markRejectedFinal(applicationId, stepId);
     } else {
       // RESUBMIT_ALLOWED - mark as needs revision
-      await this.stepStateService.markNeedsRevision(applicationId, stepId);
+      await this.stepStateService.markNeedsRevision(applicationId, stepId, {
+        revisionDeadlineAt,
+      });
     }
   }
 
@@ -241,7 +288,7 @@ export class ReviewsService {
     versionId: string,
     targetFieldIds: string[],
     message: string,
-    deadline: Date | undefined,
+    deadline: Date | null,
     createdBy: string,
   ): Promise<void> {
     await this.prisma.needs_info_requests.create({
@@ -259,7 +306,9 @@ export class ReviewsService {
     });
 
     // Mark step as needs revision (triggers strict gating)
-    await this.stepStateService.markNeedsRevision(applicationId, stepId);
+    await this.stepStateService.markNeedsRevision(applicationId, stepId, {
+      revisionDeadlineAt: deadline,
+    });
   }
 
   /**

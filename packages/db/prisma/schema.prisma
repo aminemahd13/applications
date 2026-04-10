@@ -74,6 +74,7 @@ model application_step_states {
   current_draft_id             String?        @db.Uuid
   latest_submission_version_id String?        @db.Uuid
   revision_cycle_count         Int            @default(0)
+  revision_deadline_at         DateTime?      @db.Timestamptz(6)
   unlocked_at                  DateTime?      @db.Timestamptz(6)
   last_activity_at             DateTime       @default(now()) @db.Timestamptz(6)
   applications                 applications   @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -604,6 +605,8 @@ model workflow_steps {
   reviewer_roles_allowed       Json                       @default("[\"reviewer\", \"organizer\"]")
   reject_behavior              String                     @default("reject_resubmit_allowed")
   strict_gating                Boolean                    @default(true)
+  allow_next_steps_while_revising Boolean                 @default(true)
+  revision_deadline_at         DateTime?                  @db.Timestamptz(6)
   sensitivity_level            String                     @default("NORMAL")
   hidden                       Boolean                    @default(false)
   allow_applicant_modification Boolean                    @default(false)

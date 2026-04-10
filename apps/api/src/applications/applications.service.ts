@@ -1385,6 +1385,7 @@ export class ApplicationsService {
                 step_index: true,
                 category: true,
                 deadline_at: true,
+                revision_deadline_at: true,
                 instructions_rich: true,
                 form_versions: { select: { schema: true } },
               },
@@ -1434,6 +1435,7 @@ export class ApplicationsService {
                   step_index: true,
                   category: true,
                   deadline_at: true,
+                  revision_deadline_at: true,
                   instructions_rich: true,
                   form_versions: { select: { schema: true } },
                 },
@@ -1675,6 +1677,7 @@ export class ApplicationsService {
                 step_index: true,
                 category: true,
                 deadline_at: true,
+                revision_deadline_at: true,
                 instructions_rich: true,
                 hidden: true,
                 allow_applicant_modification: true,
@@ -1739,6 +1742,7 @@ export class ApplicationsService {
                   step_index: true,
                   category: true,
                   deadline_at: true,
+                  revision_deadline_at: true,
                   instructions_rich: true,
                   hidden: true,
                   allow_applicant_modification: true,
@@ -3260,37 +3264,49 @@ export class ApplicationsService {
       completionCredential: this.toCompletionCredential(
         app.completion_credentials ?? null,
       ),
-      stepStates: stepStates.map((ss: any) => ({
-        id: `${ss.application_id}:${ss.step_id}`,
-        stepId: ss.step_id,
-        stepTitle: ss.workflow_steps?.title || 'Unknown Step',
-        stepIndex: ss.workflow_steps?.step_index ?? 0,
-        category: ss.workflow_steps?.category,
-        status: ss.status as StepStatus,
-        deadlineAt: ss.workflow_steps?.deadline_at ?? null,
-        instructions:
-          typeof ss.workflow_steps?.instructions_rich === 'string'
-            ? ss.workflow_steps.instructions_rich
-            : ss.workflow_steps?.instructions_rich?.html || undefined,
-        formDefinition: ss.workflow_steps?.form_versions?.schema || undefined,
-        answers: answersByStepId[ss.step_id]
-          ? this.normalizeAnswersShape(answersByStepId[ss.step_id])
-          : undefined,
-        answersSource: answersSourceByStepId[ss.step_id] ?? null,
-        currentDraftId: ss.current_draft_id,
-        latestSubmissionVersionId: ss.latest_submission_version_id,
-        allowApplicantModification: Boolean(
-          ss.workflow_steps?.allow_applicant_modification,
-        ),
-        modificationScope:
-          ss.workflow_steps?.modification_scope ===
-          StepModificationScope.SUBMITTED_OR_APPROVED
-            ? StepModificationScope.SUBMITTED_OR_APPROVED
-            : StepModificationScope.SUBMITTED_ONLY,
-        revisionCycleCount: ss.revision_cycle_count,
-        unlockedAt: ss.unlocked_at,
-        lastActivityAt: ss.last_activity_at,
-      })),
+      stepStates: stepStates.map((ss: any) => {
+        const revisionDeadlineAt =
+          ss.revision_deadline_at ?? ss.workflow_steps?.revision_deadline_at;
+
+        return {
+          id: `${ss.application_id}:${ss.step_id}`,
+          stepId: ss.step_id,
+          stepTitle: ss.workflow_steps?.title || 'Unknown Step',
+          stepIndex: ss.workflow_steps?.step_index ?? 0,
+          category: ss.workflow_steps?.category,
+          status: ss.status as StepStatus,
+          deadlineAt: ss.workflow_steps?.deadline_at ?? null,
+          revisionDeadlineAt,
+          revisionOverdue:
+            ss.status === StepStatus.NEEDS_REVISION &&
+            Boolean(
+              revisionDeadlineAt &&
+                new Date(revisionDeadlineAt).getTime() < Date.now(),
+            ),
+          instructions:
+            typeof ss.workflow_steps?.instructions_rich === 'string'
+              ? ss.workflow_steps.instructions_rich
+              : ss.workflow_steps?.instructions_rich?.html || undefined,
+          formDefinition: ss.workflow_steps?.form_versions?.schema || undefined,
+          answers: answersByStepId[ss.step_id]
+            ? this.normalizeAnswersShape(answersByStepId[ss.step_id])
+            : undefined,
+          answersSource: answersSourceByStepId[ss.step_id] ?? null,
+          currentDraftId: ss.current_draft_id,
+          latestSubmissionVersionId: ss.latest_submission_version_id,
+          allowApplicantModification: Boolean(
+            ss.workflow_steps?.allow_applicant_modification,
+          ),
+          modificationScope:
+            ss.workflow_steps?.modification_scope ===
+            StepModificationScope.SUBMITTED_OR_APPROVED
+              ? StepModificationScope.SUBMITTED_OR_APPROVED
+              : StepModificationScope.SUBMITTED_ONLY,
+          revisionCycleCount: ss.revision_cycle_count,
+          unlockedAt: ss.unlocked_at,
+          lastActivityAt: ss.last_activity_at,
+        };
+      }),
     };
   }
 

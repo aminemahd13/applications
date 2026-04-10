@@ -60,6 +60,8 @@ export const CreateWorkflowStepSchema = z.object({
     reviewRequired: z.boolean().default(false),
     rejectBehavior: z.nativeEnum(RejectBehavior).default(RejectBehavior.RESUBMIT_ALLOWED),
     strictGating: z.boolean().default(true),
+    allowNextStepsWhileRevising: z.boolean().default(true),
+    revisionDeadlineAt: z.coerce.date().optional().nullable(),
     deadlineAt: z.coerce.date().optional().nullable(),
     formVersionId: z.string().uuid().optional().nullable(),
     sensitivityLevel: z.nativeEnum(SensitivityLevel).default(SensitivityLevel.NORMAL),

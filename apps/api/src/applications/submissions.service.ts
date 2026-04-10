@@ -289,8 +289,13 @@ export class SubmissionsService {
       throw new ForbiddenException('Step is not open for submission');
     }
 
-    // Enforce step deadline (if set)
-    if (step.deadline_at && new Date() > new Date(step.deadline_at)) {
+    // Enforce base step deadline for non-revision submissions.
+    // Revision cycles use the dedicated revision deadline metadata and remain submittable when overdue.
+    if (
+      state.status !== StepStatus.NEEDS_REVISION &&
+      step.deadline_at &&
+      new Date() > new Date(step.deadline_at)
+    ) {
       throw new ForbiddenException('Step deadline has passed');
     }
 
@@ -305,6 +310,7 @@ export class SubmissionsService {
             status: StepStatus.APPROVED,
             latest_submission_version_id: null,
             current_draft_id: null,
+            revision_deadline_at: null,
             last_activity_at: submittedAt,
           },
         });
@@ -431,6 +437,7 @@ export class SubmissionsService {
             : StepStatus.APPROVED,
           latest_submission_version_id: newSubmission.id,
           current_draft_id: null,
+          revision_deadline_at: null,
           last_activity_at: new Date(),
         },
       });

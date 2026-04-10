@@ -28,6 +28,8 @@ export interface WorkflowStepResponse {
   reviewRequired: boolean;
   rejectBehavior: string;
   strictGating: boolean;
+  allowNextStepsWhileRevising: boolean;
+  revisionDeadlineAt: Date | null;
   sensitivityLevel: string;
   hidden: boolean;
   allowApplicantModification: boolean;
@@ -58,6 +60,10 @@ export class WorkflowService {
       reviewRequired: step.review_required,
       rejectBehavior: step.reject_behavior,
       strictGating: step.strict_gating,
+      allowNextStepsWhileRevising: Boolean(
+        step.allow_next_steps_while_revising,
+      ),
+      revisionDeadlineAt: step.revision_deadline_at,
       sensitivityLevel: step.sensitivity_level,
       hidden: Boolean(step.hidden),
       allowApplicantModification: Boolean(step.allow_applicant_modification),
@@ -136,6 +142,9 @@ export class WorkflowService {
         review_required: dto.reviewRequired ?? false,
         reject_behavior: dto.rejectBehavior || 'reject_resubmit_allowed',
         strict_gating: dto.strictGating ?? true,
+        allow_next_steps_while_revising:
+          dto.allowNextStepsWhileRevising ?? true,
+        revision_deadline_at: dto.revisionDeadlineAt,
         sensitivity_level: dto.sensitivityLevel || 'NORMAL',
         hidden: dto.hidden ?? false,
         allow_applicant_modification: dto.allowApplicantModification ?? false,
@@ -171,6 +180,11 @@ export class WorkflowService {
     if (dto.rejectBehavior !== undefined)
       data.reject_behavior = dto.rejectBehavior;
     if (dto.strictGating !== undefined) data.strict_gating = dto.strictGating;
+    if (dto.allowNextStepsWhileRevising !== undefined) {
+      data.allow_next_steps_while_revising = dto.allowNextStepsWhileRevising;
+    }
+    if (dto.revisionDeadlineAt !== undefined)
+      data.revision_deadline_at = dto.revisionDeadlineAt;
     if (dto.sensitivityLevel !== undefined)
       data.sensitivity_level = dto.sensitivityLevel;
     if (dto.hidden !== undefined) data.hidden = dto.hidden;

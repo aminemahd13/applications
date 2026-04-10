@@ -159,7 +159,12 @@ export class StepStateService {
     const existingIds = new Set(existingStates.map((s) => s.step_id));
     const missingSteps = steps.filter((s) => !existingIds.has(s.id));
 
-    if (missingSteps.length === 0) return false;
+    if (missingSteps.length === 0) {
+      // Re-evaluate unlocks so policy updates apply to existing applications
+      // even when no new workflow steps were added.
+      await this.recomputeAllStepStates(applicationId);
+      return false;
+    }
 
     await this.prisma.application_step_states.createMany({
       data: missingSteps.map((step) => ({
@@ -182,6 +187,9 @@ export class StepStateService {
   private evaluateUnlockPolicy(step: any, prevState: any, app: any): boolean {
     const policy = step.unlock_policy as UnlockPolicy;
     const strictGating = Boolean(step.strict_gating);
+    const prevAllowsRevisionPassThrough =
+      prevState?.status === StepStatus.NEEDS_REVISION &&
+      Boolean(prevState?.workflow_steps?.allow_next_steps_while_revising);
 
     // When strict gating is enabled, downstream steps remain locked until the
     // previous step is submitted or approved.
@@ -189,7 +197,8 @@ export class StepStateService {
       strictGating &&
       prevState &&
       prevState.status !== StepStatus.SUBMITTED &&
-      prevState.status !== StepStatus.APPROVED
+      prevState.status !== StepStatus.APPROVED &&
+      !prevAllowsRevisionPassThrough
     ) {
       return false;
     }
@@ -200,7 +209,8 @@ export class StepStateService {
         if (!prevState) return true; // First step
         return (
           prevState.status === StepStatus.SUBMITTED ||
-          prevState.status === StepStatus.APPROVED
+          prevState.status === StepStatus.APPROVED ||
+          prevAllowsRevisionPassThrough
         );
 
       case UnlockPolicy.AFTER_PREV_APPROVED:
@@ -252,6 +262,7 @@ export class StepStateService {
         status: nextStatus,
         latest_submission_version_id: submissionVersionId,
         current_draft_id: null, // Clear draft after submission
+        revision_deadline_at: null,
         last_activity_at: new Date(),
       },
     });
@@ -271,6 +282,7 @@ export class StepStateService {
         // Reviewer approval should finalize the latest submitted version.
         // Drop any unsent draft pointer so detail views don't surface draft-only edits.
         current_draft_id: null,
+        revision_deadline_at: null,
         last_activity_at: new Date(),
       },
     });
@@ -285,7 +297,7 @@ export class StepStateService {
   async markNeedsRevision(
     applicationId: string,
     stepId: string,
-    options?: { lockDownstream?: boolean },
+    options?: { lockDownstream?: boolean; revisionDeadlineAt?: Date | null },
   ): Promise<void> {
     const state = await this.prisma.application_step_states.findFirst({
       where: { application_id: applicationId, step_id: stepId },
@@ -293,23 +305,42 @@ export class StepStateService {
 
     if (!state) return;
 
+    const step = await this.prisma.workflow_steps.findUnique({
+      where: { id: stepId },
+      select: {
+        step_index: true,
+        strict_gating: true,
+        allow_next_steps_while_revising: true,
+        revision_deadline_at: true,
+      },
+    });
+
+    const effectiveRevisionDeadline =
+      options?.revisionDeadlineAt !== undefined
+        ? options.revisionDeadlineAt
+        : step?.revision_deadline_at ?? null;
+
     await this.prisma.application_step_states.update({
       where: { id: state.id },
       data: {
         status: StepStatus.NEEDS_REVISION,
         revision_cycle_count: state.revision_cycle_count + 1,
+        revision_deadline_at: effectiveRevisionDeadline,
         last_activity_at: new Date(),
       },
     });
 
-    // If strict gating, lock downstream steps
-    const step = await this.prisma.workflow_steps.findUnique({
-      where: { id: stepId },
-    });
+    const shouldRelockDownstream =
+      step?.strict_gating &&
+      !step.allow_next_steps_while_revising &&
+      options?.lockDownstream !== false;
 
-    if (step?.strict_gating && options?.lockDownstream !== false) {
+    if (shouldRelockDownstream) {
       await this.lockDownstreamSteps(applicationId, step.step_index);
+      return;
     }
+
+    await this.recomputeAllStepStates(applicationId);
   }
 
   /**
@@ -329,6 +360,7 @@ export class StepStateService {
       where: { application_id: applicationId, step_id: stepId },
       data: {
         status: StepStatus.REJECTED_FINAL,
+        revision_deadline_at: null,
         last_activity_at: now,
       },
     });
@@ -424,17 +456,29 @@ export class StepStateService {
     const state = await this.prisma.application_step_states.findFirst({
       where: { application_id: applicationId, step_id: stepId },
       include: {
-        workflow_steps: { select: { title: true, step_index: true } },
+        workflow_steps: {
+          select: { title: true, step_index: true, revision_deadline_at: true },
+        },
       },
     });
 
     if (!state) return null;
+
+    const revisionDeadlineAt =
+      state.revision_deadline_at ?? state.workflow_steps?.revision_deadline_at;
 
     return {
       stepId: state.step_id,
       stepTitle: state.workflow_steps?.title || 'Unknown',
       stepIndex: state.workflow_steps?.step_index ?? 0,
       status: state.status as StepStatus,
+      revisionDeadlineAt,
+      revisionOverdue:
+        state.status === StepStatus.NEEDS_REVISION &&
+        Boolean(
+          revisionDeadlineAt &&
+            new Date(revisionDeadlineAt).getTime() < Date.now(),
+        ),
       answersSource: null,
       currentDraftId: state.current_draft_id,
       latestSubmissionVersionId: state.latest_submission_version_id,

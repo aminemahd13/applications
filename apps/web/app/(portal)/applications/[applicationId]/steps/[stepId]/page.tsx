@@ -83,6 +83,8 @@ interface StepDetail {
   allowApplicantModification: boolean;
   modificationScope: StepModificationScope;
   deadlineAt?: string;
+  revisionDeadlineAt?: string;
+  revisionOverdue?: boolean;
   formDefinition?: {
     sections: Array<{
       id: string;
@@ -917,13 +919,47 @@ export default function StepFormPage() {
     return { kind: "upcoming" as const, deadline: parsedDeadline, hoursLeft };
   }, [step?.deadlineAt]);
 
+  const activeRevisionDeadline = useMemo(() => {
+    const needsInfoDeadlines = (step?.needsInfo ?? [])
+      .map((item) => item.deadlineAt)
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+      .map((value) => new Date(value))
+      .filter((value) => !Number.isNaN(value.getTime()))
+      .sort((a, b) => a.getTime() - b.getTime());
+
+    if (needsInfoDeadlines.length > 0) {
+      return needsInfoDeadlines[0];
+    }
+
+    if (!step?.revisionDeadlineAt) return null;
+    const parsed = new Date(step.revisionDeadlineAt);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+  }, [step?.needsInfo, step?.revisionDeadlineAt]);
+
+  const revisionDeadlineInfo = useMemo(() => {
+    if (step?.status !== "NEEDS_REVISION" || !activeRevisionDeadline) return null;
+    const hoursLeft = Math.ceil(
+      (activeRevisionDeadline.getTime() - Date.now()) / (1000 * 60 * 60)
+    );
+    if (hoursLeft <= 0) {
+      return { kind: "passed" as const, deadline: activeRevisionDeadline, hoursLeft };
+    }
+    if (hoursLeft <= 72) {
+      return { kind: "soon" as const, deadline: activeRevisionDeadline, hoursLeft };
+    }
+    return { kind: "upcoming" as const, deadline: activeRevisionDeadline, hoursLeft };
+  }, [activeRevisionDeadline, step?.status]);
+
   const isDeadlinePassed = deadlineInfo?.kind === "passed";
+  const isStepDeadlineBlockingSubmit =
+    step?.status !== "NEEDS_REVISION" && isDeadlinePassed;
   const canSubmit =
     Boolean(resolvedEventId) &&
     !isReadOnly &&
     !isLocked &&
     !isSubmitting &&
-    !isDeadlinePassed &&
+    !isStepDeadlineBlockingSubmit &&
     validationIssueEntries.length === 0;
 
   useEffect(() => {
@@ -1023,6 +1059,13 @@ export default function StepFormPage() {
             typeof stepState?.deadlineAt === "string"
               ? stepState.deadlineAt
               : undefined,
+          revisionDeadlineAt:
+            typeof stepState?.revisionDeadlineAt === "string"
+              ? stepState.revisionDeadlineAt
+              : stepState?.revisionDeadlineAt instanceof Date
+                ? stepState.revisionDeadlineAt.toISOString()
+                : undefined,
+          revisionOverdue: Boolean(stepState?.revisionOverdue),
           formDefinition: normalizeFormDefinition(stepState?.formDefinition),
           draft: draftAnswers,
           submission: submissionAnswers,
@@ -1098,7 +1141,7 @@ export default function StepFormPage() {
         : undefined,
     });
     setHasTriedSubmit(true);
-    if (Object.keys(issues).length > 0 || isDeadlinePassed) {
+    if (Object.keys(issues).length > 0 || isStepDeadlineBlockingSubmit) {
       setShowConfirm(false);
       return;
     }
@@ -1229,7 +1272,7 @@ export default function StepFormPage() {
         </Alert>
       ))}
 
-      {deadlineInfo && (
+      {deadlineInfo && step.status !== "NEEDS_REVISION" && (
         <Alert
           className={
             deadlineInfo.kind === "passed"
@@ -1262,6 +1305,50 @@ export default function StepFormPage() {
             )}
             {deadlineInfo.kind === "passed" && (
               <>. Submission is no longer available for this step.</>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {step.status === "NEEDS_REVISION" && (revisionDeadlineInfo || step.revisionOverdue) && (
+        <Alert
+          className={
+            revisionDeadlineInfo?.kind === "passed" || step.revisionOverdue
+              ? "border-warning bg-warning/5"
+              : revisionDeadlineInfo?.kind === "soon"
+                ? "border-warning bg-warning/5"
+                : "border-border bg-muted/30"
+          }
+        >
+          <AlertTriangle
+            className={
+              revisionDeadlineInfo?.kind === "passed" || step.revisionOverdue
+                ? "h-4 w-4 text-warning"
+                : revisionDeadlineInfo?.kind === "soon"
+                  ? "h-4 w-4 text-warning"
+                  : "h-4 w-4 text-muted-foreground"
+            }
+          />
+          <AlertTitle>
+            {revisionDeadlineInfo?.kind === "passed" || step.revisionOverdue
+              ? "Revision overdue"
+              : revisionDeadlineInfo?.kind === "soon"
+                ? "Revision deadline coming soon"
+                : "Revision deadline"}
+          </AlertTitle>
+          <AlertDescription className="text-sm">
+            {revisionDeadlineInfo ? (
+              <>
+                Due {formatDeadline(revisionDeadlineInfo.deadline)}
+                {revisionDeadlineInfo.kind === "soon" && (
+                  <> ({revisionDeadlineInfo.hoursLeft}h remaining)</>
+                )}
+                {(revisionDeadlineInfo.kind === "passed" || step.revisionOverdue) && (
+                  <>. You can still submit updated answers.</>
+                )}
+              </>
+            ) : (
+              <>This revision is overdue. You can still submit updated answers.</>
             )}
           </AlertDescription>
         </Alert>
@@ -1601,7 +1688,7 @@ export default function StepFormPage() {
                 {validationIssueEntries.length === 1 ? "" : "s"} remaining
               </span>
             )}
-            {isDeadlinePassed && (
+            {isStepDeadlineBlockingSubmit && (
               <span className="text-destructive">- Deadline passed</span>
             )}
           </div>

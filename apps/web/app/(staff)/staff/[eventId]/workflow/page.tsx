@@ -65,6 +65,8 @@ interface WorkflowStep {
   reviewRequired: boolean;
   rejectBehavior: RejectBehavior;
   strictGating: boolean;
+  allowNextStepsWhileRevising: boolean;
+  revisionDeadlineAt?: string;
   deadlineAt?: string;
   formVersionId?: string | null;
   sensitivityLevel: SensitivityLevel;
@@ -176,6 +178,11 @@ function normalizeStep(raw: any): WorkflowStep {
     rejectBehavior: normalizeRejectBehavior(raw?.rejectBehavior),
     strictGating:
       typeof raw?.strictGating === "boolean" ? raw.strictGating : true,
+    allowNextStepsWhileRevising:
+      typeof raw?.allowNextStepsWhileRevising === "boolean"
+        ? raw.allowNextStepsWhileRevising
+        : true,
+    revisionDeadlineAt: toLocalDateTimeInput(raw?.revisionDeadlineAt),
     deadlineAt: toLocalDateTimeInput(raw?.deadlineAt),
     formVersionId: raw?.formVersionId ?? null,
     sensitivityLevel: normalizeSensitivityLevel(raw?.sensitivityLevel),
@@ -195,6 +202,8 @@ function toApiPayload(step: WorkflowStep) {
     reviewRequired: step.reviewRequired,
     rejectBehavior: step.rejectBehavior,
     strictGating: step.strictGating,
+    allowNextStepsWhileRevising: step.allowNextStepsWhileRevising,
+    revisionDeadlineAt: toNullableIsoDateTime(step.revisionDeadlineAt),
     deadlineAt: toNullableIsoDateTime(step.deadlineAt),
     formVersionId: step.formVersionId || null,
     sensitivityLevel: step.sensitivityLevel,
@@ -329,6 +338,8 @@ export default function WorkflowBuilderPage() {
       reviewRequired: false,
       rejectBehavior: "RESUBMIT_ALLOWED",
       strictGating: true,
+      allowNextStepsWhileRevising: true,
+      revisionDeadlineAt: "",
       deadlineAt: "",
       instructions: "",
       formVersionId: null,
@@ -565,7 +576,7 @@ export default function WorkflowBuilderPage() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                             <div className="space-y-2">
                               <SettingHelpLabel
                                 label="Unlock date (for DATE_BASED)"
@@ -579,6 +590,28 @@ export default function WorkflowBuilderPage() {
                                 }
                                 className="h-8 text-xs"
                               />
+                            </div>
+                            <div className="space-y-2">
+                              <SettingHelpLabel
+                                label="Revision deadline"
+                                helpText="Applies while the step is in needs-revision. Reviewers can only set an earlier deadline."
+                              />
+                              <Input
+                                type="datetime-local"
+                                value={step.revisionDeadlineAt ?? ""}
+                                onChange={(e) =>
+                                  updateStep(step.id, {
+                                    revisionDeadlineAt: e.target.value,
+                                  })
+                                }
+                                className="h-8 text-xs"
+                                disabled={!step.reviewRequired}
+                              />
+                              {!step.reviewRequired ? (
+                                <p className="text-[11px] text-muted-foreground">
+                                  Enable review required to use revision deadline.
+                                </p>
+                              ) : null}
                             </div>
                             <div className="space-y-2">
                               <SettingHelpLabel
@@ -656,7 +689,7 @@ export default function WorkflowBuilderPage() {
                             ) : null}
                           </div>
 
-                          <div className="grid grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                             <div className="flex items-center justify-between">
                               <SettingHelpLabel
                                 label="Review required"
@@ -672,13 +705,28 @@ export default function WorkflowBuilderPage() {
                             <div className="flex items-center justify-between">
                               <SettingHelpLabel
                                 label="Strict gating"
-                                helpText="When enabled, this step unlocks only after the previous step is submitted or approved. If this step goes to revision, downstream steps are re-locked."
+                                helpText="When enabled, this step unlocks only after the previous step is submitted or approved."
                               />
                               <Switch
                                 checked={step.strictGating}
                                 onCheckedChange={(v) =>
                                   updateStep(step.id, { strictGating: v })
                                 }
+                              />
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <SettingHelpLabel
+                                label="Allow next steps in revision"
+                                helpText="When enabled, downstream steps can stay unlocked while this step is in needs-revision."
+                              />
+                              <Switch
+                                checked={step.allowNextStepsWhileRevising}
+                                onCheckedChange={(v) =>
+                                  updateStep(step.id, {
+                                    allowNextStepsWhileRevising: v,
+                                  })
+                                }
+                                disabled={!step.reviewRequired}
                               />
                             </div>
                           </div>

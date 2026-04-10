@@ -46,6 +46,7 @@ export class SelfApplicationsController {
                 title: true,
                 step_index: true,
                 deadline_at: true,
+                revision_deadline_at: true,
                 hidden: true,
               },
             },
@@ -87,7 +88,12 @@ export class SelfApplicationsController {
             ? `Revision requested: ${actionableStep.workflow_steps?.title ?? 'Step'}`
             : `Complete: ${actionableStep.workflow_steps?.title ?? 'Step'}`
           : undefined,
-        nextDeadline: actionableStep?.workflow_steps?.deadline_at,
+        nextDeadline:
+          actionableStep?.status === 'NEEDS_REVISION'
+            ? actionableStep?.revision_deadline_at ??
+              actionableStep?.workflow_steps?.revision_deadline_at ??
+              actionableStep?.workflow_steps?.deadline_at
+            : actionableStep?.workflow_steps?.deadline_at,
       };
     });
 
