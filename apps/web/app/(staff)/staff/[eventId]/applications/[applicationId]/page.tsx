@@ -27,6 +27,7 @@ import {
   AlertTriangle,
   RefreshCcw,
   PencilLine,
+  Download,
 } from "lucide-react";
 import {
   Card,
@@ -78,6 +79,7 @@ import {
   ConfirmDialog,
 } from "@/components/shared";
 import { apiClient } from "@/lib/api";
+import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
 import { useAuth, usePermissions } from "@/lib/auth-context";
 import { useEventBasePath } from "@/hooks/use-event-base-path";
 import { toast } from "sonner";
@@ -85,6 +87,7 @@ import { renderAnswerValue } from "@/lib/render-answer-value";
 import { getRequiredFieldKeySet } from "@/lib/file-answer-utils";
 import { FileUpload, type FileUploadValue } from "@/components/forms/FileUpload";
 import { FormMarkdown } from "@/components/forms/form-markdown";
+import { filenameFromContentDisposition } from "@/lib/export-payloads";
 import { Permission } from "@event-platform/shared";
 
 interface NoteEntry {
@@ -817,6 +820,8 @@ function escapeJsonPointerSegment(segment: string): string {
   return segment.replace(/~/g, "~0").replace(/\//g, "~1");
 }
 
+const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
+
 export default function ApplicationDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -897,6 +902,7 @@ export default function ApplicationDetailPage() {
   const [fieldEditReason, setFieldEditReason] = useState("");
   const [fieldEditAcknowledge, setFieldEditAcknowledge] = useState(false);
   const [isApplyingFieldPatch, setIsApplyingFieldPatch] = useState(false);
+  const [exportingFieldKeys, setExportingFieldKeys] = useState<Record<string, boolean>>({});
 
   const canSendMessages = hasPermission(Permission.EVENT_MESSAGES_SEND);
   const canReadMessages = hasPermission(Permission.EVENT_MESSAGES_READ);
@@ -911,6 +917,9 @@ export default function ApplicationDetailPage() {
   const canPatchSteps = hasPermission(Permission.EVENT_STEP_PATCH);
   const canDeleteApplication = hasPermission(Permission.EVENT_APPLICATION_DELETE);
   const canDeleteNeedsInfo = canDeleteApplication;
+  const canExportFieldFiles =
+    hasPermission(Permission.EVENT_FILES_READ_NORMAL) ||
+    hasPermission(Permission.EVENT_FILES_READ_SENSITIVE);
 
   const loadApplication = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true);
@@ -1103,6 +1112,58 @@ export default function ApplicationDetailPage() {
       setSelectedDecisionTemplateId("__none__");
     }
   }, [decisionTemplatesForDraftStatus, selectedDecisionTemplateId]);
+
+  function getFieldExportKey(stepId: string, fieldKey: string): string {
+    return `${stepId}:${fieldKey}`;
+  }
+
+  async function exportFieldFiles(
+    stepId: string,
+    fieldKey: string,
+    fieldLabel: string,
+  ) {
+    if (!canExportFieldFiles) {
+      toast.error("You do not have permission to export files.");
+      return;
+    }
+
+    const exportKey = getFieldExportKey(stepId, fieldKey);
+    setExportingFieldKeys((prev) => ({ ...prev, [exportKey]: true }));
+
+    try {
+      const response = await fetch(
+        `${PUBLIC_API_URL}/events/${eventId}/applications/${appId}/steps/${stepId}/fields/${encodeURIComponent(fieldKey)}/files/export`,
+        {
+          method: "GET",
+          credentials: "include",
+        },
+      );
+      if (!response.ok) {
+        throw new Error("export failed");
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filenameFromContentDisposition(
+        response.headers.get("content-disposition"),
+        `${appId}-${fieldKey}-files.zip`,
+      );
+      link.click();
+      URL.revokeObjectURL(url);
+
+      toast.success(`Downloaded files ZIP for "${fieldLabel}".`);
+    } catch {
+      toast.error("Could not export field files.");
+    } finally {
+      setExportingFieldKeys((prev) => {
+        const next = { ...prev };
+        delete next[exportKey];
+        return next;
+      });
+    }
+  }
 
   async function saveDecision() {
     if (!canManageDecisions) {
@@ -2217,6 +2278,11 @@ export default function ApplicationDetailPage() {
                             const fieldDefinition = fieldDefinitionByKey.get(key);
                             const fieldLabel = fieldDefinition?.label ?? key;
                             const isRequired = requiredFieldKeys.has(key);
+                            const isFileUploadField =
+                              normalizeFieldType(fieldDefinition?.type) === "file_upload" ||
+                              inferFieldTypeFromAnswer(val) === "file_upload";
+                            const fieldExportKey = getFieldExportKey(step.id, key);
+                            const isExportingField = Boolean(exportingFieldKeys[fieldExportKey]);
                             return (
                               <div key={key} className="text-sm">
                                 <div className="mb-1 flex items-center justify-between gap-2">
@@ -2237,19 +2303,37 @@ export default function ApplicationDetailPage() {
                                       </span>
                                     )}
                                   </p>
-                                  {canPatchSteps && (
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-6 px-2 text-[11px]"
-                                      onClick={() =>
-                                        openFieldPatchEditor(step, key, val)
-                                      }
-                                    >
-                                      <PencilLine className="mr-1 h-3 w-3" />
-                                      Edit field
-                                    </Button>
-                                  )}
+                                  <div className="flex items-center gap-1">
+                                    {canExportFieldFiles &&
+                                      isFileUploadField &&
+                                      step.latestSubmissionVersionId && (
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-6 px-2 text-[11px]"
+                                          onClick={() =>
+                                            exportFieldFiles(step.id, key, fieldLabel)
+                                          }
+                                          disabled={isExportingField}
+                                        >
+                                          <Download className="mr-1 h-3 w-3" />
+                                          {isExportingField ? "Exporting..." : "Export ZIP"}
+                                        </Button>
+                                      )}
+                                    {canPatchSteps && (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-6 px-2 text-[11px]"
+                                        onClick={() =>
+                                          openFieldPatchEditor(step, key, val)
+                                        }
+                                      >
+                                        <PencilLine className="mr-1 h-3 w-3" />
+                                        Edit field
+                                      </Button>
+                                    )}
+                                  </div>
                                 </div>
                                 <div>
                                   {renderAnswerValue(val, {

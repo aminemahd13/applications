@@ -17,6 +17,8 @@ import {
 import { StorageService } from '../common/storage/storage.service';
 import { FormDefinition, getFormFields } from '@event-platform/schemas';
 import { canApplicantEditStep } from '../applications/applicant-step-editability.util';
+import JSZip from 'jszip';
+import { extname } from 'path';
 
 interface UploadFieldContext {
   applicationId: string;
@@ -40,6 +42,11 @@ interface FileValidationReference {
   fieldId: string;
   allowedMimeTypes?: string[];
   maxFileSizeBytes?: number;
+}
+
+interface ExportFieldFilesZipResult {
+  filename: string;
+  buffer: Buffer;
 }
 
 @Injectable()
@@ -391,6 +398,170 @@ export class FilesService {
     };
   }
 
+  async exportSubmittedFieldFilesZip(
+    eventId: string,
+    applicationId: string,
+    stepId: string,
+    fieldId: string,
+  ): Promise<ExportFieldFilesZipResult> {
+    const permissions = (this.cls.get('permissions') ?? []) as string[];
+
+    const application = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+      select: {
+        id: true,
+        users_applications_applicant_user_idTousers: {
+          select: { email: true },
+        },
+      },
+    });
+    if (!application) throw new NotFoundException('Application not found');
+
+    const stepState = await this.prisma.application_step_states.findFirst({
+      where: { application_id: applicationId, step_id: stepId },
+      select: { latest_submission_version_id: true },
+    });
+    if (!stepState) throw new NotFoundException('Step not found');
+    if (!stepState.latest_submission_version_id) {
+      throw new BadRequestException(
+        'No submitted answers found for this step',
+      );
+    }
+
+    const submission = await this.prisma.step_submission_versions.findFirst({
+      where: {
+        id: stepState.latest_submission_version_id,
+        application_id: applicationId,
+        step_id: stepId,
+      },
+      select: {
+        id: true,
+        form_version_id: true,
+        answers_snapshot: true,
+      },
+    });
+    if (!submission) {
+      throw new NotFoundException('Submission version not found');
+    }
+
+    const [patches, formVersion] = await Promise.all([
+      this.prisma.admin_change_patches.findMany({
+        where: {
+          submission_version_id: submission.id,
+          is_active: true,
+        },
+        select: { ops: true },
+        orderBy: { created_at: 'asc' },
+      }),
+      this.prisma.form_versions.findUnique({
+        where: { id: submission.form_version_id },
+        select: { schema: true },
+      }),
+    ]);
+    if (!formVersion) throw new NotFoundException('Form version not found');
+
+    const allFields = getFormFields(
+      formVersion.schema as FormDefinition | undefined,
+    );
+    const field = allFields.find(
+      (candidate) => candidate.key === fieldId || candidate.id === fieldId,
+    );
+    if (!field) throw new BadRequestException('Field not found in form schema');
+    if (field.type !== 'file_upload') {
+      throw new BadRequestException('Field is not a file_upload field');
+    }
+
+    const fieldKey = field.key || field.id || fieldId;
+    const effectiveAnswers = this.applyActivePatchesToAnswers(
+      submission.answers_snapshot as Record<string, unknown>,
+      patches.map((patch) => patch.ops),
+    );
+    const fileObjectIds = this.extractFileObjectIds(effectiveAnswers[fieldKey]);
+    if (fileObjectIds.length === 0) {
+      throw new BadRequestException(
+        'No uploaded files found for this field in latest submitted answers',
+      );
+    }
+
+    const uniqueFileIds = Array.from(new Set(fileObjectIds));
+    const files = await this.prisma.file_objects.findMany({
+      where: {
+        id: { in: uniqueFileIds },
+        event_id: eventId,
+      },
+      select: {
+        id: true,
+        storage_key: true,
+        original_filename: true,
+        sensitivity: true,
+      },
+    });
+    if (files.length !== uniqueFileIds.length) {
+      const foundIds = new Set(files.map((file) => file.id));
+      const missing = uniqueFileIds.filter((id) => !foundIds.has(id));
+      throw new NotFoundException(
+        `Files not found for export: ${missing.join(', ')}`,
+      );
+    }
+
+    const fileById = new Map(files.map((file) => [file.id, file]));
+    const allowMultiple = Number(field.ui?.maxFiles ?? 1) > 1;
+    const applicantEmail =
+      application.users_applications_applicant_user_idTousers?.email ??
+      'unknown-email';
+    const safeEmail = this.sanitizeFileNameSegment(
+      applicantEmail,
+      'unknown-email',
+    );
+    const safeFieldKey = this.sanitizeFileNameSegment(fieldKey, 'field');
+
+    const zip = new JSZip();
+    const usedEntryNames = new Set<string>();
+    for (let index = 0; index < fileObjectIds.length; index += 1) {
+      const fileId = fileObjectIds[index];
+      const file = fileById.get(fileId);
+      if (!file) {
+        throw new NotFoundException(`File not found for export: ${fileId}`);
+      }
+
+      this.assertCanExportFileBySensitivity(file.sensitivity, permissions);
+
+      const fileBuffer = await this.storageService.getObjectBuffer(
+        file.storage_key,
+      );
+      const extension = this.resolveFileExtension(file.original_filename);
+      const preferredEntryName = this.buildExportEntryFilename({
+        applicantEmail: safeEmail,
+        applicationId,
+        fieldKey: safeFieldKey,
+        extension,
+        fileIndex: index + 1,
+        includeFileIndex: allowMultiple,
+      });
+      const entryName = this.ensureUniqueZipEntryName(
+        preferredEntryName,
+        usedEntryNames,
+      );
+      zip.file(entryName, fileBuffer);
+    }
+
+    const zipBuffer = await zip.generateAsync({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 },
+    });
+    const zipFilename = this.buildExportZipFilename({
+      applicantEmail: safeEmail,
+      applicationId,
+      fieldKey: safeFieldKey,
+    });
+
+    return {
+      filename: zipFilename,
+      buffer: zipBuffer,
+    };
+  }
+
   private async getMyApplicationIds(
     userId: string,
     eventId: string,
@@ -723,6 +894,164 @@ export class FilesService {
           .filter((entry) => entry.length > 0),
       ),
     );
+  }
+
+  private applyActivePatchesToAnswers(
+    baseAnswers: Record<string, unknown> | null | undefined,
+    patchOpsList: unknown[],
+  ): Record<string, unknown> {
+    const effective = this.normalizeAnswersShape(baseAnswers);
+
+    for (const rawOps of patchOpsList) {
+      if (!Array.isArray(rawOps)) continue;
+      for (const rawOp of rawOps) {
+        const op = rawOp as {
+          op?: string;
+          path?: string;
+          value?: unknown;
+        };
+        if (!op || typeof op.path !== 'string') continue;
+        const key = this.decodeJsonPointerPath(op.path);
+        if (!key) continue;
+
+        if (op.op === 'remove') {
+          delete effective[key];
+          continue;
+        }
+
+        if (op.op === 'replace' || op.op === 'add') {
+          effective[key] = op.value;
+        }
+      }
+    }
+
+    return this.normalizeAnswersShape(effective);
+  }
+
+  private normalizeAnswersShape(
+    answers: Record<string, unknown> | null | undefined,
+  ): Record<string, unknown> {
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+      return {};
+    }
+    const normalized = { ...answers };
+    const nestedData = normalized.data;
+    if (
+      nestedData &&
+      typeof nestedData === 'object' &&
+      !Array.isArray(nestedData)
+    ) {
+      Object.assign(normalized, nestedData as Record<string, unknown>);
+    }
+    if (
+      'data' in normalized &&
+      Object.keys(normalized).some((key) => key !== 'data')
+    ) {
+      delete normalized.data;
+    }
+    return normalized;
+  }
+
+  private decodeJsonPointerPath(path: string): string {
+    const trimmed = path.replace(/^\//, '');
+    if (!trimmed) return '';
+    return trimmed
+      .split('/')
+      .map((segment) => segment.replace(/~1/g, '/').replace(/~0/g, '~'))
+      .join('/');
+  }
+
+  private assertCanExportFileBySensitivity(
+    sensitivity: string,
+    userPermissions: string[],
+  ): void {
+    const isAdmin = userPermissions.includes(Permission.ADMIN_EVENTS_MANAGE);
+    const canReadSensitive =
+      isAdmin || userPermissions.includes(Permission.EVENT_FILES_READ_SENSITIVE);
+    const canReadNormal =
+      canReadSensitive ||
+      userPermissions.includes(Permission.EVENT_FILES_READ_NORMAL);
+
+    const sensitivityValue = String(sensitivity || '').toLowerCase();
+    if (sensitivityValue === 'sensitive') {
+      if (!canReadSensitive) {
+        throw new ForbiddenException(
+          'Missing permission to export sensitive files',
+        );
+      }
+      return;
+    }
+
+    if (!canReadNormal) {
+      throw new ForbiddenException('Missing permission to export files');
+    }
+  }
+
+  private resolveFileExtension(originalFilename: string | null | undefined): string {
+    const extension = extname(String(originalFilename ?? '')).toLowerCase();
+    if (!extension) return '';
+    return /^\.[a-z0-9]{1,20}$/i.test(extension) ? extension : '';
+  }
+
+  private sanitizeFileNameSegment(value: string, fallback: string): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) return fallback;
+    const withoutReserved = trimmed.replace(/[<>:"/\\|?*]/g, '_');
+    const withoutControlChars = Array.from(withoutReserved)
+      .map((char) => (char.charCodeAt(0) < 32 ? '_' : char))
+      .join('');
+    const sanitized = withoutControlChars
+      .replace(/\s+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    return sanitized || fallback;
+  }
+
+  private buildExportEntryFilename(input: {
+    applicantEmail: string;
+    applicationId: string;
+    fieldKey: string;
+    extension: string;
+    fileIndex: number;
+    includeFileIndex: boolean;
+  }): string {
+    const base = `${input.applicantEmail}__${input.applicationId}__${input.fieldKey}`;
+    const indexedBase = input.includeFileIndex
+      ? `${base}__file_${input.fileIndex}`
+      : base;
+    return `${indexedBase}${input.extension}`;
+  }
+
+  private buildExportZipFilename(input: {
+    applicantEmail: string;
+    applicationId: string;
+    fieldKey: string;
+  }): string {
+    return `${input.applicantEmail}__${input.applicationId}__${input.fieldKey}.zip`;
+  }
+
+  private ensureUniqueZipEntryName(
+    preferredName: string,
+    usedNames: Set<string>,
+  ): string {
+    if (!usedNames.has(preferredName)) {
+      usedNames.add(preferredName);
+      return preferredName;
+    }
+
+    const extension = this.resolveFileExtension(preferredName);
+    const base =
+      extension.length > 0
+        ? preferredName.slice(0, preferredName.length - extension.length)
+        : preferredName;
+    let counter = 2;
+    let nextName = `${base}__${counter}${extension}`;
+    while (usedNames.has(nextName)) {
+      counter += 1;
+      nextName = `${base}__${counter}${extension}`;
+    }
+    usedNames.add(nextName);
+    return nextName;
   }
 
   private assertMatchesFieldConstraints(

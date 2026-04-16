@@ -5,9 +5,11 @@ import {
   Body,
   Param,
   Query,
+  Res,
   UseGuards,
   BadRequestException,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FilesService } from './files.service';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
@@ -111,5 +113,35 @@ export class FilesController {
       permissions,
       wantsDownload,
     );
+  }
+
+  /**
+   * Export all uploaded files for a file_upload field as ZIP
+   * Source of truth: latest submitted version + active patches (draft ignored)
+   */
+  @Get('applications/:applicationId/steps/:stepId/fields/:fieldId/files/export')
+  @RequirePermission(
+    Permission.EVENT_FILES_READ_NORMAL,
+    Permission.EVENT_FILES_READ_SENSITIVE,
+  )
+  async exportFieldFilesZip(
+    @Param('eventId') eventId: string,
+    @Param('applicationId') applicationId: string,
+    @Param('stepId') stepId: string,
+    @Param('fieldId') fieldId: string,
+    @Res() res: Response,
+  ) {
+    const result = await this.filesService.exportSubmittedFieldFilesZip(
+      eventId,
+      applicationId,
+      stepId,
+      fieldId,
+    );
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${result.filename}"`,
+    );
+    res.send(result.buffer);
   }
 }
