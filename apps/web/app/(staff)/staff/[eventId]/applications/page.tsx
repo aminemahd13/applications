@@ -123,6 +123,7 @@ import {
 
 const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 const APPLICATIONS_PAGE_SIZE = 100;
+const BULK_ACTION_CHUNK_SIZE = 200;
 
 interface Application {
   id: string;
@@ -251,6 +252,20 @@ interface FilterChip {
   onRemove: () => void;
 }
 
+interface SelectAllProgress {
+  selected: number;
+  total?: number;
+}
+
+interface BulkChunkRunSummary<TAggregate> {
+  totalRequested: number;
+  totalSucceeded: number;
+  totalFailed: number;
+  failedApplicationIds: string[];
+  errorMessages: string[];
+  aggregate: TAggregate;
+}
+
 function updateFilterNodeById(
   tree: ApplicationsFilterGroupNode,
   nodeId: string,
@@ -375,6 +390,7 @@ export default function ApplicationsListPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isApplyingBulk, setIsApplyingBulk] = useState(false);
   const [isSelectingAllMatching, setIsSelectingAllMatching] = useState(false);
+  const [selectAllProgress, setSelectAllProgress] = useState<SelectAllProgress | null>(null);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
@@ -1712,21 +1728,31 @@ export default function ApplicationsListPage() {
     if (isSelectingAllMatching) return;
     if (totalMatchingApplications <= 0) {
       setSelectedIds([]);
+      setSelectAllProgress(null);
       return;
     }
 
     setIsSelectingAllMatching(true);
     try {
-      const allIds = new Set<string>();
+      const knownTotal =
+        totalMatchingApplications > 0 ? totalMatchingApplications : undefined;
+      const allIds = new Set<string>(
+        applicationsRef.current.map((application) => application.id),
+      );
       const seenCursors = new Set<string>();
-      let cursor: string | null = null;
-      let hasMore = true;
+      let cursor = nextCursorRef.current;
+      let hasMore = hasMoreApplicationsRef.current && Boolean(cursor);
+      setSelectAllProgress({ selected: allIds.size, total: knownTotal });
 
       while (hasMore) {
+        if (!cursor) {
+          throw new Error("Missing next cursor while selecting all applications");
+        }
         const page = await fetchApplicationsPage({ cursor });
         for (const application of page.applications) {
           allIds.add(application.id);
         }
+        setSelectAllProgress({ selected: allIds.size, total: knownTotal });
 
         hasMore = page.hasMore;
         if (!hasMore) break;
@@ -1748,6 +1774,7 @@ export default function ApplicationsListPage() {
       toast.error("Could not select all matching applications.");
     } finally {
       setIsSelectingAllMatching(false);
+      setSelectAllProgress(null);
     }
   }, [
     fetchApplicationsPage,
@@ -1777,6 +1804,74 @@ export default function ApplicationsListPage() {
           .map((tag) => tag.trim())
           .filter((tag) => tag.length > 0),
       ),
+    );
+  }
+
+  function chunkApplicationIds(
+    applicationIds: string[],
+    chunkSize = BULK_ACTION_CHUNK_SIZE,
+  ): string[][] {
+    const uniqueIds = Array.from(new Set(applicationIds));
+    const chunks: string[][] = [];
+    for (let index = 0; index < uniqueIds.length; index += chunkSize) {
+      chunks.push(uniqueIds.slice(index, index + chunkSize));
+    }
+    return chunks;
+  }
+
+  async function runBulkActionInChunks<TChunkResult, TAggregate>(options: {
+    applicationIds: string[];
+    executeChunk: (chunkApplicationIds: string[]) => Promise<TChunkResult>;
+    createAggregate: () => TAggregate;
+    aggregateChunkResult?: (
+      aggregate: TAggregate,
+      chunkResult: TChunkResult,
+      chunkApplicationIds: string[],
+    ) => void;
+  }): Promise<BulkChunkRunSummary<TAggregate>> {
+    const chunks = chunkApplicationIds(options.applicationIds);
+    const totalRequested = chunks.reduce((total, chunk) => total + chunk.length, 0);
+    const aggregate = options.createAggregate();
+    const failedIdSet = new Set<string>();
+    const errorMessageSet = new Set<string>();
+    let totalSucceeded = 0;
+
+    for (const chunkIds of chunks) {
+      if (chunkIds.length === 0) continue;
+      try {
+        const chunkResult = await options.executeChunk(chunkIds);
+        options.aggregateChunkResult?.(aggregate, chunkResult, chunkIds);
+        totalSucceeded += chunkIds.length;
+      } catch (error) {
+        chunkIds.forEach((applicationId) => failedIdSet.add(applicationId));
+        if (error instanceof ApiError && error.message.trim().length > 0) {
+          errorMessageSet.add(error.message.trim());
+        } else {
+          errorMessageSet.add("Request failed");
+        }
+      }
+    }
+
+    const failedApplicationIds = Array.from(failedIdSet);
+    return {
+      totalRequested,
+      totalSucceeded,
+      totalFailed: failedApplicationIds.length,
+      failedApplicationIds,
+      errorMessages: Array.from(errorMessageSet),
+      aggregate,
+    };
+  }
+
+  function toastBulkChunkErrors(actionLabel: string, errorMessages: string[]) {
+    if (errorMessages.length === 0) return;
+    const [first, ...rest] = errorMessages;
+    if (rest.length === 0) {
+      toast.error(`${actionLabel}: ${first}`);
+      return;
+    }
+    toast.error(
+      `${actionLabel}: ${first} (+${rest.length} more error${rest.length === 1 ? "" : "s"})`,
     );
   }
 
@@ -1938,43 +2033,102 @@ export default function ApplicationsListPage() {
     }
     setIsIssuingCredentials(true);
     try {
-      const result = await apiClient<{
-        data?: {
-          requested?: number;
-          issued?: number;
-          alreadyIssued?: number;
-          skippedNotCheckedIn?: number;
-          notFound?: string[];
-          failed?: Array<{ applicationId: string; reason: string }>;
-        };
-      }>(`/events/${eventId}/applications/completion-credentials/issue`, {
-        method: "POST",
-        body: { applicationIds: selectedApplicationIds },
-        csrfToken: csrfToken ?? undefined,
+      const summary = await runBulkActionInChunks<
+        {
+          data?: {
+            requested?: number;
+            issued?: number;
+            alreadyIssued?: number;
+            skippedNotCheckedIn?: number;
+            notFound?: string[];
+            failed?: Array<{ applicationId: string; reason: string }>;
+          };
+        },
+        {
+          issued: number;
+          alreadyIssued: number;
+          skippedNotCheckedIn: number;
+          notFound: string[];
+          failed: Array<{ applicationId: string; reason: string }>;
+        }
+      >({
+        applicationIds: selectedApplicationIds,
+        executeChunk: (chunkApplicationIds) =>
+          apiClient<{
+            data?: {
+              requested?: number;
+              issued?: number;
+              alreadyIssued?: number;
+              skippedNotCheckedIn?: number;
+              notFound?: string[];
+              failed?: Array<{ applicationId: string; reason: string }>;
+            };
+          }>(`/events/${eventId}/applications/completion-credentials/issue`, {
+            method: "POST",
+            body: { applicationIds: chunkApplicationIds },
+            csrfToken: csrfToken ?? undefined,
+          }),
+        createAggregate: () => ({
+          issued: 0,
+          alreadyIssued: 0,
+          skippedNotCheckedIn: 0,
+          notFound: [],
+          failed: [],
+        }),
+        aggregateChunkResult: (aggregate, chunkResult) => {
+          const chunkSummary = chunkResult?.data ?? {};
+          aggregate.issued += Number(chunkSummary.issued ?? 0);
+          aggregate.alreadyIssued += Number(chunkSummary.alreadyIssued ?? 0);
+          aggregate.skippedNotCheckedIn += Number(chunkSummary.skippedNotCheckedIn ?? 0);
+          if (Array.isArray(chunkSummary.notFound)) {
+            aggregate.notFound.push(...chunkSummary.notFound);
+          }
+          if (Array.isArray(chunkSummary.failed)) {
+            aggregate.failed.push(...chunkSummary.failed);
+          }
+        },
       });
 
-      const summary = result?.data ?? {};
-      const issued = Number(summary.issued ?? 0);
-      const alreadyIssued = Number(summary.alreadyIssued ?? 0);
-      const skippedNotCheckedIn = Number(summary.skippedNotCheckedIn ?? 0);
-      const failedCount = Array.isArray(summary.failed) ? summary.failed.length : 0;
-      const notFoundCount = Array.isArray(summary.notFound) ? summary.notFound.length : 0;
-
-      if (issued > 0) {
-        toast.success(
-          `Issued ${issued} credential${issued === 1 ? "" : "s"}. Already issued: ${alreadyIssued}. Skipped (not checked-in): ${skippedNotCheckedIn}.`
-        );
-      } else {
-        toast.info(
-          `No new credentials issued. Already issued: ${alreadyIssued}. Skipped (not checked-in): ${skippedNotCheckedIn}.`
-        );
+      const issued = summary.aggregate.issued;
+      const alreadyIssued = summary.aggregate.alreadyIssued;
+      const skippedNotCheckedIn = summary.aggregate.skippedNotCheckedIn;
+      const retryableFailedFromApi = Array.from(
+        new Set(
+          summary.aggregate.failed
+            .map((entry) => entry.applicationId)
+            .filter((applicationId) => typeof applicationId === "string" && applicationId.length > 0),
+        ),
+      );
+      const failedForRetry = Array.from(
+        new Set([...summary.failedApplicationIds, ...retryableFailedFromApi]),
+      );
+      const failedCount = failedForRetry.length;
+      const notFoundCount = new Set(summary.aggregate.notFound).size;
+      if (failedForRetry.length > 0) {
+        setSelectedIds(failedForRetry);
       }
 
-      if (failedCount > 0 || notFoundCount > 0) {
+      if (summary.totalSucceeded > 0) {
+        if (issued > 0) {
+          toast.success(
+            `Issued ${issued} credential${issued === 1 ? "" : "s"}. Already issued: ${alreadyIssued}. Skipped (not checked-in): ${skippedNotCheckedIn}.`
+          );
+        } else {
+          toast.info(
+            `No new credentials issued. Already issued: ${alreadyIssued}. Skipped (not checked-in): ${skippedNotCheckedIn}.`
+          );
+        }
+      }
+
+      if (failedCount > 0 || notFoundCount > 0 || summary.totalFailed > 0) {
         toast.warning(
-          `Issues: ${failedCount} failed, ${notFoundCount} not found.`
+          `Issues: ${failedCount} failed, ${notFoundCount} not found.`,
         );
       }
+      if (failedCount > 0) {
+        toast.info(`${failedCount} application(s) remain selected for retry.`);
+      }
+      toastBulkChunkErrors("Credential issuance", summary.errorMessages);
     } catch {
       toast.error("Could not issue completion credentials.");
     } finally {
@@ -1992,20 +2146,44 @@ export default function ApplicationsListPage() {
     }
     setIsApplyingBulk(true);
     try {
-      await apiClient(`/events/${eventId}/applications/bulk/tags`, {
-        method: "POST",
-        body: {
-          applicationIds: selectedApplicationIds,
-          addTags,
-          removeTags,
+      const summary = await runBulkActionInChunks<
+        { data?: { updated?: number } },
+        { updated: number }
+      >({
+        applicationIds: selectedApplicationIds,
+        executeChunk: (chunkApplicationIds) =>
+          apiClient<{ data?: { updated?: number } }>(`/events/${eventId}/applications/bulk/tags`, {
+            method: "POST",
+            body: {
+              applicationIds: chunkApplicationIds,
+              addTags,
+              removeTags,
+            },
+            csrfToken: csrfToken ?? undefined,
+          }),
+        createAggregate: () => ({ updated: 0 }),
+        aggregateChunkResult: (aggregate, chunkResult, chunkApplicationIds) => {
+          const updatedFromApi = Number(chunkResult?.data?.updated ?? NaN);
+          aggregate.updated += Number.isFinite(updatedFromApi)
+            ? updatedFromApi
+            : chunkApplicationIds.length;
         },
-        csrfToken: csrfToken ?? undefined,
       });
       await refreshApplications();
-      toast.success("Bulk tags updated");
-      setShowBulkTags(false);
-      setBulkAddTags("");
-      setBulkRemoveTags("");
+      if (summary.totalSucceeded > 0) {
+        toast.success(`Bulk tags updated for ${summary.aggregate.updated} application(s).`);
+      }
+      if (summary.totalFailed > 0) {
+        setSelectedIds(summary.failedApplicationIds);
+        toast.warning(
+          `Could not update tags for ${summary.totalFailed} application(s). They remain selected for retry.`,
+        );
+      } else {
+        setShowBulkTags(false);
+        setBulkAddTags("");
+        setBulkRemoveTags("");
+      }
+      toastBulkChunkErrors("Bulk tags", summary.errorMessages);
     } catch {
       /* handled */
     } finally {
@@ -2017,21 +2195,47 @@ export default function ApplicationsListPage() {
     if (!canDraftDecisions || selectedApplicationIds.length === 0) return;
     setIsApplyingBulk(true);
     try {
-      await apiClient(`/events/${eventId}/applications/bulk/decision-draft`, {
-        method: "POST",
-        body: {
-          applicationIds: selectedApplicationIds,
-          status: bulkDecisionStatus,
-          templateId:
-            bulkDecisionTemplateId === "__none__"
-              ? null
-              : bulkDecisionTemplateId,
+      const summary = await runBulkActionInChunks<
+        { data?: { updated?: number } },
+        { updated: number }
+      >({
+        applicationIds: selectedApplicationIds,
+        executeChunk: (chunkApplicationIds) =>
+          apiClient<{ data?: { updated?: number } }>(`/events/${eventId}/applications/bulk/decision-draft`, {
+            method: "POST",
+            body: {
+              applicationIds: chunkApplicationIds,
+              status: bulkDecisionStatus,
+              templateId:
+                bulkDecisionTemplateId === "__none__"
+                  ? null
+                  : bulkDecisionTemplateId,
+            },
+            csrfToken: csrfToken ?? undefined,
+          }),
+        createAggregate: () => ({ updated: 0 }),
+        aggregateChunkResult: (aggregate, chunkResult, chunkApplicationIds) => {
+          const updatedFromApi = Number(chunkResult?.data?.updated ?? NaN);
+          aggregate.updated += Number.isFinite(updatedFromApi)
+            ? updatedFromApi
+            : chunkApplicationIds.length;
         },
-        csrfToken: csrfToken ?? undefined,
       });
       await refreshApplications();
-      toast.success("Decision drafts updated");
-      setShowBulkDecision(false);
+      if (summary.totalSucceeded > 0) {
+        toast.success(
+          `Decision drafts updated for ${summary.aggregate.updated} application(s).`,
+        );
+      }
+      if (summary.totalFailed > 0) {
+        setSelectedIds(summary.failedApplicationIds);
+        toast.warning(
+          `Could not update ${summary.totalFailed} application(s). They remain selected for retry.`,
+        );
+      } else {
+        setShowBulkDecision(false);
+      }
+      toastBulkChunkErrors("Decision draft update", summary.errorMessages);
     } catch {
       /* handled */
     } finally {
@@ -2076,15 +2280,39 @@ export default function ApplicationsListPage() {
     if (!canDeleteApplications || selectedApplicationIds.length === 0 || isBulkDeleting) return;
     setIsBulkDeleting(true);
     try {
-      await apiClient(`/events/${eventId}/applications/bulk/delete`, {
-        method: "POST",
-        body: { applicationIds: selectedApplicationIds },
-        csrfToken: csrfToken ?? undefined,
+      const summary = await runBulkActionInChunks<
+        { data?: { deleted?: number } },
+        { deleted: number }
+      >({
+        applicationIds: selectedApplicationIds,
+        executeChunk: (chunkApplicationIds) =>
+          apiClient<{ data?: { deleted?: number } }>(`/events/${eventId}/applications/bulk/delete`, {
+            method: "POST",
+            body: { applicationIds: chunkApplicationIds },
+            csrfToken: csrfToken ?? undefined,
+          }),
+        createAggregate: () => ({ deleted: 0 }),
+        aggregateChunkResult: (aggregate, chunkResult, chunkApplicationIds) => {
+          const deletedFromApi = Number(chunkResult?.data?.deleted ?? NaN);
+          aggregate.deleted += Number.isFinite(deletedFromApi)
+            ? deletedFromApi
+            : chunkApplicationIds.length;
+        },
       });
       await refreshApplications();
-      toast.success(`${selectedApplicationIds.length} application(s) deleted`);
+      if (summary.aggregate.deleted > 0) {
+        toast.success(`${summary.aggregate.deleted} application(s) deleted`);
+      }
+      if (summary.totalFailed > 0) {
+        setSelectedIds(summary.failedApplicationIds);
+        toast.warning(
+          `Could not delete ${summary.totalFailed} application(s). They remain selected for retry.`,
+        );
+      } else {
+        setSelectedIds([]);
+      }
+      toastBulkChunkErrors("Bulk delete", summary.errorMessages);
       setShowBulkDelete(false);
-      setSelectedIds([]);
     } catch {
       toast.error("Could not delete applications");
     } finally {
@@ -2096,22 +2324,40 @@ export default function ApplicationsListPage() {
     if (!canPublishDecisions || selectedApplicationIds.length === 0 || isPublishingDecisions) return;
     setIsPublishingDecisions(true);
     try {
-      const res = await apiClient<{ data?: { count: number } }>(
-        `/events/${eventId}/applications/decisions/publish`,
-        {
-          method: "POST",
-          body: { applicationIds: selectedApplicationIds },
-          csrfToken: csrfToken ?? undefined,
+      const summary = await runBulkActionInChunks<
+        { data?: { count?: number } },
+        { count: number }
+      >({
+        applicationIds: selectedApplicationIds,
+        executeChunk: (chunkApplicationIds) =>
+          apiClient<{ data?: { count?: number } }>(`/events/${eventId}/applications/decisions/publish`, {
+            method: "POST",
+            body: { applicationIds: chunkApplicationIds },
+            csrfToken: csrfToken ?? undefined,
+          }),
+        createAggregate: () => ({ count: 0 }),
+        aggregateChunkResult: (aggregate, chunkResult) => {
+          aggregate.count += Number(chunkResult?.data?.count ?? 0);
         },
-      );
-      const count = res?.data?.count ?? 0;
+      });
+      const count = summary.aggregate.count;
       await refreshApplications();
-      toast.success(
-        count > 0
-          ? `Published ${count} decision(s)`
-          : "No unpublished decisions found among selected"
-      );
-      setSelectedIds([]);
+      if (summary.totalSucceeded > 0) {
+        toast.success(
+          count > 0
+            ? `Published ${count} decision(s)`
+            : "No unpublished decisions found among selected"
+        );
+      }
+      if (summary.totalFailed > 0) {
+        setSelectedIds(summary.failedApplicationIds);
+        toast.warning(
+          `Could not publish ${summary.totalFailed} application(s). They remain selected for retry.`,
+        );
+      } else {
+        setSelectedIds([]);
+      }
+      toastBulkChunkErrors("Decision publish", summary.errorMessages);
     } catch {
       toast.error("Could not publish decisions");
     } finally {
@@ -2123,23 +2369,42 @@ export default function ApplicationsListPage() {
     if (!bulkStepId || selectedApplicationIds.length === 0) return;
     setIsApplyingBulk(true);
     try {
-      const res = await apiClient<{ data?: { updated: number; skipped: number } }>(
-        `/events/${eventId}/applications/bulk/step-action`,
-        {
-          method: "POST",
-          body: {
-            applicationIds: selectedApplicationIds,
-            stepId: bulkStepId,
-            action: bulkStepAction,
-          },
-          csrfToken: csrfToken ?? undefined,
+      const summary = await runBulkActionInChunks<
+        { data?: { updated?: number; skipped?: number } },
+        { updated: number; skipped: number }
+      >({
+        applicationIds: selectedApplicationIds,
+        executeChunk: (chunkApplicationIds) =>
+          apiClient<{ data?: { updated?: number; skipped?: number } }>(`/events/${eventId}/applications/bulk/step-action`, {
+            method: "POST",
+            body: {
+              applicationIds: chunkApplicationIds,
+              stepId: bulkStepId,
+              action: bulkStepAction,
+            },
+            csrfToken: csrfToken ?? undefined,
+          }),
+        createAggregate: () => ({ updated: 0, skipped: 0 }),
+        aggregateChunkResult: (aggregate, chunkResult) => {
+          aggregate.updated += Number(chunkResult?.data?.updated ?? 0);
+          aggregate.skipped += Number(chunkResult?.data?.skipped ?? 0);
         },
-      );
-      const updated = res?.data?.updated ?? 0;
-      const skipped = res?.data?.skipped ?? 0;
+      });
+      const updated = summary.aggregate.updated;
+      const skipped = summary.aggregate.skipped;
       await refreshApplications();
-      toast.success(`Step action applied: ${updated} updated, ${skipped} skipped`);
-      setShowBulkStepAction(false);
+      if (summary.totalSucceeded > 0) {
+        toast.success(`Step action applied: ${updated} updated, ${skipped} skipped`);
+      }
+      if (summary.totalFailed > 0) {
+        setSelectedIds(summary.failedApplicationIds);
+        toast.warning(
+          `Could not process ${summary.totalFailed} application(s). They remain selected for retry.`,
+        );
+      } else {
+        setShowBulkStepAction(false);
+      }
+      toastBulkChunkErrors("Step action", summary.errorMessages);
     } catch {
       toast.error("Could not apply step action");
     } finally {
@@ -2465,6 +2730,16 @@ export default function ApplicationsListPage() {
           {isExporting ? "Exporting..." : "Export CSV"}
         </Button>
       </PageHeader>
+      {isSelectingAllMatching && selectAllProgress && (
+        <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+          <p className="text-xs text-muted-foreground">
+            Selecting matching applications: {selectAllProgress.selected}
+            {typeof selectAllProgress.total === "number"
+              ? ` / ${selectAllProgress.total}`
+              : ""}
+          </p>
+        </div>
+      )}
 
       {/* Search and filters */}
       <div className="space-y-3">

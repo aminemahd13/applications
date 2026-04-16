@@ -56,7 +56,7 @@ function resolveInternalApiBaseUrls(): string[] {
 
 const API_BASE_URL_CANDIDATES = resolveInternalApiBaseUrls();
 const PROXY_UPSTREAM_TIMEOUT_MS = Math.max(
-  Number(process.env.PROXY_UPSTREAM_TIMEOUT_MS || "2000"),
+  Number(process.env.PROXY_UPSTREAM_TIMEOUT_MS || "30000"),
   250,
 );
 const PROXY_UPSTREAM_FAILURE_BACKOFF_MS = Math.max(
