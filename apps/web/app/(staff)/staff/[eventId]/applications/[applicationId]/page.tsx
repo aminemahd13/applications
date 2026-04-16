@@ -919,7 +919,8 @@ export default function ApplicationDetailPage() {
   const canDeleteNeedsInfo = canDeleteApplication;
   const canExportFieldFiles =
     hasPermission(Permission.EVENT_FILES_READ_NORMAL) ||
-    hasPermission(Permission.EVENT_FILES_READ_SENSITIVE);
+    hasPermission(Permission.EVENT_FILES_READ_SENSITIVE) ||
+    hasPermission(Permission.ADMIN_EVENTS_MANAGE);
 
   const loadApplication = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true);

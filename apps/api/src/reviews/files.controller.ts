@@ -123,6 +123,7 @@ export class FilesController {
   @RequirePermission(
     Permission.EVENT_FILES_READ_NORMAL,
     Permission.EVENT_FILES_READ_SENSITIVE,
+    Permission.ADMIN_EVENTS_MANAGE,
   )
   async exportFieldFilesZip(
     @Param('eventId') eventId: string,
