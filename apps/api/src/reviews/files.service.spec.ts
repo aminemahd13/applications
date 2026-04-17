@@ -158,28 +158,104 @@ describe('FilesService applicant upload guard', () => {
   });
 });
 
-describe('FilesService field ZIP export', () => {
+describe('FilesService event-wide field ZIP export', () => {
   type ExportServiceOptions = {
-    answersSnapshot?: Record<string, unknown>;
-    patchOps?: unknown[];
-    maxFiles?: number;
     permissions?: string[];
+    stepForExport?: {
+      id: string;
+      title: string;
+      fields: unknown[] | null;
+    } | null;
+    workflowStepsForCatalog?: Array<{
+      id: string;
+      title: string;
+      step_index: number;
+      fields: unknown[] | null;
+    }>;
+    stepStates?: Array<{
+      application_id: string;
+      latest_submission_version_id: string | null;
+      email: string;
+    }>;
+    submissions?: Array<{
+      id: string;
+      application_id: string;
+      answers_snapshot: Record<string, unknown>;
+    }>;
+    patchRows?: Array<{
+      submission_version_id: string;
+      ops: unknown;
+    }>;
     fileRows?: Array<{
       id: string;
       storage_key: string;
       original_filename: string;
       sensitivity: string;
     }>;
-    hasLatestSubmission?: boolean;
   };
 
+  function createSchema(fields: unknown[] | null | undefined) {
+    if (!fields) return null;
+    return {
+      sections: [
+        {
+          id: 'section-1',
+          title: 'Files',
+          fields,
+        },
+      ],
+    };
+  }
+
   function createExportService(options: ExportServiceOptions = {}) {
-    const answersSnapshot =
-      options.answersSnapshot ?? {
-        resume: [{ fileObjectId: 'file-1' }],
-      };
-    const patchOps = options.patchOps ?? [];
-    const maxFiles = options.maxFiles ?? 2;
+    const stepForExport = options.stepForExport ?? {
+      id: 'step-1',
+      title: 'Step 1',
+      fields: [
+        {
+          id: 'resume',
+          key: 'resume',
+          type: FieldType.FILE_UPLOAD,
+          label: 'Resume',
+          ui: { maxFiles: 2 },
+        },
+      ],
+    };
+
+    const workflowStepsForCatalog =
+      options.workflowStepsForCatalog ??
+      [
+        {
+          id: 'step-1',
+          title: 'Step 1',
+          step_index: 0,
+          fields: stepForExport?.fields ?? null,
+        },
+      ];
+
+    const stepStates =
+      options.stepStates ??
+      [
+        {
+          application_id: 'app-1',
+          latest_submission_version_id: 'sub-1',
+          email: 'applicant@example.com',
+        },
+      ];
+
+    const submissions =
+      options.submissions ??
+      [
+        {
+          id: 'sub-1',
+          application_id: 'app-1',
+          answers_snapshot: {
+            resume: [{ fileObjectId: 'file-1' }],
+          },
+        },
+      ];
+
+    const patchRows = options.patchRows ?? [];
     const fileRows =
       options.fileRows ??
       [
@@ -192,54 +268,45 @@ describe('FilesService field ZIP export', () => {
       ];
 
     const prisma = {
-      applications: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'app-1',
-          users_applications_applicant_user_idTousers: {
-            email: 'applicant@example.com',
-          },
-        }),
-      },
-      application_step_states: {
-        findFirst: jest.fn().mockResolvedValue({
-          latest_submission_version_id:
-            options.hasLatestSubmission === false ? null : 'submission-1',
-        }),
-      },
-      step_submission_versions: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'submission-1',
-          form_version_id: 'form-1',
-          answers_snapshot: answersSnapshot,
-        }),
-      },
-      admin_change_patches: {
+      workflow_steps: {
         findMany: jest.fn().mockResolvedValue(
-          patchOps.length > 0 ? [{ ops: patchOps }] : [],
+          workflowStepsForCatalog.map((step) => ({
+            id: step.id,
+            title: step.title,
+            step_index: step.step_index,
+            form_versions: step.fields ? { schema: createSchema(step.fields) } : null,
+          })),
+        ),
+        findFirst: jest.fn().mockResolvedValue(
+          stepForExport
+            ? {
+                id: stepForExport.id,
+                title: stepForExport.title,
+                form_versions: stepForExport.fields
+                  ? { schema: createSchema(stepForExport.fields) }
+                  : null,
+              }
+            : null,
         ),
       },
-      form_versions: {
-        findUnique: jest.fn().mockResolvedValue({
-          schema: {
-            sections: [
-              {
-                id: 'section-1',
-                title: 'Files',
-                fields: [
-                  {
-                    id: 'resume',
-                    key: 'resume',
-                    type: FieldType.FILE_UPLOAD,
-                    label: 'Resume',
-                    ui: {
-                      maxFiles,
-                    },
-                  },
-                ],
+      application_step_states: {
+        findMany: jest.fn().mockResolvedValue(
+          stepStates.map((stepState) => ({
+            application_id: stepState.application_id,
+            latest_submission_version_id: stepState.latest_submission_version_id,
+            applications: {
+              users_applications_applicant_user_idTousers: {
+                email: stepState.email,
               },
-            ],
-          },
-        }),
+            },
+          })),
+        ),
+      },
+      step_submission_versions: {
+        findMany: jest.fn().mockResolvedValue(submissions),
+      },
+      admin_change_patches: {
+        findMany: jest.fn().mockResolvedValue(patchRows),
       },
       file_objects: {
         findMany: jest.fn().mockResolvedValue(fileRows),
@@ -270,21 +337,127 @@ describe('FilesService field ZIP export', () => {
     return { service, prisma, storageService };
   }
 
-  it('exports latest submitted field files with active patches applied', async () => {
-    const { service, storageService } = createExportService({
-      patchOps: [
+  it('lists exportable file_upload fields from workflow forms', async () => {
+    const { service } = createExportService({
+      workflowStepsForCatalog: [
         {
-          op: 'replace',
-          path: '/resume',
-          value: [{ fileObjectId: 'file-2' }, { fileObjectId: 'file-3' }],
+          id: 'step-1',
+          title: 'Step 1',
+          step_index: 0,
+          fields: [
+            {
+              id: 'resume',
+              key: 'resume',
+              type: FieldType.FILE_UPLOAD,
+              label: 'Resume',
+              ui: { maxFiles: 2 },
+            },
+            {
+              id: 'about',
+              key: 'about',
+              type: FieldType.TEXT,
+              label: 'About',
+            },
+          ],
+        },
+        {
+          id: 'step-2',
+          title: 'Step 2',
+          step_index: 1,
+          fields: [
+            {
+              id: 'photo',
+              key: 'photo',
+              type: FieldType.FILE_UPLOAD,
+              label: 'Personal photo',
+            },
+          ],
         },
       ],
-      maxFiles: 3,
+    });
+
+    const fields = await service.listExportableFileFields('event-1');
+
+    expect(fields).toEqual([
+      {
+        stepId: 'step-1',
+        stepTitle: 'Step 1',
+        stepIndex: 0,
+        fieldKey: 'resume',
+        fieldLabel: 'Resume',
+        maxFiles: 2,
+      },
+      {
+        stepId: 'step-2',
+        stepTitle: 'Step 2',
+        stepIndex: 1,
+        fieldKey: 'photo',
+        fieldLabel: 'Personal photo',
+        maxFiles: 1,
+      },
+    ]);
+  });
+
+  it('exports files across applications with latest submissions and active patches', async () => {
+    const { service, prisma, storageService } = createExportService({
+      stepForExport: {
+        id: 'step-1',
+        title: 'Step 1',
+        fields: [
+          {
+            id: 'resume',
+            key: 'resume',
+            type: FieldType.FILE_UPLOAD,
+            label: 'Resume',
+            ui: { maxFiles: 3 },
+          },
+        ],
+      },
+      stepStates: [
+        {
+          application_id: 'app-1',
+          latest_submission_version_id: 'sub-1',
+          email: 'alpha@example.com',
+        },
+        {
+          application_id: 'app-2',
+          latest_submission_version_id: 'sub-2',
+          email: 'beta@example.com',
+        },
+      ],
+      submissions: [
+        {
+          id: 'sub-1',
+          application_id: 'app-1',
+          answers_snapshot: {
+            resume: [{ fileObjectId: 'file-1' }],
+          },
+        },
+        {
+          id: 'sub-2',
+          application_id: 'app-2',
+          answers_snapshot: {
+            resume: [{ fileObjectId: 'file-2' }],
+          },
+        },
+      ],
+      patchRows: [
+        {
+          submission_version_id: 'sub-2',
+          ops: [
+            {
+              op: 'replace',
+              path: '/resume',
+              value: [{ fileObjectId: 'file-3' }, { fileObjectId: 'file-4' }],
+            },
+          ],
+        },
+      ],
       fileRows: [
         {
-          id: 'file-2',
-          storage_key: 'key-2',
-          original_filename: 'passport.pdf',
+          id: 'file-1',
+          storage_key: 'key-1',
+          original_filename: 'resume.pdf',
           sensitivity: 'normal',
         },
         {
@@ -293,59 +466,79 @@ describe('FilesService field ZIP export', () => {
           original_filename: 'photo.PNG',
           sensitivity: 'normal',
         },
-      ],
-    });
-
-    const result = await service.exportSubmittedFieldFilesZip(
-      'event-1',
-      'app-1',
-      'step-1',
-      'resume',
-    );
-
-    expect(result.filename).toBe('applicant@example.com__app-1__resume.zip');
-    expect(storageService.getObjectBuffer).toHaveBeenCalledTimes(2);
-
-    const zip = await JSZip.loadAsync(result.buffer);
-    const entryNames = Object.keys(zip.files).sort();
-    expect(entryNames).toEqual([
-      'applicant@example.com__app-1__resume__file_1.pdf',
-      'applicant@example.com__app-1__resume__file_2.png',
-    ]);
-    await expect(
-      zip.files['applicant@example.com__app-1__resume__file_1.pdf'].async(
-        'string',
-      ),
-    ).resolves.toBe('buf:key-2');
-  });
-
-  it('uses non-indexed filenames when field does not allow multiple files', async () => {
-    const { service } = createExportService({
-      answersSnapshot: { resume: { fileObjectId: 'file-1' } },
-      maxFiles: 1,
-      fileRows: [
         {
-          id: 'file-1',
-          storage_key: 'key-1',
-          original_filename: 'resume.pdf',
+          id: 'file-4',
+          storage_key: 'key-4',
+          original_filename: 'avatar.jpg',
           sensitivity: 'normal',
         },
       ],
     });
 
-    const result = await service.exportSubmittedFieldFilesZip(
+    const result = await service.exportEventFieldFilesZip(
       'event-1',
-      'app-1',
+      'step-1',
+      'resume',
+    );
+
+    expect(result.filename).toBe('event-1__step-1__resume.zip');
+    expect(storageService.getObjectBuffer).toHaveBeenCalledTimes(3);
+    expect((prisma.file_objects.findMany as jest.Mock).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          event_id: 'event-1',
+        }),
+      }),
+    );
+
+    const zip = await JSZip.loadAsync(result.buffer);
+    const entryNames = Object.keys(zip.files).sort();
+    expect(entryNames).toEqual([
+      'alpha@example.com__app-1__resume__file_1.pdf',
+      'beta@example.com__app-2__resume__file_1.png',
+      'beta@example.com__app-2__resume__file_2.jpg',
+    ]);
+  });
+
+  it('uses non-indexed filenames when the selected field is single-file', async () => {
+    const { service } = createExportService({
+      stepForExport: {
+        id: 'step-1',
+        title: 'Step 1',
+        fields: [
+          {
+            id: 'resume',
+            key: 'resume',
+            type: FieldType.FILE_UPLOAD,
+            label: 'Resume',
+            ui: { maxFiles: 1 },
+          },
+        ],
+      },
+      submissions: [
+        {
+          id: 'sub-1',
+          application_id: 'app-1',
+          answers_snapshot: {
+            resume: { fileObjectId: 'file-1' },
+          },
+        },
+      ],
+    });
+
+    const result = await service.exportEventFieldFilesZip(
+      'event-1',
       'step-1',
       'resume',
     );
     const zip = await JSZip.loadAsync(result.buffer);
-    const entryNames = Object.keys(zip.files).sort();
 
-    expect(entryNames).toEqual(['applicant@example.com__app-1__resume.pdf']);
+    expect(Object.keys(zip.files)).toEqual([
+      'applicant@example.com__app-1__resume.pdf',
+    ]);
   });
 
-  it('blocks export of sensitive files without sensitive file permission', async () => {
+  it('blocks export when a sensitive file is included without sensitive permission', async () => {
     const { service } = createExportService({
       permissions: [Permission.EVENT_FILES_READ_NORMAL],
       fileRows: [
@@ -359,13 +552,21 @@ describe('FilesService field ZIP export', () => {
     });
 
     await expect(
-      service.exportSubmittedFieldFilesZip('event-1', 'app-1', 'step-1', 'resume'),
+      service.exportEventFieldFilesZip('event-1', 'step-1', 'resume'),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('rejects export when referenced file objects are missing in event scope', async () => {
+  it('rejects export when referenced files are missing in event scope', async () => {
     const { service } = createExportService({
-      answersSnapshot: { resume: [{ fileObjectId: 'file-1' }, { fileObjectId: 'file-2' }] },
+      submissions: [
+        {
+          id: 'sub-1',
+          application_id: 'app-1',
+          answers_snapshot: {
+            resume: [{ fileObjectId: 'file-1' }, { fileObjectId: 'file-2' }],
+          },
+        },
+      ],
       fileRows: [
         {
           id: 'file-1',
@@ -377,17 +578,42 @@ describe('FilesService field ZIP export', () => {
     });
 
     await expect(
-      service.exportSubmittedFieldFilesZip('event-1', 'app-1', 'step-1', 'resume'),
+      service.exportEventFieldFilesZip('event-1', 'step-1', 'resume'),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('rejects export when no files are present in submitted field answer', async () => {
+  it('rejects export when latest submission versions are missing', async () => {
     const { service } = createExportService({
-      answersSnapshot: { resume: [] },
+      stepStates: [
+        {
+          application_id: 'app-1',
+          latest_submission_version_id: 'missing-submission',
+          email: 'applicant@example.com',
+        },
+      ],
+      submissions: [],
     });
 
     await expect(
-      service.exportSubmittedFieldFilesZip('event-1', 'app-1', 'step-1', 'resume'),
+      service.exportEventFieldFilesZip('event-1', 'step-1', 'resume'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('rejects export when no files exist for the selected field across submissions', async () => {
+    const { service } = createExportService({
+      submissions: [
+        {
+          id: 'sub-1',
+          application_id: 'app-1',
+          answers_snapshot: {
+            resume: [],
+          },
+        },
+      ],
+    });
+
+    await expect(
+      service.exportEventFieldFilesZip('event-1', 'step-1', 'resume'),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

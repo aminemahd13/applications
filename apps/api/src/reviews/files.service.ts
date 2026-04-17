@@ -44,6 +44,15 @@ interface FileValidationReference {
   maxFileSizeBytes?: number;
 }
 
+interface ExportableFileField {
+  stepId: string;
+  stepTitle: string;
+  stepIndex: number;
+  fieldKey: string;
+  fieldLabel: string;
+  maxFiles: number;
+}
+
 interface ExportFieldFilesZipResult {
   filename: string;
   buffer: Buffer;
@@ -398,70 +407,69 @@ export class FilesService {
     };
   }
 
-  async exportSubmittedFieldFilesZip(
+  async listExportableFileFields(eventId: string): Promise<ExportableFileField[]> {
+    const workflowSteps = await this.prisma.workflow_steps.findMany({
+      where: { event_id: eventId },
+      orderBy: { step_index: 'asc' },
+      select: {
+        id: true,
+        title: true,
+        step_index: true,
+        form_versions: {
+          select: { schema: true },
+        },
+      },
+    });
+
+    const exportableFields: ExportableFileField[] = [];
+    for (const step of workflowSteps) {
+      const fields = getFormFields(
+        step.form_versions?.schema as FormDefinition | undefined,
+      );
+      for (const field of fields) {
+        if (field.type !== 'file_upload') continue;
+        const fieldKey = String(field.key || field.id || '').trim();
+        if (!fieldKey) continue;
+        const maxFiles = Number(field.ui?.maxFiles ?? 1);
+
+        exportableFields.push({
+          stepId: step.id,
+          stepTitle: step.title,
+          stepIndex: step.step_index,
+          fieldKey,
+          fieldLabel: String(field.label || fieldKey),
+          maxFiles:
+            Number.isFinite(maxFiles) && maxFiles > 0
+              ? Math.floor(maxFiles)
+              : 1,
+        });
+      }
+    }
+
+    return exportableFields;
+  }
+
+  async exportEventFieldFilesZip(
     eventId: string,
-    applicationId: string,
     stepId: string,
     fieldId: string,
   ): Promise<ExportFieldFilesZipResult> {
     const permissions = (this.cls.get('permissions') ?? []) as string[];
 
-    const application = await this.prisma.applications.findFirst({
-      where: { id: applicationId, event_id: eventId },
+    const step = await this.prisma.workflow_steps.findFirst({
+      where: { id: stepId, event_id: eventId },
       select: {
         id: true,
-        users_applications_applicant_user_idTousers: {
-          select: { email: true },
+        title: true,
+        form_versions: {
+          select: { schema: true },
         },
       },
     });
-    if (!application) throw new NotFoundException('Application not found');
-
-    const stepState = await this.prisma.application_step_states.findFirst({
-      where: { application_id: applicationId, step_id: stepId },
-      select: { latest_submission_version_id: true },
-    });
-    if (!stepState) throw new NotFoundException('Step not found');
-    if (!stepState.latest_submission_version_id) {
-      throw new BadRequestException(
-        'No submitted answers found for this step',
-      );
-    }
-
-    const submission = await this.prisma.step_submission_versions.findFirst({
-      where: {
-        id: stepState.latest_submission_version_id,
-        application_id: applicationId,
-        step_id: stepId,
-      },
-      select: {
-        id: true,
-        form_version_id: true,
-        answers_snapshot: true,
-      },
-    });
-    if (!submission) {
-      throw new NotFoundException('Submission version not found');
-    }
-
-    const [patches, formVersion] = await Promise.all([
-      this.prisma.admin_change_patches.findMany({
-        where: {
-          submission_version_id: submission.id,
-          is_active: true,
-        },
-        select: { ops: true },
-        orderBy: { created_at: 'asc' },
-      }),
-      this.prisma.form_versions.findUnique({
-        where: { id: submission.form_version_id },
-        select: { schema: true },
-      }),
-    ]);
-    if (!formVersion) throw new NotFoundException('Form version not found');
+    if (!step) throw new NotFoundException('Step not found');
 
     const allFields = getFormFields(
-      formVersion.schema as FormDefinition | undefined,
+      step.form_versions?.schema as FormDefinition | undefined,
     );
     const field = allFields.find(
       (candidate) => candidate.key === fieldId || candidate.id === fieldId,
@@ -472,18 +480,142 @@ export class FilesService {
     }
 
     const fieldKey = field.key || field.id || fieldId;
-    const effectiveAnswers = this.applyActivePatchesToAnswers(
-      submission.answers_snapshot as Record<string, unknown>,
-      patches.map((patch) => patch.ops),
+    const safeFieldKey = this.sanitizeFileNameSegment(fieldKey, 'field');
+    const allowMultiple = Number(field.ui?.maxFiles ?? 1) > 1;
+
+    const stepStates = await this.prisma.application_step_states.findMany({
+      where: {
+        step_id: stepId,
+        latest_submission_version_id: { not: null },
+        applications: { event_id: eventId },
+      },
+      orderBy: { application_id: 'asc' },
+      select: {
+        application_id: true,
+        latest_submission_version_id: true,
+        applications: {
+          select: {
+            users_applications_applicant_user_idTousers: {
+              select: { email: true },
+            },
+          },
+        },
+      },
+    });
+    if (stepStates.length === 0) {
+      throw new BadRequestException(
+        'No submitted answers found for this step',
+      );
+    }
+
+    const latestSubmissionVersionIds = Array.from(
+      new Set(
+        stepStates
+          .map((state) => state.latest_submission_version_id)
+          .filter(
+            (submissionId): submissionId is string =>
+              typeof submissionId === 'string' && submissionId.length > 0,
+          ),
+      ),
     );
-    const fileObjectIds = this.extractFileObjectIds(effectiveAnswers[fieldKey]);
-    if (fileObjectIds.length === 0) {
+    if (latestSubmissionVersionIds.length === 0) {
+      throw new BadRequestException(
+        'No submitted answers found for this step',
+      );
+    }
+
+    const [submissions, patches] = await Promise.all([
+      this.prisma.step_submission_versions.findMany({
+        where: {
+          id: { in: latestSubmissionVersionIds },
+          step_id: stepId,
+        },
+        select: {
+          id: true,
+          application_id: true,
+          answers_snapshot: true,
+        },
+      }),
+      this.prisma.admin_change_patches.findMany({
+        where: {
+          submission_version_id: { in: latestSubmissionVersionIds },
+          is_active: true,
+        },
+        select: {
+          submission_version_id: true,
+          ops: true,
+        },
+        orderBy: { created_at: 'asc' },
+      }),
+    ]);
+
+    const submissionsById = new Map(
+      submissions.map((submission) => [submission.id, submission]),
+    );
+    const missingSubmissionIds = latestSubmissionVersionIds.filter(
+      (submissionId) => !submissionsById.has(submissionId),
+    );
+    if (missingSubmissionIds.length > 0) {
+      throw new NotFoundException(
+        `Submission versions not found for export: ${missingSubmissionIds.join(', ')}`,
+      );
+    }
+
+    const patchesBySubmissionId = new Map<string, unknown[]>();
+    for (const patch of patches) {
+      const list = patchesBySubmissionId.get(patch.submission_version_id) ?? [];
+      list.push(patch.ops);
+      patchesBySubmissionId.set(patch.submission_version_id, list);
+    }
+
+    const applicationFiles: Array<{
+      applicationId: string;
+      applicantEmail: string;
+      fileObjectIds: string[];
+    }> = [];
+    const allFileObjectIds: string[] = [];
+
+    for (const stepState of stepStates) {
+      const submissionId = stepState.latest_submission_version_id;
+      if (!submissionId) continue;
+
+      const submission = submissionsById.get(submissionId);
+      if (!submission) {
+        throw new NotFoundException(
+          `Submission version not found for export: ${submissionId}`,
+        );
+      }
+
+      const effectiveAnswers = this.applyActivePatchesToAnswers(
+        submission.answers_snapshot as Record<string, unknown>,
+        patchesBySubmissionId.get(submission.id) ?? [],
+      );
+      const fileObjectIds = this.extractFileObjectIds(effectiveAnswers[fieldKey]);
+      if (fileObjectIds.length === 0) continue;
+
+      const applicantEmail =
+        stepState.applications?.users_applications_applicant_user_idTousers
+          ?.email ?? 'unknown-email';
+      const safeEmail = this.sanitizeFileNameSegment(
+        applicantEmail,
+        'unknown-email',
+      );
+
+      applicationFiles.push({
+        applicationId: stepState.application_id,
+        applicantEmail: safeEmail,
+        fileObjectIds,
+      });
+      allFileObjectIds.push(...fileObjectIds);
+    }
+
+    if (applicationFiles.length === 0 || allFileObjectIds.length === 0) {
       throw new BadRequestException(
         'No uploaded files found for this field in latest submitted answers',
       );
     }
 
-    const uniqueFileIds = Array.from(new Set(fileObjectIds));
+    const uniqueFileIds = Array.from(new Set(allFileObjectIds));
     const files = await this.prisma.file_objects.findMany({
       where: {
         id: { in: uniqueFileIds },
@@ -505,44 +637,41 @@ export class FilesService {
     }
 
     const fileById = new Map(files.map((file) => [file.id, file]));
-    const allowMultiple = Number(field.ui?.maxFiles ?? 1) > 1;
-    const applicantEmail =
-      application.users_applications_applicant_user_idTousers?.email ??
-      'unknown-email';
-    const safeEmail = this.sanitizeFileNameSegment(
-      applicantEmail,
-      'unknown-email',
-    );
-    const safeFieldKey = this.sanitizeFileNameSegment(fieldKey, 'field');
 
     const zip = new JSZip();
     const usedEntryNames = new Set<string>();
-    for (let index = 0; index < fileObjectIds.length; index += 1) {
-      const fileId = fileObjectIds[index];
-      const file = fileById.get(fileId);
-      if (!file) {
-        throw new NotFoundException(`File not found for export: ${fileId}`);
+    for (const applicationEntry of applicationFiles) {
+      for (
+        let index = 0;
+        index < applicationEntry.fileObjectIds.length;
+        index += 1
+      ) {
+        const fileId = applicationEntry.fileObjectIds[index];
+        const file = fileById.get(fileId);
+        if (!file) {
+          throw new NotFoundException(`File not found for export: ${fileId}`);
+        }
+
+        this.assertCanExportFileBySensitivity(file.sensitivity, permissions);
+
+        const fileBuffer = await this.storageService.getObjectBuffer(
+          file.storage_key,
+        );
+        const extension = this.resolveFileExtension(file.original_filename);
+        const preferredEntryName = this.buildExportEntryFilename({
+          applicantEmail: applicationEntry.applicantEmail,
+          applicationId: applicationEntry.applicationId,
+          fieldKey: safeFieldKey,
+          extension,
+          fileIndex: index + 1,
+          includeFileIndex: allowMultiple,
+        });
+        const entryName = this.ensureUniqueZipEntryName(
+          preferredEntryName,
+          usedEntryNames,
+        );
+        zip.file(entryName, fileBuffer);
       }
-
-      this.assertCanExportFileBySensitivity(file.sensitivity, permissions);
-
-      const fileBuffer = await this.storageService.getObjectBuffer(
-        file.storage_key,
-      );
-      const extension = this.resolveFileExtension(file.original_filename);
-      const preferredEntryName = this.buildExportEntryFilename({
-        applicantEmail: safeEmail,
-        applicationId,
-        fieldKey: safeFieldKey,
-        extension,
-        fileIndex: index + 1,
-        includeFileIndex: allowMultiple,
-      });
-      const entryName = this.ensureUniqueZipEntryName(
-        preferredEntryName,
-        usedEntryNames,
-      );
-      zip.file(entryName, fileBuffer);
     }
 
     const zipBuffer = await zip.generateAsync({
@@ -550,9 +679,9 @@ export class FilesService {
       compression: 'DEFLATE',
       compressionOptions: { level: 6 },
     });
-    const zipFilename = this.buildExportZipFilename({
-      applicantEmail: safeEmail,
-      applicationId,
+    const zipFilename = this.buildEventFieldExportZipFilename({
+      eventId,
+      stepId,
       fieldKey: safeFieldKey,
     });
 
@@ -1022,12 +1151,14 @@ export class FilesService {
     return `${indexedBase}${input.extension}`;
   }
 
-  private buildExportZipFilename(input: {
-    applicantEmail: string;
-    applicationId: string;
+  private buildEventFieldExportZipFilename(input: {
+    eventId: string;
+    stepId: string;
     fieldKey: string;
   }): string {
-    return `${input.applicantEmail}__${input.applicationId}__${input.fieldKey}.zip`;
+    const safeEventId = this.sanitizeFileNameSegment(input.eventId, 'event');
+    const safeStepId = this.sanitizeFileNameSegment(input.stepId, 'step');
+    return `${safeEventId}__${safeStepId}__${input.fieldKey}.zip`;
   }
 
   private ensureUniqueZipEntryName(

@@ -116,25 +116,48 @@ export class FilesController {
   }
 
   /**
-   * Export all uploaded files for a file_upload field as ZIP
-   * Source of truth: latest submitted version + active patches (draft ignored)
+   * List file_upload fields available for event-wide ZIP export.
    */
-  @Get('applications/:applicationId/steps/:stepId/fields/:fieldId/files/export')
+  @Get('files/export-fields')
   @RequirePermission(
     Permission.EVENT_FILES_READ_NORMAL,
     Permission.EVENT_FILES_READ_SENSITIVE,
     Permission.ADMIN_EVENTS_MANAGE,
   )
-  async exportFieldFilesZip(
+  async listExportableFileFields(
     @Param('eventId') eventId: string,
-    @Param('applicationId') applicationId: string,
+  ): Promise<{
+    data: Array<{
+      stepId: string;
+      stepTitle: string;
+      stepIndex: number;
+      fieldKey: string;
+      fieldLabel: string;
+      maxFiles: number;
+    }>;
+  }> {
+    const fields = await this.filesService.listExportableFileFields(eventId);
+    return { data: fields };
+  }
+
+  /**
+   * Export all uploaded files for one file_upload field across submitted applications.
+   * Source of truth: latest submitted version + active patches (draft ignored).
+   */
+  @Get('steps/:stepId/fields/:fieldId/files/export')
+  @RequirePermission(
+    Permission.EVENT_FILES_READ_NORMAL,
+    Permission.EVENT_FILES_READ_SENSITIVE,
+    Permission.ADMIN_EVENTS_MANAGE,
+  )
+  async exportEventFieldFilesZip(
+    @Param('eventId') eventId: string,
     @Param('stepId') stepId: string,
     @Param('fieldId') fieldId: string,
     @Res() res: Response,
   ) {
-    const result = await this.filesService.exportSubmittedFieldFilesZip(
+    const result = await this.filesService.exportEventFieldFilesZip(
       eventId,
-      applicationId,
       stepId,
       fieldId,
     );

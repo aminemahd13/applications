@@ -152,6 +152,15 @@ interface DecisionTemplate {
   isActive: boolean;
 }
 
+interface ExportableFileFieldOption {
+  stepId: string;
+  stepTitle: string;
+  stepIndex: number;
+  fieldKey: string;
+  fieldLabel: string;
+  maxFiles: number;
+}
+
 type ApplicationsListResponse =
   | Application[]
   | {
@@ -365,6 +374,10 @@ export default function ApplicationsListPage() {
   const canIssueCredentials = hasPermission(Permission.EVENT_UPDATE);
   const canPublishDecisions = hasPermission(Permission.EVENT_DECISION_PUBLISH);
   const canExport = hasPermission(Permission.EVENT_APPLICATION_EXPORT);
+  const canExportFieldFiles =
+    hasPermission(Permission.EVENT_FILES_READ_NORMAL) ||
+    hasPermission(Permission.EVENT_FILES_READ_SENSITIVE) ||
+    hasPermission(Permission.ADMIN_EVENTS_MANAGE);
   const canStepOverride = hasPermission(Permission.EVENT_STEP_OVERRIDE_UNLOCK);
   const canStepReview = hasPermission(Permission.EVENT_STEP_REVIEW);
   const canUseBulkStepActions = canStepOverride || canStepReview;
@@ -380,7 +393,15 @@ export default function ApplicationsListPage() {
   const [totalMatchingApplications, setTotalMatchingApplications] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
+  const [showFieldZipDialog, setShowFieldZipDialog] = useState(false);
+  const [isLoadingFieldExportOptions, setIsLoadingFieldExportOptions] = useState(false);
+  const [isExportingFieldZip, setIsExportingFieldZip] = useState(false);
   const [exportScope, setExportScope] = useState<"all" | "selected">("all");
+  const [fieldExportOptions, setFieldExportOptions] = useState<
+    ExportableFileFieldOption[]
+  >([]);
+  const [selectedFieldExportStepId, setSelectedFieldExportStepId] = useState("");
+  const [selectedFieldExportKey, setSelectedFieldExportKey] = useState("");
   const [exportColumns, setExportColumns] = useState<ApplicationExportCoreColumn[]>(
     [...APPLICATION_EXPORT_CORE_COLUMNS],
   );
@@ -827,6 +848,13 @@ export default function ApplicationsListPage() {
     if (!selectedView) return;
     applySavedView(selectedView);
   }, [applySavedView, savedViews]);
+
+  useEffect(() => {
+    setFieldExportOptions([]);
+    setSelectedFieldExportStepId("");
+    setSelectedFieldExportKey("");
+    setShowFieldZipDialog(false);
+  }, [eventId]);
 
   const filterSignature = useMemo(
     () =>
@@ -1883,6 +1911,145 @@ export default function ApplicationsListPage() {
     );
   }
 
+  const fieldExportStepOptions = useMemo(() => {
+    const byStep = new Map<
+      string,
+      { stepId: string; stepTitle: string; stepIndex: number }
+    >();
+    for (const option of fieldExportOptions) {
+      if (!byStep.has(option.stepId)) {
+        byStep.set(option.stepId, {
+          stepId: option.stepId,
+          stepTitle: option.stepTitle,
+          stepIndex: option.stepIndex,
+        });
+      }
+    }
+    return Array.from(byStep.values()).sort(
+      (left, right) =>
+        left.stepIndex - right.stepIndex ||
+        left.stepTitle.localeCompare(right.stepTitle),
+    );
+  }, [fieldExportOptions]);
+
+  const fieldOptionsForSelectedStep = useMemo(
+    () =>
+      fieldExportOptions.filter(
+        (option) => option.stepId === selectedFieldExportStepId,
+      ),
+    [fieldExportOptions, selectedFieldExportStepId],
+  );
+
+  const selectedFieldExportOption = useMemo(
+    () =>
+      fieldExportOptions.find(
+        (option) =>
+          option.stepId === selectedFieldExportStepId &&
+          option.fieldKey === selectedFieldExportKey,
+      ) ?? null,
+    [fieldExportOptions, selectedFieldExportKey, selectedFieldExportStepId],
+  );
+
+  const loadFieldExportOptions = useCallback(async () => {
+    setIsLoadingFieldExportOptions(true);
+    try {
+      const response = await apiClient<{ data?: Array<Record<string, unknown>> }>(
+        `/events/${eventId}/files/export-fields`,
+      );
+      const normalized = Array.isArray(response.data)
+        ? response.data
+            .map((item) => {
+              const stepId = String(item.stepId ?? item.step_id ?? "").trim();
+              const fieldKey = String(
+                item.fieldKey ?? item.field_key ?? item.fieldId ?? "",
+              ).trim();
+              if (!stepId || !fieldKey) return null;
+
+              const stepTitle = String(
+                item.stepTitle ?? item.step_title ?? "Step",
+              ).trim();
+              const fieldLabel = String(
+                item.fieldLabel ?? item.field_label ?? fieldKey,
+              ).trim();
+              const rawStepIndex = Number(
+                item.stepIndex ?? item.step_index ?? 0,
+              );
+              const rawMaxFiles = Number(item.maxFiles ?? item.max_files ?? 1);
+
+              return {
+                stepId,
+                stepTitle: stepTitle || "Step",
+                stepIndex: Number.isFinite(rawStepIndex) ? rawStepIndex : 0,
+                fieldKey,
+                fieldLabel: fieldLabel || fieldKey,
+                maxFiles:
+                  Number.isFinite(rawMaxFiles) && rawMaxFiles > 0
+                    ? Math.floor(rawMaxFiles)
+                    : 1,
+              } as ExportableFileFieldOption;
+            })
+            .filter(
+              (item): item is ExportableFileFieldOption => item !== null,
+            )
+            .sort(
+              (left, right) =>
+                left.stepIndex - right.stepIndex ||
+                left.stepTitle.localeCompare(right.stepTitle) ||
+                left.fieldLabel.localeCompare(right.fieldLabel),
+            )
+        : [];
+      setFieldExportOptions(normalized);
+      if (normalized.length === 0) {
+        toast.info("No file-upload fields are available for export.");
+      }
+    } catch {
+      toast.error("Could not load file-upload fields.");
+    } finally {
+      setIsLoadingFieldExportOptions(false);
+    }
+  }, [eventId]);
+
+  useEffect(() => {
+    if (fieldExportOptions.length === 0) {
+      if (selectedFieldExportStepId) setSelectedFieldExportStepId("");
+      if (selectedFieldExportKey) setSelectedFieldExportKey("");
+      return;
+    }
+
+    const hasSelectedStep = fieldExportOptions.some(
+      (option) => option.stepId === selectedFieldExportStepId,
+    );
+    const nextStepId = hasSelectedStep
+      ? selectedFieldExportStepId
+      : fieldExportOptions[0]?.stepId ?? "";
+
+    if (nextStepId !== selectedFieldExportStepId) {
+      setSelectedFieldExportStepId(nextStepId);
+      return;
+    }
+
+    const stepFields = fieldExportOptions.filter(
+      (option) => option.stepId === nextStepId,
+    );
+    const hasSelectedField = stepFields.some(
+      (option) => option.fieldKey === selectedFieldExportKey,
+    );
+    if (!hasSelectedField) {
+      setSelectedFieldExportKey(stepFields[0]?.fieldKey ?? "");
+    }
+  }, [fieldExportOptions, selectedFieldExportKey, selectedFieldExportStepId]);
+
+  function openFieldZipDialog() {
+    if (!canExportFieldFiles) {
+      toast.error("You do not have permission to export files.");
+      return;
+    }
+    setShowFieldZipDialog(true);
+    if (fieldExportOptions.length === 0 && !isLoadingFieldExportOptions) {
+      void loadFieldExportOptions();
+    }
+  }
+
   function openExportDialog(scope: "all" | "selected") {
     if (scope === "selected" && selectedApplicationIds.length === 0) {
       toast.error("Select at least one application to export.");
@@ -2002,6 +2169,46 @@ export default function ApplicationsListPage() {
       }
     } finally {
       setIsExporting(false);
+    }
+  }
+
+  async function confirmFieldZipExport() {
+    if (!canExportFieldFiles) {
+      toast.error("You do not have permission to export files.");
+      return;
+    }
+    if (!selectedFieldExportOption) {
+      toast.error("Select a file-upload field.");
+      return;
+    }
+
+    setIsExportingFieldZip(true);
+    try {
+      const response = await fetch(
+        `${PUBLIC_API_URL}/events/${eventId}/steps/${selectedFieldExportOption.stepId}/fields/${encodeURIComponent(selectedFieldExportOption.fieldKey)}/files/export`,
+        {
+          method: "GET",
+          credentials: "include",
+        },
+      );
+      if (!response.ok) throw new Error("Export failed");
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filenameFromContentDisposition(
+        response.headers.get("content-disposition"),
+        `${eventId}-${selectedFieldExportOption.stepId}-${selectedFieldExportOption.fieldKey}-files.zip`,
+      );
+      a.click();
+      URL.revokeObjectURL(url);
+      setShowFieldZipDialog(false);
+      toast.success(`Exported "${selectedFieldExportOption.fieldLabel}" files.`);
+    } catch {
+      toast.error("Could not export field files ZIP.");
+    } finally {
+      setIsExportingFieldZip(false);
     }
   }
 
@@ -2729,6 +2936,17 @@ export default function ApplicationsListPage() {
           <Download className="mr-1.5 h-3.5 w-3.5" />
           {isExporting ? "Exporting..." : "Export CSV"}
         </Button>
+        {canExportFieldFiles && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={openFieldZipDialog}
+            disabled={isExportingFieldZip}
+          >
+            <Download className="mr-1.5 h-3.5 w-3.5" />
+            {isExportingFieldZip ? "Exporting..." : "Export field ZIP"}
+          </Button>
+        )}
       </PageHeader>
       {isSelectingAllMatching && selectAllProgress && (
         <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2">
@@ -3191,6 +3409,107 @@ export default function ApplicationsListPage() {
             </Button>
             <Button onClick={confirmExport} disabled={isExporting}>
               {isExporting ? "Exporting..." : "Export CSV"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showFieldZipDialog} onOpenChange={setShowFieldZipDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Export Field Files ZIP</DialogTitle>
+            <DialogDescription>
+              Download all uploaded files for one file-upload field across submitted
+              applications.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {isLoadingFieldExportOptions ? (
+              <p className="text-sm text-muted-foreground">
+                Loading file-upload fields...
+              </p>
+            ) : fieldExportOptions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No file-upload fields are available for this event.
+              </p>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label>Step</Label>
+                  <Select
+                    value={selectedFieldExportStepId}
+                    onValueChange={(nextStepId) => {
+                      setSelectedFieldExportStepId(nextStepId);
+                      const firstField = fieldExportOptions.find(
+                        (option) => option.stepId === nextStepId,
+                      );
+                      setSelectedFieldExportKey(firstField?.fieldKey ?? "");
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select step" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {fieldExportStepOptions.map((step) => (
+                        <SelectItem key={step.stepId} value={step.stepId}>
+                          {step.stepIndex + 1}. {step.stepTitle}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>File-upload field</Label>
+                  <Select
+                    value={selectedFieldExportKey}
+                    onValueChange={setSelectedFieldExportKey}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select field" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {fieldOptionsForSelectedStep.map((fieldOption) => (
+                        <SelectItem
+                          key={`${fieldOption.stepId}:${fieldOption.fieldKey}`}
+                          value={fieldOption.fieldKey}
+                        >
+                          {fieldOption.fieldLabel}
+                          {fieldOption.maxFiles > 1 ? " (multi-file)" : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  Files inside the ZIP use deterministic names including applicant
+                  email, application ID, field key, and index when multi-file.
+                </p>
+              </>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowFieldZipDialog(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmFieldZipExport}
+              disabled={
+                isLoadingFieldExportOptions ||
+                isExportingFieldZip ||
+                fieldExportOptions.length === 0 ||
+                !selectedFieldExportOption
+              }
+            >
+              {isExportingFieldZip ? "Exporting..." : "Export ZIP"}
             </Button>
           </DialogFooter>
         </DialogContent>
