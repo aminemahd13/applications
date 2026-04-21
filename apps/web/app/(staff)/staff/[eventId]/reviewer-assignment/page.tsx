@@ -77,6 +77,9 @@ interface QueueItem {
   stepTitle: string;
   queueMode?: "direct" | "shared";
   assignedReviewerId: string | null;
+  assignedReviewerEmail?: string | null;
+  assignedReviewerName?: string | null;
+  assignmentExpiresAt?: string | null;
   isOverdue?: boolean;
 }
 
@@ -167,6 +170,25 @@ export default function ReviewerAssignmentPage() {
       }
     })();
   }, [canManage, loadAll]);
+
+  useEffect(() => {
+    if (!canManage) return;
+    const refreshIfVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void loadQueueItems();
+    };
+    const timer = window.setInterval(refreshIfVisible, 30000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void loadQueueItems();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [canManage, loadQueueItems]);
 
   async function refreshAll() {
     setIsRefreshing(true);
@@ -417,6 +439,11 @@ export default function ReviewerAssignmentPage() {
                   <span className="font-medium">{item.applicantName ?? item.applicantEmail}</span>
                   <Badge variant="outline">{item.stepTitle}</Badge>
                   <Badge variant={item.queueMode === "direct" ? "secondary" : "outline"}>{item.queueMode === "direct" ? "Direct" : "Shared"}</Badge>
+                  {item.queueMode === "direct" && item.assignedReviewerId ? (
+                    <Badge variant="outline">
+                      {item.assignedReviewerName ?? item.assignedReviewerEmail ?? item.assignedReviewerId}
+                    </Badge>
+                  ) : null}
                   {item.isOverdue ? <Badge variant="destructive">Overdue</Badge> : null}
                 </div>
                 <div className="flex flex-wrap gap-2">

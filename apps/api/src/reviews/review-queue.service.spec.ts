@@ -24,6 +24,13 @@ function buildQueueItem(params?: {
     queue_mode: queueMode,
     assignment_expires_at: null,
     assigned_reviewer_id: assignedReviewerId,
+    users_review_queue_items_assigned_reviewer_idTousers:
+      assignedReviewerId
+        ? {
+            email: 'reviewer@example.com',
+            applicant_profiles: { full_name: 'Reviewer Name' },
+          }
+        : null,
     application_id: 'app-1',
     step_id: stepId,
     submission_version_id: submissionVersionId,
@@ -168,11 +175,33 @@ describe('ReviewQueueService', () => {
       queueItemId: 'queue-1',
       queueMode: 'shared',
       assignedReviewerId: null,
+      assignedReviewerEmail: null,
+      assignedReviewerName: null,
       stepId: 'step-1',
       submissionVersionId: 'version-1',
     });
     expect(result.meta.hasMore).toBe(false);
     expect(result.meta.nextCursor).toBeNull();
+  });
+
+  it('maps assigned reviewer display metadata for direct items', async () => {
+    mockPrisma.review_queue_items.findMany.mockResolvedValueOnce([
+      buildQueueItem({
+        id: 'queue-direct',
+        queueMode: 'direct',
+        assignedReviewerId: 'reviewer-77',
+      }),
+    ]);
+
+    const result = await service.getQueue('event-1', { limit: 20 } as any);
+
+    expect(result.data[0]).toMatchObject({
+      id: 'queue-direct',
+      queueMode: 'direct',
+      assignedReviewerId: 'reviewer-77',
+      assignedReviewerEmail: 'reviewer@example.com',
+      assignedReviewerName: 'Reviewer Name',
+    });
   });
 
   it('ignores application-filter saved view payloads in review queue list', async () => {

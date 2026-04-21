@@ -1222,6 +1222,339 @@ export class ReviewerAssignmentService {
     };
   }
 
+  async claimQueueItem(
+    eventId: string,
+    queueItemId: string,
+  ): Promise<{
+    queueItemId: string;
+    queueMode: 'direct';
+    assignedReviewerId: string;
+    assignmentExpiresAt: Date | null;
+  }> {
+    const reviewerId = this.cls.get('actorId') as string | undefined;
+    if (!reviewerId) {
+      throw new ForbiddenException({
+        code: 'QUEUE_ITEM_NOT_ASSIGNED_TO_YOU',
+        message: 'You must be authenticated to claim review items',
+      });
+    }
+
+    await this.syncOpenQueueItemsForEvent(eventId);
+    await this.releaseExpiredDirectAssignments(eventId);
+
+    const existing = await this.prisma.review_queue_items.findFirst({
+      where: {
+        id: queueItemId,
+        event_id: eventId,
+      },
+      select: {
+        id: true,
+        queue_mode: true,
+        assigned_reviewer_id: true,
+        assignment_expires_at: true,
+        completed_at: true,
+      },
+    });
+
+    if (!existing || existing.completed_at) {
+      throw new ConflictException({
+        code: 'QUEUE_ITEM_NOT_AVAILABLE',
+        message: 'This queue item is no longer available',
+      });
+    }
+
+    if (existing.queue_mode === 'direct') {
+      if (existing.assigned_reviewer_id === reviewerId) {
+        return {
+          queueItemId: existing.id,
+          queueMode: 'direct',
+          assignedReviewerId: reviewerId,
+          assignmentExpiresAt: existing.assignment_expires_at,
+        };
+      }
+      throw new ConflictException({
+        code: 'QUEUE_ITEM_ALREADY_CLAIMED',
+        message: 'This queue item is already claimed by another reviewer',
+      });
+    }
+
+    const expiresAt = this.getExpiryFromTtl();
+    const updatedAt = new Date();
+    const claim = await this.prisma.review_queue_items.updateMany({
+      where: {
+        id: queueItemId,
+        event_id: eventId,
+        completed_at: null,
+        queue_mode: 'shared',
+      },
+      data: {
+        queue_mode: 'direct',
+        assigned_reviewer_id: reviewerId,
+        assignment_expires_at: expiresAt,
+        updated_at: updatedAt,
+      },
+    });
+
+    if (claim.count === 0) {
+      const current = await this.prisma.review_queue_items.findFirst({
+        where: {
+          id: queueItemId,
+          event_id: eventId,
+        },
+        select: {
+          id: true,
+          queue_mode: true,
+          assigned_reviewer_id: true,
+          assignment_expires_at: true,
+          completed_at: true,
+        },
+      });
+
+      if (!current || current.completed_at) {
+        throw new ConflictException({
+          code: 'QUEUE_ITEM_NOT_AVAILABLE',
+          message: 'This queue item is no longer available',
+        });
+      }
+
+      if (current.queue_mode === 'shared') {
+        const retryExpiresAt = this.getExpiryFromTtl();
+        const retryUpdatedAt = new Date();
+        const retry = await this.prisma.review_queue_items.updateMany({
+          where: {
+            id: queueItemId,
+            event_id: eventId,
+            completed_at: null,
+            queue_mode: 'shared',
+          },
+          data: {
+            queue_mode: 'direct',
+            assigned_reviewer_id: reviewerId,
+            assignment_expires_at: retryExpiresAt,
+            updated_at: retryUpdatedAt,
+          },
+        });
+
+        if (retry.count > 0) {
+          await this.writeAssignmentAudit({
+            eventId,
+            action: 'REVIEW_QUEUE_ITEM_CLAIMED',
+            entityType: 'review_queue_item',
+            entityId: queueItemId,
+            meta: {
+              reviewerId,
+              assignmentExpiresAt: this.normalizeIso(retryExpiresAt),
+            },
+          });
+
+          return {
+            queueItemId,
+            queueMode: 'direct',
+            assignedReviewerId: reviewerId,
+            assignmentExpiresAt: retryExpiresAt,
+          };
+        }
+
+        const final = await this.prisma.review_queue_items.findFirst({
+          where: {
+            id: queueItemId,
+            event_id: eventId,
+          },
+          select: {
+            id: true,
+            queue_mode: true,
+            assigned_reviewer_id: true,
+            assignment_expires_at: true,
+            completed_at: true,
+          },
+        });
+
+        if (!final || final.completed_at || final.queue_mode === 'shared') {
+          throw new ConflictException({
+            code: 'QUEUE_ITEM_NOT_AVAILABLE',
+            message: 'This queue item is no longer available',
+          });
+        }
+
+        if (final.assigned_reviewer_id === reviewerId) {
+          return {
+            queueItemId: final.id,
+            queueMode: 'direct',
+            assignedReviewerId: reviewerId,
+            assignmentExpiresAt: final.assignment_expires_at,
+          };
+        }
+
+        throw new ConflictException({
+          code: 'QUEUE_ITEM_ALREADY_CLAIMED',
+          message: 'This queue item is already claimed by another reviewer',
+        });
+      }
+
+      if (
+        current.queue_mode === 'direct' &&
+        current.assigned_reviewer_id === reviewerId
+      ) {
+        return {
+          queueItemId: current.id,
+          queueMode: 'direct',
+          assignedReviewerId: reviewerId,
+          assignmentExpiresAt: current.assignment_expires_at,
+        };
+      }
+
+      throw new ConflictException({
+        code: 'QUEUE_ITEM_ALREADY_CLAIMED',
+        message: 'This queue item is already claimed by another reviewer',
+      });
+    }
+
+    await this.writeAssignmentAudit({
+      eventId,
+      action: 'REVIEW_QUEUE_ITEM_CLAIMED',
+      entityType: 'review_queue_item',
+      entityId: queueItemId,
+      meta: {
+        reviewerId,
+        assignmentExpiresAt: this.normalizeIso(expiresAt),
+      },
+    });
+
+    return {
+      queueItemId,
+      queueMode: 'direct',
+      assignedReviewerId: reviewerId,
+      assignmentExpiresAt: expiresAt,
+    };
+  }
+
+  async releaseQueueItem(
+    eventId: string,
+    queueItemId: string,
+  ): Promise<{
+    queueItemId: string;
+    queueMode: 'shared';
+    assignedReviewerId: null;
+    assignmentExpiresAt: null;
+  }> {
+    const reviewerId = this.cls.get('actorId') as string | undefined;
+    if (!reviewerId) {
+      throw new ForbiddenException({
+        code: 'QUEUE_ITEM_NOT_ASSIGNED_TO_YOU',
+        message: 'You must be authenticated to release review items',
+      });
+    }
+
+    await this.syncOpenQueueItemsForEvent(eventId);
+    await this.releaseExpiredDirectAssignments(eventId);
+
+    const existing = await this.prisma.review_queue_items.findFirst({
+      where: {
+        id: queueItemId,
+        event_id: eventId,
+      },
+      select: {
+        id: true,
+        queue_mode: true,
+        assigned_reviewer_id: true,
+        completed_at: true,
+      },
+    });
+
+    if (!existing || existing.completed_at) {
+      throw new ConflictException({
+        code: 'QUEUE_ITEM_NOT_AVAILABLE',
+        message: 'This queue item is no longer available',
+      });
+    }
+
+    if (existing.queue_mode === 'shared') {
+      return {
+        queueItemId: existing.id,
+        queueMode: 'shared',
+        assignedReviewerId: null,
+        assignmentExpiresAt: null,
+      };
+    }
+
+    if (existing.assigned_reviewer_id !== reviewerId) {
+      throw new ForbiddenException({
+        code: 'QUEUE_ITEM_NOT_ASSIGNED_TO_YOU',
+        message: 'This queue item is assigned to another reviewer',
+      });
+    }
+
+    const updatedAt = new Date();
+    const release = await this.prisma.review_queue_items.updateMany({
+      where: {
+        id: queueItemId,
+        event_id: eventId,
+        completed_at: null,
+        queue_mode: 'direct',
+        assigned_reviewer_id: reviewerId,
+      },
+      data: {
+        queue_mode: 'shared',
+        assigned_reviewer_id: null,
+        assignment_expires_at: null,
+        updated_at: updatedAt,
+      },
+    });
+
+    if (release.count === 0) {
+      const current = await this.prisma.review_queue_items.findFirst({
+        where: {
+          id: queueItemId,
+          event_id: eventId,
+        },
+        select: {
+          id: true,
+          queue_mode: true,
+          assigned_reviewer_id: true,
+          completed_at: true,
+        },
+      });
+
+      if (!current || current.completed_at) {
+        throw new ConflictException({
+          code: 'QUEUE_ITEM_NOT_AVAILABLE',
+          message: 'This queue item is no longer available',
+        });
+      }
+
+      if (current.queue_mode === 'shared') {
+        return {
+          queueItemId: current.id,
+          queueMode: 'shared',
+          assignedReviewerId: null,
+          assignmentExpiresAt: null,
+        };
+      }
+
+      throw new ForbiddenException({
+        code: 'QUEUE_ITEM_NOT_ASSIGNED_TO_YOU',
+        message: 'This queue item is assigned to another reviewer',
+      });
+    }
+
+    await this.writeAssignmentAudit({
+      eventId,
+      action: 'REVIEW_QUEUE_ITEM_RELEASED_BY_REVIEWER',
+      entityType: 'review_queue_item',
+      entityId: queueItemId,
+      meta: {
+        reviewerId,
+      },
+    });
+
+    return {
+      queueItemId,
+      queueMode: 'shared',
+      assignedReviewerId: null,
+      assignmentExpiresAt: null,
+    };
+  }
+
   async assertQueueAccessForReview(
     eventId: string,
     submissionVersionId: string,
@@ -1253,11 +1586,21 @@ export class ReviewerAssignmentService {
       return;
     }
 
+    if (queueItem.queue_mode === 'shared') {
+      throw new ConflictException({
+        code: 'CLAIM_REQUIRED',
+        message: 'Claim this queue item before submitting a review',
+      });
+    }
+
     if (
       queueItem.queue_mode === 'direct' &&
       queueItem.assigned_reviewer_id !== reviewerId
     ) {
-      throw new ForbiddenException('This submission is assigned to another reviewer');
+      throw new ForbiddenException({
+        code: 'QUEUE_ITEM_NOT_ASSIGNED_TO_YOU',
+        message: 'This submission is assigned to another reviewer',
+      });
     }
   }
 

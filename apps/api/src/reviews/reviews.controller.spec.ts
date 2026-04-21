@@ -3,6 +3,22 @@ import { PERMISSIONS_KEY } from '../common/decorators/require-permission.decorat
 import { ReviewsController } from './reviews.controller';
 
 describe('ReviewsController reviewer-assignment endpoints', () => {
+  it('requires event.step.review permission for claim/release queue routes', () => {
+    const getMetadata = Reflect.getMetadata.bind(Reflect);
+
+    const claimPermissions = getMetadata(
+      PERMISSIONS_KEY,
+      ReviewsController.prototype.claimReviewQueueItem,
+    );
+    const releasePermissions = getMetadata(
+      PERMISSIONS_KEY,
+      ReviewsController.prototype.releaseReviewQueueItem,
+    );
+
+    expect(claimPermissions).toEqual([Permission.EVENT_STEP_REVIEW]);
+    expect(releasePermissions).toEqual([Permission.EVENT_STEP_REVIEW]);
+  });
+
   it('requires event.update permission for reviewer-assignment routes', () => {
     const getMetadata = Reflect.getMetadata.bind(Reflect);
 
@@ -40,6 +56,8 @@ describe('ReviewsController reviewer-assignment endpoints', () => {
       createPreview: jest.fn().mockResolvedValue({ previewId: 'preview-1' }),
       applyPreview: jest.fn().mockResolvedValue({ previewId: 'preview-1' }),
       overrideQueueItem: jest.fn().mockResolvedValue({ queueItemId: 'q-1' }),
+      claimQueueItem: jest.fn().mockResolvedValue({ queueItemId: 'q-2' }),
+      releaseQueueItem: jest.fn().mockResolvedValue({ queueItemId: 'q-2' }),
       releaseExpiredDirectAssignments: jest.fn().mockResolvedValue({ released: 2 }),
     };
 
@@ -63,6 +81,8 @@ describe('ReviewsController reviewer-assignment endpoints', () => {
       previewId: 'ffffffff-ffff-ffff-ffff-ffffffffffff',
       idempotencyKey: 'idem-1',
     });
+    const claim = await controller.claimReviewQueueItem('event-1', 'q-2');
+    const releaseClaim = await controller.releaseReviewQueueItem('event-1', 'q-2');
     const override = await controller.overrideReviewerQueueItem(
       'event-1',
       'q-1',
@@ -83,6 +103,14 @@ describe('ReviewsController reviewer-assignment endpoints', () => {
         idempotencyKey: 'idem-1',
       }),
     );
+    expect(assignmentService.claimQueueItem).toHaveBeenCalledWith(
+      'event-1',
+      'q-2',
+    );
+    expect(assignmentService.releaseQueueItem).toHaveBeenCalledWith(
+      'event-1',
+      'q-2',
+    );
     expect(assignmentService.overrideQueueItem).toHaveBeenCalledWith(
       'event-1',
       'q-1',
@@ -95,6 +123,8 @@ describe('ReviewsController reviewer-assignment endpoints', () => {
     expect(context).toEqual({ data: { steps: [], reviewers: [] } });
     expect(preview).toEqual({ data: { previewId: 'preview-1' } });
     expect(apply).toEqual({ data: { previewId: 'preview-1' } });
+    expect(claim).toEqual({ data: { queueItemId: 'q-2' } });
+    expect(releaseClaim).toEqual({ data: { queueItemId: 'q-2' } });
     expect(override).toEqual({ data: { queueItemId: 'q-1' } });
     expect(release).toEqual({ data: { released: 2 } });
   });

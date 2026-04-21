@@ -113,6 +113,32 @@ export class ReviewsController {
     return { data: reviewers };
   }
 
+  @Post('review-queue/items/:queueItemId/claim')
+  @RequirePermission(Permission.EVENT_STEP_REVIEW)
+  async claimReviewQueueItem(
+    @Param('eventId') eventId: string,
+    @Param('queueItemId') queueItemId: string,
+  ) {
+    const data = await this.reviewerAssignmentService.claimQueueItem(
+      eventId,
+      queueItemId,
+    );
+    return { data };
+  }
+
+  @Post('review-queue/items/:queueItemId/release')
+  @RequirePermission(Permission.EVENT_STEP_REVIEW)
+  async releaseReviewQueueItem(
+    @Param('eventId') eventId: string,
+    @Param('queueItemId') queueItemId: string,
+  ) {
+    const data = await this.reviewerAssignmentService.releaseQueueItem(
+      eventId,
+      queueItemId,
+    );
+    return { data };
+  }
+
   /**
    * Assign reviewer
    */

@@ -96,6 +96,7 @@ function buildMockPrisma() {
     },
     review_queue_items: {
       findMany: jest.fn(),
+      findFirst: jest.fn(),
       createMany: jest.fn().mockResolvedValue({ count: 0 }),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       update: jest.fn(),
@@ -534,5 +535,322 @@ describe('ReviewerAssignmentService', () => {
     expect(first.previewId).toBe('preview-1');
     expect(second).toEqual(applyResult);
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('claims a shared queue item for the current reviewer', async () => {
+    cls = buildCls({
+      actorId: 'reviewer-a',
+      permissions: ['event.step.review'],
+    });
+    service = new ReviewerAssignmentService(prisma as any, cls as any);
+    jest
+      .spyOn(service, 'syncOpenQueueItemsForEvent')
+      .mockResolvedValue({ created: 0, completed: 0 });
+    jest
+      .spyOn(service, 'releaseExpiredDirectAssignments')
+      .mockResolvedValue({ released: 0 });
+
+    prisma.review_queue_items.findFirst.mockResolvedValueOnce({
+      id: 'q-1',
+      queue_mode: 'shared',
+      assigned_reviewer_id: null,
+      assignment_expires_at: null,
+      completed_at: null,
+    });
+    prisma.review_queue_items.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await service.claimQueueItem('event-1', 'q-1');
+
+    expect(result).toMatchObject({
+      queueItemId: 'q-1',
+      queueMode: 'direct',
+      assignedReviewerId: 'reviewer-a',
+    });
+    expect(prisma.review_queue_items.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: 'q-1',
+          event_id: 'event-1',
+          queue_mode: 'shared',
+          completed_at: null,
+        }),
+        data: expect.objectContaining({
+          queue_mode: 'direct',
+          assigned_reviewer_id: 'reviewer-a',
+        }),
+      }),
+    );
+  });
+
+  it('claim is idempotent when queue item is already assigned to caller', async () => {
+    cls = buildCls({
+      actorId: 'reviewer-a',
+      permissions: ['event.step.review'],
+    });
+    service = new ReviewerAssignmentService(prisma as any, cls as any);
+    jest
+      .spyOn(service, 'syncOpenQueueItemsForEvent')
+      .mockResolvedValue({ created: 0, completed: 0 });
+    jest
+      .spyOn(service, 'releaseExpiredDirectAssignments')
+      .mockResolvedValue({ released: 0 });
+
+    prisma.review_queue_items.findFirst.mockResolvedValueOnce({
+      id: 'q-1',
+      queue_mode: 'direct',
+      assigned_reviewer_id: 'reviewer-a',
+      assignment_expires_at: new Date('2026-04-02T12:00:00.000Z'),
+      completed_at: null,
+    });
+
+    const result = await service.claimQueueItem('event-1', 'q-1');
+
+    expect(result).toMatchObject({
+      queueItemId: 'q-1',
+      queueMode: 'direct',
+      assignedReviewerId: 'reviewer-a',
+    });
+    expect(prisma.review_queue_items.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('claim fails when queue item is already assigned to another reviewer', async () => {
+    cls = buildCls({
+      actorId: 'reviewer-a',
+      permissions: ['event.step.review'],
+    });
+    service = new ReviewerAssignmentService(prisma as any, cls as any);
+    jest
+      .spyOn(service, 'syncOpenQueueItemsForEvent')
+      .mockResolvedValue({ created: 0, completed: 0 });
+    jest
+      .spyOn(service, 'releaseExpiredDirectAssignments')
+      .mockResolvedValue({ released: 0 });
+
+    prisma.review_queue_items.findFirst.mockResolvedValueOnce({
+      id: 'q-1',
+      queue_mode: 'direct',
+      assigned_reviewer_id: 'reviewer-b',
+      assignment_expires_at: new Date('2026-04-02T12:00:00.000Z'),
+      completed_at: null,
+    });
+
+    let error: any;
+    try {
+      await service.claimQueueItem('event-1', 'q-1');
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({
+      code: 'QUEUE_ITEM_ALREADY_CLAIMED',
+    });
+  });
+
+  it('retries claim when item is still shared after a contention miss', async () => {
+    cls = buildCls({
+      actorId: 'reviewer-a',
+      permissions: ['event.step.review'],
+    });
+    service = new ReviewerAssignmentService(prisma as any, cls as any);
+    jest
+      .spyOn(service, 'syncOpenQueueItemsForEvent')
+      .mockResolvedValue({ created: 0, completed: 0 });
+    jest
+      .spyOn(service, 'releaseExpiredDirectAssignments')
+      .mockResolvedValue({ released: 0 });
+
+    prisma.review_queue_items.findFirst
+      .mockResolvedValueOnce({
+        id: 'q-1',
+        queue_mode: 'shared',
+        assigned_reviewer_id: null,
+        assignment_expires_at: null,
+        completed_at: null,
+      })
+      .mockResolvedValueOnce({
+        id: 'q-1',
+        queue_mode: 'shared',
+        assigned_reviewer_id: null,
+        assignment_expires_at: null,
+        completed_at: null,
+      });
+    prisma.review_queue_items.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+
+    const result = await service.claimQueueItem('event-1', 'q-1');
+
+    expect(result).toMatchObject({
+      queueItemId: 'q-1',
+      queueMode: 'direct',
+      assignedReviewerId: 'reviewer-a',
+    });
+    expect(prisma.review_queue_items.updateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('claim returns QUEUE_ITEM_NOT_AVAILABLE when concurrent updates keep item shared', async () => {
+    cls = buildCls({
+      actorId: 'reviewer-a',
+      permissions: ['event.step.review'],
+    });
+    service = new ReviewerAssignmentService(prisma as any, cls as any);
+    jest
+      .spyOn(service, 'syncOpenQueueItemsForEvent')
+      .mockResolvedValue({ created: 0, completed: 0 });
+    jest
+      .spyOn(service, 'releaseExpiredDirectAssignments')
+      .mockResolvedValue({ released: 0 });
+
+    prisma.review_queue_items.findFirst
+      .mockResolvedValueOnce({
+        id: 'q-1',
+        queue_mode: 'shared',
+        assigned_reviewer_id: null,
+        assignment_expires_at: null,
+        completed_at: null,
+      })
+      .mockResolvedValueOnce({
+        id: 'q-1',
+        queue_mode: 'shared',
+        assigned_reviewer_id: null,
+        assignment_expires_at: null,
+        completed_at: null,
+      })
+      .mockResolvedValueOnce({
+        id: 'q-1',
+        queue_mode: 'shared',
+        assigned_reviewer_id: null,
+        assignment_expires_at: null,
+        completed_at: null,
+      });
+    prisma.review_queue_items.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 });
+
+    let error: any;
+    try {
+      await service.claimQueueItem('event-1', 'q-1');
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({
+      code: 'QUEUE_ITEM_NOT_AVAILABLE',
+    });
+  });
+
+  it('releases a direct queue item when assigned to caller', async () => {
+    cls = buildCls({
+      actorId: 'reviewer-a',
+      permissions: ['event.step.review'],
+    });
+    service = new ReviewerAssignmentService(prisma as any, cls as any);
+    jest
+      .spyOn(service, 'syncOpenQueueItemsForEvent')
+      .mockResolvedValue({ created: 0, completed: 0 });
+    jest
+      .spyOn(service, 'releaseExpiredDirectAssignments')
+      .mockResolvedValue({ released: 0 });
+
+    prisma.review_queue_items.findFirst.mockResolvedValueOnce({
+      id: 'q-1',
+      queue_mode: 'direct',
+      assigned_reviewer_id: 'reviewer-a',
+      completed_at: null,
+    });
+    prisma.review_queue_items.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await service.releaseQueueItem('event-1', 'q-1');
+
+    expect(result).toEqual({
+      queueItemId: 'q-1',
+      queueMode: 'shared',
+      assignedReviewerId: null,
+      assignmentExpiresAt: null,
+    });
+    expect(prisma.review_queue_items.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: 'q-1',
+          queue_mode: 'direct',
+          assigned_reviewer_id: 'reviewer-a',
+        }),
+        data: expect.objectContaining({
+          queue_mode: 'shared',
+          assigned_reviewer_id: null,
+        }),
+      }),
+    );
+  });
+
+  it('release fails when queue item is assigned to another reviewer', async () => {
+    cls = buildCls({
+      actorId: 'reviewer-a',
+      permissions: ['event.step.review'],
+    });
+    service = new ReviewerAssignmentService(prisma as any, cls as any);
+    jest
+      .spyOn(service, 'syncOpenQueueItemsForEvent')
+      .mockResolvedValue({ created: 0, completed: 0 });
+    jest
+      .spyOn(service, 'releaseExpiredDirectAssignments')
+      .mockResolvedValue({ released: 0 });
+
+    prisma.review_queue_items.findFirst.mockResolvedValueOnce({
+      id: 'q-1',
+      queue_mode: 'direct',
+      assigned_reviewer_id: 'reviewer-b',
+      completed_at: null,
+    });
+
+    let error: any;
+    try {
+      await service.releaseQueueItem('event-1', 'q-1');
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeDefined();
+    expect(error.getResponse()).toMatchObject({
+      code: 'QUEUE_ITEM_NOT_ASSIGNED_TO_YOU',
+    });
+  });
+
+  it('requires claim before non-organizer review submission on shared items', async () => {
+    cls = buildCls({
+      actorId: 'reviewer-a',
+      permissions: ['event.step.review'],
+    });
+    service = new ReviewerAssignmentService(prisma as any, cls as any);
+    jest
+      .spyOn(service, 'syncOpenQueueItemsForEvent')
+      .mockResolvedValue({ created: 0, completed: 0 });
+    jest
+      .spyOn(service, 'releaseExpiredDirectAssignments')
+      .mockResolvedValue({ released: 0 });
+
+    prisma.review_queue_items.findFirst.mockResolvedValueOnce({
+      queue_mode: 'shared',
+      assigned_reviewer_id: null,
+      completed_at: null,
+    });
+
+    let error: any;
+    try {
+      await service.assertQueueAccessForReview(
+        'event-1',
+        'submission-1',
+        'reviewer-a',
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({
+      code: 'CLAIM_REQUIRED',
+    });
   });
 });

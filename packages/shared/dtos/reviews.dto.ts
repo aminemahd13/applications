@@ -239,6 +239,28 @@ export type ReviewerQueueItemOverrideRequestDto = z.infer<
     typeof ReviewerQueueItemOverrideRequestSchema
 >;
 
+export const ReviewQueueItemClaimResponseSchema = z.object({
+    queueItemId: z.string().uuid(),
+    queueMode: z.literal('direct'),
+    assignedReviewerId: z.string().uuid(),
+    assignmentExpiresAt: z.coerce.date().nullable(),
+});
+
+export type ReviewQueueItemClaimResponseDto = z.infer<
+    typeof ReviewQueueItemClaimResponseSchema
+>;
+
+export const ReviewQueueItemReleaseResponseSchema = z.object({
+    queueItemId: z.string().uuid(),
+    queueMode: z.literal('shared'),
+    assignedReviewerId: z.null(),
+    assignmentExpiresAt: z.null(),
+});
+
+export type ReviewQueueItemReleaseResponseDto = z.infer<
+    typeof ReviewQueueItemReleaseResponseSchema
+>;
+
 export const ReviewQueueSavedViewFilterSchema = z.object({
     stepId: z.string().uuid().optional(),
     assignedTo: z.enum(['me', 'any', 'unassigned']).optional(),
@@ -350,6 +372,8 @@ export interface ReviewQueueItem {
     answers?: Record<string, unknown>;
     formDefinition?: Record<string, unknown> | null;
     assignedReviewerId: string | null;
+    assignedReviewerEmail?: string | null;
+    assignedReviewerName?: string | null;
     queueMode?: 'direct' | 'shared';
     assignmentExpiresAt?: Date | null;
     isOverdue?: boolean;

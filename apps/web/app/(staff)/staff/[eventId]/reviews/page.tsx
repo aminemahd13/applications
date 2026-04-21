@@ -63,8 +63,9 @@ import {
 
 interface ReviewItem {
   id: string;
+  queueItemId?: string;
   applicationId: string;
-  applicantName: string;
+  applicantName: string | null;
   applicantEmail: string;
   stepTitle: string;
   stepId: string;
@@ -73,6 +74,12 @@ interface ReviewItem {
   submittedAt: string;
   answers: Record<string, unknown>;
   formDefinition?: Record<string, unknown> | null;
+  assignedReviewerId: string | null;
+  assignedReviewerEmail?: string | null;
+  assignedReviewerName?: string | null;
+  queueMode?: "direct" | "shared";
+  assignmentExpiresAt?: string | null;
+  isOverdue?: boolean;
   tags?: string[];
 }
 
@@ -87,6 +94,7 @@ interface SavedView {
   isDefault: boolean;
   filters: {
     stepId?: string;
+    assignedTo?: "any" | "me" | "unassigned";
     status?: "pending" | "needs_info" | "resubmitted";
     tags?: string[];
   };
@@ -193,12 +201,13 @@ function extractRequestFieldOptions(
 
 type ReviewVerdict = "APPROVE" | "REJECT" | "REQUEST_INFO";
 type QueueStatusFilter = "all" | "pending" | "needs_info" | "resubmitted";
+type QueueOwnershipFilter = "any" | "me" | "unassigned";
 const QUEUE_PAGE_LIMIT = 50;
 
 export default function ReviewsPage() {
   const params = useParams();
   const eventId = params.eventId as string;
-  const { csrfToken } = useAuth();
+  const { csrfToken, user } = useAuth();
   const { hasPermission } = usePermissions(eventId);
 
   const [queue, setQueue] = useState<ReviewItem[]>([]);
@@ -211,6 +220,8 @@ export default function ReviewsPage() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [stepFilter, setStepFilter] = useState("all");
+  const [ownershipFilter, setOwnershipFilter] =
+    useState<QueueOwnershipFilter>("any");
   const [statusFilter, setStatusFilter] = useState<QueueStatusFilter>("all");
   const [tagFilter, setTagFilter] = useState("");
   const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
@@ -234,6 +245,7 @@ export default function ReviewsPage() {
   const nextCursorRef = useRef<string | null>(null);
 
   const canSendMessages = hasPermission(Permission.EVENT_MESSAGES_SEND);
+  const canManageAssignments = hasPermission(Permission.EVENT_UPDATE);
 
   useEffect(() => {
     hasMoreRef.current = hasMore;
@@ -263,6 +275,7 @@ export default function ReviewsPage() {
     if (defaultView && selectedViewId === "none") {
       setSelectedViewId(defaultView.id);
       setStepFilter(defaultView.filters.stepId ?? "all");
+      setOwnershipFilter(defaultView.filters.assignedTo ?? "any");
       setStatusFilter(defaultView.filters.status ?? "all");
       setTagFilter((defaultView.filters.tags ?? []).join(", "));
     }
@@ -296,6 +309,7 @@ export default function ReviewsPage() {
     const query = new URLSearchParams();
     query.set("limit", String(QUEUE_PAGE_LIMIT));
     if (stepFilter !== "all") query.set("stepId", stepFilter);
+    if (ownershipFilter !== "any") query.set("assignedTo", ownershipFilter);
     if (statusFilter !== "all") query.set("status", statusFilter);
     for (const tag of activeTags) {
       query.append("tags", tag);
@@ -346,7 +360,7 @@ export default function ReviewsPage() {
         setIsLoadingMore(false);
       }
     }
-  }, [activeTags, eventId, statusFilter, stepFilter]);
+  }, [activeTags, eventId, ownershipFilter, statusFilter, stepFilter]);
 
   useEffect(() => {
     (async () => {
@@ -381,6 +395,15 @@ export default function ReviewsPage() {
     () => new Set(requestFieldOptions.map((option) => option.id)),
     [requestFieldOptions],
   );
+  const currentQueueItemId = current?.queueItemId ?? current?.id;
+  const isCurrentAssignedToActor =
+    !!current &&
+    !!user?.id &&
+    current.queueMode === "direct" &&
+    current.assignedReviewerId === user.id;
+  const canActOnCurrentItem = Boolean(
+    current && (canManageAssignments || isCurrentAssignedToActor),
+  );
 
   async function saveCurrentView() {
     if (!saveViewName.trim()) {
@@ -394,6 +417,7 @@ export default function ReviewsPage() {
         isDefault: saveAsDefault,
         filters: {
           ...(stepFilter !== "all" ? { stepId: stepFilter } : {}),
+          ...(ownershipFilter !== "any" ? { assignedTo: ownershipFilter } : {}),
           ...(statusFilter !== "all" ? { status: statusFilter } : {}),
           ...(activeTags.length > 0 ? { tags: activeTags } : {}),
         },
@@ -436,11 +460,18 @@ export default function ReviewsPage() {
     const view = savedViews.find((entry) => entry.id === viewId);
     if (!view) return;
     setStepFilter(view.filters.stepId ?? "all");
+    setOwnershipFilter(view.filters.assignedTo ?? "any");
     setStatusFilter(view.filters.status ?? "all");
     setTagFilter((view.filters.tags ?? []).join(", "));
   }
 
   function openReviewDialog(verdict: ReviewVerdict) {
+    if (!canActOnCurrentItem) {
+      toast.error(
+        "Claim this queue item before reviewing, or use organizer/admin access.",
+      );
+      return;
+    }
     setReviewVerdict(verdict);
     setReviewComment("");
     setRequestInfoFieldIds([]);
@@ -452,6 +483,12 @@ export default function ReviewsPage() {
 
   async function submitReview() {
     if (!current || !reviewVerdict) return;
+    if (!canActOnCurrentItem) {
+      toast.error(
+        "Claim this queue item before reviewing, or use organizer/admin access.",
+      );
+      return;
+    }
     const versionId = current.submissionVersionId;
     if (!versionId) {
       toast.error("No submission version found for this step");
@@ -547,6 +584,109 @@ export default function ReviewsPage() {
     }
   }
 
+  async function claimCurrentItem() {
+    if (!currentQueueItemId) return;
+    try {
+      const res = await apiClient<{
+        data?: {
+          queueItemId: string;
+          queueMode: "direct";
+          assignedReviewerId: string;
+          assignmentExpiresAt: string | null;
+        };
+      }>(`/events/${eventId}/review-queue/items/${currentQueueItemId}/claim`, {
+        method: "POST",
+        csrfToken: csrfToken ?? undefined,
+      });
+      const payload = res?.data;
+      if (!payload) return;
+      let nextLength = 0;
+      setQueue((prev) => {
+        const updated = prev.flatMap((item) => {
+          if ((item.queueItemId ?? item.id) !== payload.queueItemId) {
+            return [item];
+          }
+          if (ownershipFilter === "unassigned") {
+            return [];
+          }
+          return [
+            {
+              ...item,
+              queueMode: payload.queueMode,
+              assignedReviewerId: payload.assignedReviewerId,
+              assignedReviewerName: user?.fullName ?? item.assignedReviewerName,
+              assignedReviewerEmail: user?.email ?? item.assignedReviewerEmail,
+              assignmentExpiresAt: payload.assignmentExpiresAt,
+              isOverdue: false,
+            },
+          ];
+        });
+        nextLength = updated.length;
+        return updated;
+      });
+      setCurrentIndex((prev) => {
+        if (nextLength <= 0) return 0;
+        return Math.min(prev, nextLength - 1);
+      });
+      toast.success("Queue item claimed.");
+    } catch {
+      /* handled */
+    }
+  }
+
+  async function releaseCurrentItem() {
+    if (!currentQueueItemId) return;
+    try {
+      const res = await apiClient<{
+        data?: {
+          queueItemId: string;
+          queueMode: "shared";
+          assignedReviewerId: null;
+          assignmentExpiresAt: null;
+        };
+      }>(
+        `/events/${eventId}/review-queue/items/${currentQueueItemId}/release`,
+        {
+          method: "POST",
+          csrfToken: csrfToken ?? undefined,
+        },
+      );
+      const payload = res?.data;
+      if (!payload) return;
+      let nextLength = 0;
+      setQueue((prev) => {
+        const updated = prev.flatMap((item) => {
+          if ((item.queueItemId ?? item.id) !== payload.queueItemId) {
+            return [item];
+          }
+          if (ownershipFilter === "me") {
+            return [];
+          }
+          return [
+            {
+              ...item,
+              queueMode: payload.queueMode,
+              assignedReviewerId: null,
+              assignedReviewerName: null,
+              assignedReviewerEmail: null,
+              assignmentExpiresAt: null,
+              isOverdue: false,
+            },
+          ];
+        });
+        nextLength = updated.length;
+        return updated;
+      });
+      setCurrentIndex((prev) => {
+        if (nextLength <= 0) return 0;
+        return Math.min(prev, nextLength - 1);
+      });
+      toast.success("Queue item released to shared pool.");
+    } catch {
+      /* handled */
+    }
+  }
+
   async function goNext() {
     if (currentIndex < queue.length - 1) {
       setCurrentIndex((prev) => Math.min(queue.length - 1, prev + 1));
@@ -589,7 +729,7 @@ export default function ReviewsPage() {
         description={`${queue.length}${hasMore ? "+" : ""} submissions awaiting review`}
       />
 
-      <div className="grid gap-3 lg:grid-cols-5">
+      <div className="grid gap-3 lg:grid-cols-6">
         <Select value={stepFilter} onValueChange={setStepFilter}>
           <SelectTrigger>
             <Filter className="mr-2 h-3.5 w-3.5" />
@@ -617,6 +757,22 @@ export default function ReviewsPage() {
             <SelectItem value="pending">Pending review</SelectItem>
             <SelectItem value="needs_info">Needs info</SelectItem>
             <SelectItem value="resubmitted">Resubmitted</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={ownershipFilter}
+          onValueChange={(value) =>
+            setOwnershipFilter(value as QueueOwnershipFilter)
+          }
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="All visible" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="any">All visible</SelectItem>
+            <SelectItem value="me">My queue</SelectItem>
+            <SelectItem value="unassigned">Shared pool</SelectItem>
           </SelectContent>
         </Select>
 
@@ -688,7 +844,7 @@ export default function ReviewsPage() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <CardTitle className="break-words text-base">
-                          {current.applicantName}
+                          {current.applicantName ?? current.applicantEmail}
                         </CardTitle>
                         <CardDescription className="break-all">
                           {current.applicantEmail}
@@ -705,6 +861,39 @@ export default function ReviewsPage() {
                       <span>
                         Submitted {new Date(current.submittedAt).toLocaleDateString("en-GB")}
                       </span>
+                      <Badge
+                        variant={
+                          current.queueMode === "direct" ? "secondary" : "outline"
+                        }
+                      >
+                        {current.queueMode === "direct"
+                          ? "Direct assignment"
+                          : "Shared pool"}
+                      </Badge>
+                      {current.queueMode === "direct" &&
+                        current.assignedReviewerId && (
+                          <Badge variant="outline">
+                            {current.assignedReviewerId === user?.id
+                              ? "Assigned to you"
+                              : `Assigned to ${
+                                  current.assignedReviewerName ??
+                                  current.assignedReviewerEmail ??
+                                  "another reviewer"
+                                }`}
+                          </Badge>
+                        )}
+                      {current.queueMode === "direct" &&
+                        current.assignmentExpiresAt && (
+                          <Badge
+                            variant={current.isOverdue ? "destructive" : "outline"}
+                          >
+                            {current.isOverdue
+                              ? "Assignment overdue"
+                              : `Expires ${new Date(
+                                  current.assignmentExpiresAt,
+                                ).toLocaleString("en-GB")}`}
+                          </Badge>
+                        )}
                       {(current.tags ?? []).slice(0, 4).map((tag) => (
                         <Badge
                           key={tag}
@@ -791,10 +980,34 @@ export default function ReviewsPage() {
                 <CardTitle className="text-sm">Review actions</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
+                <div className="rounded-md border border-border/60 p-3">
+                  {current.queueMode === "shared" ? (
+                    <Button
+                      className="w-full justify-start"
+                      variant="outline"
+                      onClick={claimCurrentItem}
+                    >
+                      Claim
+                    </Button>
+                  ) : isCurrentAssignedToActor ? (
+                    <Button
+                      className="w-full justify-start"
+                      variant="ghost"
+                      onClick={releaseCurrentItem}
+                    >
+                      Release to shared
+                    </Button>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      This item is directly assigned to another reviewer.
+                    </p>
+                  )}
+                </div>
                 <Button
                   className="w-full justify-start"
                   variant="outline"
                   onClick={() => openReviewDialog("APPROVE")}
+                  disabled={!canActOnCurrentItem}
                 >
                   <CheckCircle2 className="mr-2 h-4 w-4 text-success" />
                   Approve
@@ -803,6 +1016,7 @@ export default function ReviewsPage() {
                   className="w-full justify-start"
                   variant="outline"
                   onClick={() => openReviewDialog("REQUEST_INFO")}
+                  disabled={!canActOnCurrentItem}
                 >
                   <AlertTriangle className="mr-2 h-4 w-4 text-warning" />
                   Request revision
@@ -811,10 +1025,16 @@ export default function ReviewsPage() {
                   className="w-full justify-start"
                   variant="outline"
                   onClick={() => openReviewDialog("REJECT")}
+                  disabled={!canActOnCurrentItem}
                 >
                   <XCircle className="mr-2 h-4 w-4 text-destructive" />
                   Reject
                 </Button>
+                {!canActOnCurrentItem && (
+                  <p className="text-xs text-muted-foreground">
+                    Claim this item to unlock review decisions.
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>

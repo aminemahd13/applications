@@ -149,6 +149,12 @@ export class ReviewQueueService {
         queue_mode: true,
         assignment_expires_at: true,
         assigned_reviewer_id: true,
+        users_review_queue_items_assigned_reviewer_idTousers: {
+          select: {
+            email: true,
+            applicant_profiles: { select: { full_name: true } },
+          },
+        },
         application_id: true,
         step_id: true,
         submission_version_id: true,
@@ -277,6 +283,12 @@ export class ReviewQueueService {
           stepState.last_activity_at ??
           item.updated_at,
         assignedReviewerId: item.assigned_reviewer_id,
+        assignedReviewerEmail:
+          item.users_review_queue_items_assigned_reviewer_idTousers?.email ??
+          null,
+        assignedReviewerName:
+          item.users_review_queue_items_assigned_reviewer_idTousers
+            ?.applicant_profiles?.full_name ?? null,
         queueMode: item.queue_mode === 'direct' ? 'direct' : 'shared',
         assignmentExpiresAt: item.assignment_expires_at,
         isOverdue:
