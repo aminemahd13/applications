@@ -59,11 +59,23 @@ const PROXY_UPSTREAM_TIMEOUT_MS = Math.max(
   Number(process.env.PROXY_UPSTREAM_TIMEOUT_MS || "30000"),
   250,
 );
+const PROXY_UPSTREAM_EXPORT_TIMEOUT_MS = Math.max(
+  Number(process.env.PROXY_UPSTREAM_EXPORT_TIMEOUT_MS || "180000"),
+  PROXY_UPSTREAM_TIMEOUT_MS,
+);
 const PROXY_UPSTREAM_FAILURE_BACKOFF_MS = Math.max(
   Number(process.env.PROXY_UPSTREAM_FAILURE_BACKOFF_MS || "30000"),
   1_000,
 );
 const upstreamCooldownUntil = new Map<string, number>();
+
+function resolveUpstreamTimeoutMs(path: string[]): number {
+  const normalizedPath = `/${path.join("/")}`;
+  if (normalizedPath.endsWith("/files/export")) {
+    return PROXY_UPSTREAM_EXPORT_TIMEOUT_MS;
+  }
+  return PROXY_UPSTREAM_TIMEOUT_MS;
+}
 
 function buildTargetUrl(baseUrl: string, path: string[], search: string): string {
   const encodedPath = path.map((segment) => encodeURIComponent(segment)).join("/");
@@ -155,6 +167,7 @@ function markUpstreamHealthy(candidate: string) {
 async function proxy(req: NextRequest, context: RouteContext): Promise<Response> {
   const { path = [] } = await context.params;
   const method = req.method.toUpperCase();
+  const timeoutMs = resolveUpstreamTimeoutMs(path);
   const forwardHeaders = buildForwardHeaders(req);
   const body =
     method !== "GET" && method !== "HEAD" ? await req.arrayBuffer() : undefined;
@@ -173,7 +186,7 @@ async function proxy(req: NextRequest, context: RouteContext): Promise<Response>
       const upstream = await fetchWithTimeout(
         targetUrl,
         init,
-        PROXY_UPSTREAM_TIMEOUT_MS,
+        timeoutMs,
       );
       markUpstreamHealthy(baseUrl);
       const responseHeaders = new Headers();

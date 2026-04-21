@@ -58,6 +58,8 @@ interface ExportFieldFilesZipResult {
   buffer: Buffer;
 }
 
+const ZIP_EXPORT_STORAGE_FETCH_CONCURRENCY = 6;
+
 @Injectable()
 export class FilesService {
   constructor(
@@ -638,7 +640,10 @@ export class FilesService {
 
     const fileById = new Map(files.map((file) => [file.id, file]));
 
-    const zip = new JSZip();
+    const zipEntries: Array<{
+      entryName: string;
+      storageKey: string;
+    }> = [];
     const usedEntryNames = new Set<string>();
     for (const applicationEntry of applicationFiles) {
       for (
@@ -653,10 +658,6 @@ export class FilesService {
         }
 
         this.assertCanExportFileBySensitivity(file.sensitivity, permissions);
-
-        const fileBuffer = await this.storageService.getObjectBuffer(
-          file.storage_key,
-        );
         const extension = this.resolveFileExtension(file.original_filename);
         const preferredEntryName = this.buildExportEntryFilename({
           applicantEmail: applicationEntry.applicantEmail,
@@ -670,14 +671,31 @@ export class FilesService {
           preferredEntryName,
           usedEntryNames,
         );
-        zip.file(entryName, fileBuffer);
+        zipEntries.push({
+          entryName,
+          storageKey: file.storage_key,
+        });
       }
+    }
+
+    const fileBuffersByEntryName = await this.fetchZipEntryBuffers(zipEntries);
+
+    const zip = new JSZip();
+    for (const entry of zipEntries) {
+      const fileBuffer = fileBuffersByEntryName.get(entry.entryName);
+      if (!fileBuffer) {
+        throw new NotFoundException(
+          `File content not found for export entry: ${entry.entryName}`,
+        );
+      }
+      zip.file(entry.entryName, fileBuffer);
     }
 
     const zipBuffer = await zip.generateAsync({
       type: 'nodebuffer',
+      streamFiles: true,
       compression: 'DEFLATE',
-      compressionOptions: { level: 6 },
+      compressionOptions: { level: 1 },
     });
     const zipFilename = this.buildEventFieldExportZipFilename({
       eventId,
@@ -1183,6 +1201,38 @@ export class FilesService {
     }
     usedNames.add(nextName);
     return nextName;
+  }
+
+  private async fetchZipEntryBuffers(
+    entries: Array<{ entryName: string; storageKey: string }>,
+  ): Promise<Map<string, Buffer>> {
+    const buffersByEntryName = new Map<string, Buffer>();
+    if (entries.length === 0) {
+      return buffersByEntryName;
+    }
+
+    const workerCount = Math.min(
+      ZIP_EXPORT_STORAGE_FETCH_CONCURRENCY,
+      entries.length,
+    );
+    let nextIndex = 0;
+
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (nextIndex < entries.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        const entry = entries[currentIndex];
+        if (!entry) break;
+
+        const fileBuffer = await this.storageService.getObjectBuffer(
+          entry.storageKey,
+        );
+        buffersByEntryName.set(entry.entryName, fileBuffer);
+      }
+    });
+
+    await Promise.all(workers);
+    return buffersByEntryName;
   }
 
   private assertMatchesFieldConstraints(
