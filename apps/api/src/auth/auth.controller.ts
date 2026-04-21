@@ -341,22 +341,47 @@ export class AuthController {
     };
   }
 
+  @Post('email/verify/request-public')
+  @SkipCsrf()
+  @Throttle({ default: { limit: 10, ttl: 900000 } }) // 10 per 15 min
+  @HttpCode(HttpStatus.OK)
+  async requestEmailVerificationPublic(@Body() body: { email: string }) {
+    if (!body.email) throw new BadRequestException('Email is required');
+
+    await this.emailVerificationService.requestVerificationByEmail(body.email);
+    return {
+      message: 'If the email exists, a verification link has been sent.',
+    };
+  }
+
   @Post('email/verify')
   @SkipCsrf()
   @Throttle({ default: { limit: 5, ttl: 900000 } }) // 5 per 15 min
   @HttpCode(HttpStatus.OK)
-  async verifyEmail(@Body() body: { token: string }) {
+  async verifyEmail(@Body() body: { token: string }, @Session() session: any) {
     if (!body.token) throw new BadRequestException('Token is required');
 
-    await this.emailVerificationService.verifyEmail(body.token);
-    return { message: 'Email verified successfully.' };
+    const result = await this.emailVerificationService.verifyEmail(body.token);
+
+    if (session?.user?.id && session.user.id === result.userId) {
+      session.user.email_verified = true;
+      delete session.authMeCache;
+    }
+
+    return {
+      message:
+        result.status === 'already_verified'
+          ? 'Email was already verified.'
+          : 'Email verified successfully.',
+      status: result.status,
+    };
   }
 
   @Post('verify-email')
   @SkipCsrf()
   @Throttle({ default: { limit: 5, ttl: 900000 } }) // 5 per 15 min
   @HttpCode(HttpStatus.OK)
-  async verifyEmailAlias(@Body() body: { token: string }) {
-    return this.verifyEmail(body);
+  async verifyEmailAlias(@Body() body: { token: string }, @Session() session: any) {
+    return this.verifyEmail(body, session);
   }
 }

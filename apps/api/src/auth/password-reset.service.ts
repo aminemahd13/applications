@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   UnauthorizedException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RateLimiterService } from '../common/services/rate-limiter.service';
@@ -13,6 +14,16 @@ const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 const STAFF_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const HEX_TOKEN_RE = /^[a-f0-9]{64}$/i;
+
+type EmailVerificationOutcome =
+  | {
+      status: 'verified';
+      userId: string;
+    }
+  | {
+      status: 'already_verified';
+      userId: string;
+    };
 
 @Injectable()
 export class PasswordResetService {
@@ -195,6 +206,74 @@ export class EmailVerificationService {
     private readonly emailService: EmailService,
   ) {}
 
+  private buildVerificationError(
+    message: string,
+    code:
+      | 'EMAIL_VERIFICATION_INVALID'
+      | 'EMAIL_VERIFICATION_EXPIRED'
+      | 'EMAIL_VERIFICATION_NO_LONGER_VALID',
+  ): BadRequestException {
+    return new BadRequestException({
+      message,
+      code,
+    });
+  }
+
+  private async issueVerificationToken(
+    user: { id: string; email: string; email_verified_at?: Date | null },
+    options?: {
+      suppressRateLimitError?: boolean;
+      suppressDeliveryError?: boolean;
+    },
+  ): Promise<{ success: boolean; token?: string }> {
+    if (user.email_verified_at) {
+      return { success: true };
+    }
+
+    const allowed = await this.rateLimiter.checkEmailVerificationLimit(
+      user.email,
+    );
+    if (!allowed) {
+      if (options?.suppressRateLimitError) {
+        return { success: true };
+      }
+      throw new BadRequestException(
+        'Too many verification requests. Please wait before trying again.',
+      );
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(rawToken)
+      .digest('hex');
+
+    await this.prisma.email_verification_tokens.create({
+      data: {
+        id: crypto.randomUUID(),
+        user_id: user.id,
+        token_hash: tokenHash,
+        expires_at: new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS),
+      },
+    });
+
+    try {
+      await this.emailService.sendEmailVerification(user.email, rawToken);
+    } catch (err) {
+      console.error('Failed to send verification email:', err);
+      if (!options?.suppressDeliveryError) {
+        throw new ServiceUnavailableException(
+          'Unable to send verification email right now. Please try again.',
+        );
+      }
+    }
+
+    return {
+      success: true,
+      token: process.env.NODE_ENV !== 'production' ? rawToken : undefined,
+    };
+  }
+
   /**
    * Request email verification - generates token for the current user.
    */
@@ -209,95 +288,121 @@ export class EmailVerificationService {
       throw new UnauthorizedException('User not found');
     }
 
-    if (user.email_verified_at) {
-      return { success: true }; // Already verified
+    return this.issueVerificationToken(user);
+  }
+
+  /**
+   * Public resend flow used from verification recovery screens.
+   * Always returns success to avoid revealing whether an email exists.
+   */
+  async requestVerificationByEmail(
+    email: string,
+  ): Promise<{ success: boolean; token?: string }> {
+    const normalizedEmail =
+      typeof email === 'string' ? email.toLowerCase().trim() : '';
+
+    if (!normalizedEmail) {
+      return { success: true };
     }
 
-    // Check per-email rate limit
-    const allowed = await this.rateLimiter.checkEmailVerificationLimit(
-      user.email,
-    );
-    if (!allowed) {
-      throw new BadRequestException(
-        'Too many verification requests. Please wait before trying again.',
-      );
+    const user = await this.prisma.users.findUnique({
+      where: { email: normalizedEmail },
+    });
+
+    if (!user) {
+      return { success: true };
     }
 
-    // Invalidate previous unused tokens
-    await this.prisma.email_verification_tokens.updateMany({
-      where: {
-        user_id: userId,
-        used_at: null,
-      },
-      data: {
-        used_at: new Date(),
-      },
+    return this.issueVerificationToken(user, {
+      suppressRateLimitError: true,
+      suppressDeliveryError: true,
     });
-
-    // Generate secure token
-    const rawToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = crypto
-      .createHash('sha256')
-      .update(rawToken)
-      .digest('hex');
-
-    // Store hashed token
-    await this.prisma.email_verification_tokens.create({
-      data: {
-        id: crypto.randomUUID(),
-        user_id: userId,
-        token_hash: tokenHash,
-        expires_at: new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS),
-      },
-    });
-
-    // Send email verification
-    await this.emailService
-      .sendEmailVerification(user.email, rawToken)
-      .catch((err) => {
-        console.error('Failed to send verification email:', err);
-      });
-
-    return {
-      success: true,
-      token: process.env.NODE_ENV !== 'production' ? rawToken : undefined,
-    };
   }
 
   /**
    * Verify email using token.
    */
-  async verifyEmail(token: string): Promise<void> {
-    if (!token || token.length !== 64) {
-      throw new BadRequestException('Invalid token format');
+  async verifyEmail(token: string): Promise<EmailVerificationOutcome> {
+    const normalizedToken = typeof token === 'string' ? token.trim() : '';
+    if (!HEX_TOKEN_RE.test(normalizedToken)) {
+      throw this.buildVerificationError(
+        'This verification link is invalid.',
+        'EMAIL_VERIFICATION_INVALID',
+      );
     }
 
-    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(normalizedToken)
+      .digest('hex');
 
-    await this.prisma.$transaction(async (tx) => {
-      const tokenRow = await tx.email_verification_tokens.findFirst({
-        where: {
-          token_hash: tokenHash,
-          used_at: null,
-          expires_at: { gt: new Date() },
+    return this.prisma.$transaction(async (tx) => {
+      const tokenRow = await tx.email_verification_tokens.findUnique({
+        where: { token_hash: tokenHash },
+        select: {
+          id: true,
+          user_id: true,
+          used_at: true,
+          expires_at: true,
+          users: {
+            select: {
+              email_verified_at: true,
+            },
+          },
         },
       });
 
       if (!tokenRow) {
-        throw new BadRequestException('Invalid or expired token');
+        throw this.buildVerificationError(
+          'This verification link is invalid.',
+          'EMAIL_VERIFICATION_INVALID',
+        );
       }
 
-      // Mark token as used
-      await tx.email_verification_tokens.update({
-        where: { id: tokenRow.id },
+      if (tokenRow.users.email_verified_at) {
+        return {
+          status: 'already_verified',
+          userId: tokenRow.user_id,
+        } satisfies EmailVerificationOutcome;
+      }
+
+      if (tokenRow.used_at) {
+        throw this.buildVerificationError(
+          'This verification link is no longer valid. Request a new verification email.',
+          'EMAIL_VERIFICATION_NO_LONGER_VALID',
+        );
+      }
+
+      if (tokenRow.expires_at.getTime() <= Date.now()) {
+        throw this.buildVerificationError(
+          'This verification link has expired. Request a new verification email.',
+          'EMAIL_VERIFICATION_EXPIRED',
+        );
+      }
+
+      const consumeResult = await tx.email_verification_tokens.updateMany({
+        where: {
+          id: tokenRow.id,
+          used_at: null,
+        },
         data: { used_at: new Date() },
       });
+      if (consumeResult.count !== 1) {
+        throw this.buildVerificationError(
+          'This verification link is no longer valid. Request a new verification email.',
+          'EMAIL_VERIFICATION_NO_LONGER_VALID',
+        );
+      }
 
-      // Update user's email_verified_at
       await tx.users.update({
         where: { id: tokenRow.user_id },
         data: { email_verified_at: new Date() },
       });
+
+      return {
+        status: 'verified',
+        userId: tokenRow.user_id,
+      } satisfies EmailVerificationOutcome;
     });
   }
 }

@@ -70,6 +70,9 @@ describe('AuthService', () => {
         mockRateLimiter = {
             isAllowed: jest.fn().mockResolvedValue(true),
             recordAttempt: jest.fn(),
+            checkLoginLimit: jest.fn().mockResolvedValue(true),
+            checkSignupEmailLimit: jest.fn().mockResolvedValue(true),
+            checkSignupIpLimit: jest.fn().mockResolvedValue(true),
             trackSession: jest.fn(),
             trackUserSession: jest.fn(),
             revokeUserSessions: jest.fn().mockResolvedValue(0),
