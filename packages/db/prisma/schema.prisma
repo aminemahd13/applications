@@ -104,6 +104,7 @@ model applications {
   events                                         events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   attendance_records                             attendance_records?
   completion_credentials                         completion_credentials?
+  issued_certificates                           issued_certificates[]
   checkin_records                                checkin_records[]
   needs_info_requests                            needs_info_requests[]
   step_drafts                                    step_drafts[]
@@ -235,6 +236,9 @@ model events {
   applications           applications[]
   audit_logs             audit_logs[]
   checkin_records        checkin_records[]
+  certificate_templates  certificate_templates[]
+  certificate_render_jobs certificate_render_jobs[]
+  issued_certificates    issued_certificates[]
   completion_credentials completion_credentials[]
   decision_templates     decision_templates[]
   event_role_assignments event_role_assignments[]
@@ -474,6 +478,9 @@ model users {
   checkin_records                                       checkin_records[]
   decision_templates_decision_templates_created_byTousers decision_templates[]      @relation("decision_templates_created_byTousers")
   decision_templates_decision_templates_updated_byTousers decision_templates[]      @relation("decision_templates_updated_byTousers")
+  certificate_templates_certificate_templates_created_byTousers certificate_templates[] @relation("certificate_templates_created_byTousers")
+  certificate_templates_certificate_templates_updated_byTousers certificate_templates[] @relation("certificate_templates_updated_byTousers")
+  certificate_template_versions_certificate_template_versions_created_byTousers certificate_template_versions[] @relation("certificate_template_versions_created_byTousers")
   email_verification_tokens                             email_verification_tokens[]
   event_role_assignments                                event_role_assignments[]
   field_verifications                                   field_verifications[]
@@ -492,6 +499,111 @@ model users {
   review_queue_items_review_queue_items_completed_byTousers         review_queue_items[] @relation("review_queue_items_completed_byTousers")
   review_records                                        review_records[]
   step_submission_versions                              step_submission_versions[]
+}
+
+model certificate_templates {
+  id                           String                          @id @db.Uuid
+  event_id                     String                          @db.Uuid
+  name                         String
+  type_key                     String
+  type_label                   String
+  description                  String?
+  is_active                    Boolean                         @default(true)
+  is_default                   Boolean                         @default(false)
+  archived_at                  DateTime?                       @db.Timestamptz(6)
+  active_version_id            String?                         @db.Uuid
+  metadata                     Json                            @default("{}")
+  created_by                   String                          @db.Uuid
+  updated_by                   String?                         @db.Uuid
+  created_at                   DateTime                        @default(now()) @db.Timestamptz(6)
+  updated_at                   DateTime                        @default(now()) @db.Timestamptz(6)
+  certificate_template_versions certificate_template_versions[]
+  certificate_template_versions_active certificate_template_versions? @relation("certificate_templates_active_version", fields: [active_version_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  issued_certificates          issued_certificates[]
+  events                       events                          @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_certificate_templates_created_byTousers users         @relation("certificate_templates_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_certificate_templates_updated_byTousers users?        @relation("certificate_templates_updated_byTousers", fields: [updated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([event_id, name], map: "cert_tpl_event_name_uq")
+  @@index([event_id, type_key, is_active], map: "cert_tpl_event_type_active_idx")
+  @@index([event_id, is_default], map: "cert_tpl_event_default_idx")
+  @@index([event_id, archived_at], map: "cert_tpl_event_archived_idx")
+  @@index([active_version_id], map: "cert_tpl_active_version_idx")
+}
+
+model certificate_template_versions {
+  id                           String                @id @db.Uuid
+  template_id                  String                @db.Uuid
+  version_number               Int
+  layout_json                  Json
+  created_by                   String                @db.Uuid
+  created_at                   DateTime              @default(now()) @db.Timestamptz(6)
+  certificate_templates        certificate_templates @relation(fields: [template_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  certificate_templates_active certificate_templates[] @relation("certificate_templates_active_version")
+  users_certificate_template_versions_created_byTousers users @relation("certificate_template_versions_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  issued_certificates          issued_certificates[]
+
+  @@unique([template_id, version_number], map: "cert_tpl_ver_template_version_uq")
+  @@index([template_id, created_at(sort: Desc)], map: "cert_tpl_ver_template_created_idx")
+}
+
+model issued_certificates {
+  id                           String                        @id @db.Uuid
+  event_id                     String                        @db.Uuid
+  application_id               String                        @db.Uuid
+  template_id                  String?                       @db.Uuid
+  template_version_id          String?                       @db.Uuid
+  certificate_type_key         String
+  certificate_type_label       String
+  certificate_id               String                        @unique @db.Uuid
+  credential_id                String                        @unique @db.Uuid
+  credential_signature         String
+  qr_token                     String
+  qr_key_id                    String
+  issuer_name                  String
+  status                       String                        @default("ISSUED")
+  issued_at                    DateTime                      @db.Timestamptz(6)
+  revoked_at                   DateTime?                     @db.Timestamptz(6)
+  template_snapshot            Json                          @default("{}")
+  payload_snapshot             Json                          @default("{}")
+  pdf_storage_key              String?
+  pdf_generated_at             DateTime?                     @db.Timestamptz(6)
+  render_status                String                        @default("PENDING")
+  render_error                 String?
+  created_at                   DateTime                      @default(now()) @db.Timestamptz(6)
+  updated_at                   DateTime                      @default(now()) @db.Timestamptz(6)
+  applications                 applications                  @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  events                       events                        @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  certificate_templates        certificate_templates?        @relation(fields: [template_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  certificate_template_versions certificate_template_versions? @relation(fields: [template_version_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  certificate_render_jobs      certificate_render_jobs[]
+
+  @@index([event_id, issued_at(sort: Desc)], map: "issued_cert_event_issued_idx")
+  @@index([application_id, certificate_type_key], map: "issued_cert_app_type_idx")
+  @@index([event_id, render_status], map: "issued_cert_event_render_idx")
+  @@index([event_id, status], map: "issued_cert_event_status_idx")
+}
+
+model certificate_render_jobs {
+  id                           String             @id @db.Uuid
+  event_id                     String             @db.Uuid
+  issued_certificate_id        String             @db.Uuid
+  status                       String             @default("PENDING")
+  attempts                     Int                @default(0)
+  max_attempts                 Int                @default(5)
+  next_retry_at                DateTime           @default(now()) @db.Timestamptz(6)
+  locked_at                    DateTime?          @db.Timestamptz(6)
+  locked_by                    String?
+  error_message                String?
+  completed_at                 DateTime?          @db.Timestamptz(6)
+  created_at                   DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at                   DateTime           @default(now()) @db.Timestamptz(6)
+  events                       events             @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  issued_certificates          issued_certificates @relation(fields: [issued_certificate_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([status, next_retry_at], map: "cert_render_jobs_status_retry_idx")
+  @@index([event_id, created_at(sort: Desc)], map: "cert_render_jobs_event_created_idx")
+  @@index([issued_certificate_id], map: "cert_render_jobs_issued_idx")
 }
 
 model review_queue_saved_views {

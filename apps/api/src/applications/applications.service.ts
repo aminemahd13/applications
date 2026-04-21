@@ -29,6 +29,7 @@ import {
   UpdateApplicationSavedViewDto,
   ApplicationSummary,
   ApplicationDetail,
+  ApplicationIssuedCertificate,
   ApplicantProfile,
   CompletionCredential,
   BulkApplicationTagsDto,
@@ -1074,6 +1075,30 @@ export class ApplicationsService {
         attendance_records: {
           select: { status: true },
         },
+        completion_credentials: {
+          select: {
+            certificate_id: true,
+            credential_id: true,
+            issued_at: true,
+            revoked_at: true,
+          },
+        },
+        issued_certificates: {
+          select: {
+            id: true,
+            certificate_id: true,
+            credential_id: true,
+            certificate_type_key: true,
+            certificate_type_label: true,
+            qr_token: true,
+            issued_at: true,
+            revoked_at: true,
+            status: true,
+            render_status: true,
+            pdf_storage_key: true,
+          },
+          orderBy: [{ issued_at: 'desc' }, { id: 'desc' }],
+        },
       },
     });
 
@@ -1454,6 +1479,22 @@ export class ApplicationsService {
               revoked_at: true,
             },
           },
+          issued_certificates: {
+            select: {
+              id: true,
+              certificate_id: true,
+              credential_id: true,
+              certificate_type_key: true,
+              certificate_type_label: true,
+              qr_token: true,
+              issued_at: true,
+              revoked_at: true,
+              status: true,
+              render_status: true,
+              pdf_storage_key: true,
+            },
+            orderBy: [{ issued_at: 'desc' }, { id: 'desc' }],
+          },
         },
       });
       if (!app) throw new NotFoundException('Application not found');
@@ -1699,6 +1740,22 @@ export class ApplicationsService {
             revoked_at: true,
           },
         },
+        issued_certificates: {
+          select: {
+            id: true,
+            certificate_id: true,
+            credential_id: true,
+            certificate_type_key: true,
+            certificate_type_label: true,
+            qr_token: true,
+            issued_at: true,
+            revoked_at: true,
+            status: true,
+            render_status: true,
+            pdf_storage_key: true,
+          },
+          orderBy: [{ issued_at: 'desc' }, { id: 'desc' }],
+        },
       },
     });
 
@@ -1763,6 +1820,22 @@ export class ApplicationsService {
               issued_at: true,
               revoked_at: true,
             },
+          },
+          issued_certificates: {
+            select: {
+              id: true,
+              certificate_id: true,
+              credential_id: true,
+              certificate_type_key: true,
+              certificate_type_label: true,
+              qr_token: true,
+              issued_at: true,
+              revoked_at: true,
+              status: true,
+              render_status: true,
+              pdf_storage_key: true,
+            },
+            orderBy: [{ issued_at: 'desc' }, { id: 'desc' }],
           },
         },
       });
@@ -3264,6 +3337,9 @@ export class ApplicationsService {
       completionCredential: this.toCompletionCredential(
         app.completion_credentials ?? null,
       ),
+      certificates: this.toApplicationIssuedCertificates(
+        app.issued_certificates ?? [],
+      ),
       stepStates: stepStates.map((ss: any) => {
         const revisionDeadlineAt =
           ss.revision_deadline_at ?? ss.workflow_steps?.revision_deadline_at;
@@ -3690,6 +3766,63 @@ export class ApplicationsService {
       revokedAt: record.revoked_at ?? null,
       status: record.revoked_at ? 'REVOKED' : 'ISSUED',
     };
+  }
+
+  private toApplicationIssuedCertificates(
+    rows: Array<{
+      id: string;
+      certificate_id: string;
+      credential_id: string;
+      certificate_type_key: string;
+      certificate_type_label: string;
+      qr_token: string;
+      issued_at: Date;
+      revoked_at: Date | null;
+      status?: string | null;
+      render_status?: string | null;
+      pdf_storage_key?: string | null;
+    }>,
+  ): ApplicationIssuedCertificate[] {
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+
+    const appBaseUrl = this.getAppBaseUrl();
+    return rows.map((row) => {
+      const links = this.getCompletionCredentialLinks(
+        row.certificate_id,
+        row.credential_id,
+      );
+      const qrVerificationUrl = joinAppUrl(
+        appBaseUrl,
+        `/credentials/qr/${encodeURIComponent(row.qr_token)}`,
+      );
+      const pdfUrl = row.pdf_storage_key
+        ? joinAppUrl(appBaseUrl, `/uploads/${encodeURIComponent(row.pdf_storage_key)}`)
+        : null;
+      const revoked =
+        Boolean(row.revoked_at) || String(row.status ?? '').toUpperCase() === 'REVOKED';
+      const renderStatus = String(row.render_status ?? 'PENDING').toUpperCase();
+
+      return {
+        id: row.id,
+        certificateId: row.certificate_id,
+        credentialId: row.credential_id,
+        certificateTypeKey: row.certificate_type_key,
+        certificateTypeLabel: row.certificate_type_label,
+        certificateUrl: links.certificateUrl,
+        verifiableCredentialUrl: links.verifiableCredentialUrl,
+        qrVerificationUrl,
+        pdfUrl,
+        issuedAt: row.issued_at,
+        revokedAt: row.revoked_at ?? null,
+        status: revoked ? 'REVOKED' : 'ISSUED',
+        renderStatus:
+          renderStatus === 'DONE' ||
+          renderStatus === 'FAILED' ||
+          renderStatus === 'PROCESSING'
+            ? renderStatus
+            : 'PENDING',
+      };
+    });
   }
 
   private toFilenameSafePart(value: string): string {

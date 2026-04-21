@@ -585,11 +585,28 @@ export interface CompletionCredential {
     status: "ISSUED" | "REVOKED";
 }
 
+export interface ApplicationIssuedCertificate {
+    id: string;
+    certificateId: string;
+    credentialId: string;
+    certificateTypeKey: string;
+    certificateTypeLabel: string;
+    certificateUrl: string;
+    verifiableCredentialUrl: string;
+    qrVerificationUrl: string;
+    pdfUrl: string | null;
+    issuedAt: Date;
+    revokedAt: Date | null;
+    status: "ISSUED" | "REVOKED";
+    renderStatus: "PENDING" | "PROCESSING" | "DONE" | "FAILED";
+}
+
 export interface ApplicationDetail extends ApplicationSummary {
     internalNotes: string | null;
     assignedReviewerId: string | null;
     applicantProfile?: ApplicantProfile;
     completionCredential?: CompletionCredential;
+    certificates?: ApplicationIssuedCertificate[];
     stepStates: StepStateResponse[];
 }
 

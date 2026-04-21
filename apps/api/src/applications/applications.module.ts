@@ -8,9 +8,10 @@ import { DecisionTemplatesController } from './decision-templates.controller';
 import { CompletionCredentialsController } from './completion-credentials.controller';
 import { WorkflowModule } from '../workflow/workflow.module';
 import { FilesModule } from '../reviews/files.module';
+import { CertificatesModule } from '../certificates/certificates.module';
 
 @Module({
-  imports: [WorkflowModule, FilesModule],
+  imports: [WorkflowModule, FilesModule, CertificatesModule],
   controllers: [
     ApplicationsController,
     SelfApplicationsController,

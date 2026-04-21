@@ -20,6 +20,7 @@ import { MicrositesModule } from './microsites/microsites.module';
 import { AdminModule } from './admin/admin.module';
 import { OrgSettingsModule } from './admin/org-settings.module';
 import { EmailModule } from './common/email/email.module';
+import { CertificatesModule } from './certificates/certificates.module';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { CsrfGuard } from './common/guards/csrf.guard';
 import { EventScopeInterceptor } from './common/interceptors/event-scope.interceptor';
@@ -62,6 +63,7 @@ const THROTTLE_LIMIT = Math.max(Number(process.env.THROTTLE_LIMIT ?? 1000), 60);
     FilesModule,
     CheckinModule,
     MessagesModule,
+    CertificatesModule,
     MicrositesModule,
     AdminModule,
     OrgSettingsModule,

@@ -52,12 +52,9 @@ export class CheckinService {
   private shouldAutoIssueCompletionCredential(
     checkinConfig: Record<string, unknown>,
   ): boolean {
-    const certificate = this.toRecord(checkinConfig.certificate);
-    const publishMode =
-      typeof certificate.publishMode === 'string'
-        ? certificate.publishMode.trim().toLowerCase()
-        : '';
-    return publishMode !== 'manual';
+    // Certificate issuance is now fully manual from the dedicated
+    // certificate management flow.
+    return false;
   }
 
   private async getCheckinConfig(

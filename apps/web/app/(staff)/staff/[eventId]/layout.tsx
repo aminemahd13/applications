@@ -16,6 +16,7 @@ import {
   Globe,
   Settings,
   Shuffle,
+  Award,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
@@ -148,6 +149,12 @@ export default function StaffLayout({
           href: `${base}/microsite`,
           icon: Globe,
           visible: canManageMicrosite,
+        },
+        {
+          label: "Certificates",
+          href: `${base}/certificates`,
+          icon: Award,
+          visible: hasPermission("event.update"),
         },
         {
           label: "Settings",

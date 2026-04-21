@@ -15,6 +15,7 @@ import {
   Settings,
   ArrowLeft,
   Shuffle,
+  Award,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { useRequireAdmin } from "@/lib/auth-context";
@@ -80,6 +81,7 @@ export default function AdminEventLayout({ children }: { children: React.ReactNo
         { label: "Workflow", href: `${base}/workflow`, icon: Workflow },
         { label: "Forms", href: `${base}/forms`, icon: FileEdit },
         { label: "Microsite", href: `${base}/microsite`, icon: Globe },
+        { label: "Certificates", href: `${base}/certificates`, icon: Award },
         { label: "Settings", href: `${base}/settings`, icon: Settings },
       ],
     },

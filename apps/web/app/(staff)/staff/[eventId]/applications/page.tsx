@@ -120,6 +120,11 @@ import {
   MAX_PASTED_EMAILS,
   parsePastedEmails,
 } from "@/lib/pasted-emails";
+import {
+  issueCertificatesBulk,
+  listCertificateTemplates,
+  type CertificateTemplateSummary,
+} from "@/lib/certificates";
 
 const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 const APPLICATIONS_PAGE_SIZE = 100;
@@ -150,6 +155,16 @@ interface DecisionTemplate {
   subjectTemplate: string;
   bodyTemplate: string;
   isActive: boolean;
+}
+
+interface CertificateTemplateOption {
+  id: string;
+  name: string;
+  typeKey: string;
+  typeLabel: string;
+  isActive: boolean;
+  isDefault: boolean;
+  activeVersionId: string | null;
 }
 
 interface ExportableFileFieldOption {
@@ -408,6 +423,10 @@ export default function ApplicationsListPage() {
   const [includeResponseColumnsInExport, setIncludeResponseColumnsInExport] =
     useState(true);
   const [isIssuingCredentials, setIsIssuingCredentials] = useState(false);
+  const [showIssueCertificatesDialog, setShowIssueCertificatesDialog] = useState(false);
+  const [certificateTemplates, setCertificateTemplates] = useState<CertificateTemplateOption[]>([]);
+  const [isLoadingCertificateTemplates, setIsLoadingCertificateTemplates] = useState(false);
+  const [selectedCertificateTemplateId, setSelectedCertificateTemplateId] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
   const [isApplyingBulk, setIsApplyingBulk] = useState(false);
   const [isSelectingAllMatching, setIsSelectingAllMatching] = useState(false);
@@ -744,6 +763,38 @@ export default function ApplicationsListPage() {
     setDecisionTemplates(Array.isArray(templateRes.data) ? templateRes.data : []);
   }, [canDraftDecisions, eventId]);
 
+  const refreshCertificateTemplates = useCallback(async () => {
+    if (!canIssueCredentials) return;
+    setIsLoadingCertificateTemplates(true);
+    try {
+      const rows = await listCertificateTemplates(eventId);
+      const mapped = rows.map((template: CertificateTemplateSummary) => ({
+        id: template.id,
+        name: template.name,
+        typeKey: template.typeKey,
+        typeLabel: template.typeLabel,
+        isActive: template.isActive,
+        isDefault: template.isDefault,
+        activeVersionId: template.activeVersionId ?? null,
+      }));
+      setCertificateTemplates(mapped);
+      setSelectedCertificateTemplateId((previous) => {
+        if (previous && mapped.some((template) => template.id === previous)) {
+          return previous;
+        }
+        const fallback =
+          mapped.find((template) => template.isActive && template.isDefault) ??
+          mapped.find((template) => template.isActive) ??
+          null;
+        return fallback?.id ?? "";
+      });
+    } catch {
+      setCertificateTemplates([]);
+    } finally {
+      setIsLoadingCertificateTemplates(false);
+    }
+  }, [canIssueCredentials, eventId]);
+
   const loadSavedViews = useCallback(async () => {
     const res = await apiClient<{ data?: ApplicationSavedView[] }>(
       `/events/${eventId}/applications/views`
@@ -799,6 +850,9 @@ export default function ApplicationsListPage() {
         if (canDraftDecisions) {
           await refreshDecisionTemplates();
         }
+        if (canIssueCredentials) {
+          await refreshCertificateTemplates();
+        }
         // Fetch workflow steps for bulk step action
         const stepsRes = await apiClient<{ data?: Array<any> }>(
           `/events/${eventId}/workflow/steps`,
@@ -817,8 +871,10 @@ export default function ApplicationsListPage() {
   }, [
     canAssignReviewers,
     canDraftDecisions,
+    canIssueCredentials,
     eventId,
     loadSavedViews,
+    refreshCertificateTemplates,
     refreshDecisionTemplates,
   ]);
 
@@ -948,6 +1004,17 @@ export default function ApplicationsListPage() {
   const sortedWorkflowSteps = useMemo(
     () => [...workflowSteps].sort((a, b) => a.stepIndex - b.stepIndex),
     [workflowSteps],
+  );
+  const activeCertificateTemplates = useMemo(
+    () => certificateTemplates.filter((template) => template.isActive),
+    [certificateTemplates],
+  );
+  const selectedCertificateTemplate = useMemo(
+    () =>
+      activeCertificateTemplates.find(
+        (template) => template.id === selectedCertificateTemplateId,
+      ) ?? null,
+    [activeCertificateTemplates, selectedCertificateTemplateId],
   );
   const parsedTagFilters = useMemo(
     () => parseTagFilterInput(tagsFilterInput),
@@ -2234,59 +2301,61 @@ export default function ApplicationsListPage() {
     }
   }
 
+  async function openIssueCertificatesDialog() {
+    if (!canIssueCredentials || selectedApplicationIds.length === 0) return;
+    await refreshCertificateTemplates();
+    setShowIssueCertificatesDialog(true);
+  }
+
   async function issueSelectedCredentials() {
-    if (!canIssueCredentials || selectedApplicationIds.length === 0 || isIssuingCredentials) {
+    if (
+      !canIssueCredentials ||
+      selectedApplicationIds.length === 0 ||
+      isIssuingCredentials
+    ) {
+      return;
+    }
+    if (!selectedCertificateTemplateId) {
+      toast.error("Select a certificate template.");
       return;
     }
     setIsIssuingCredentials(true);
     try {
       const summary = await runBulkActionInChunks<
         {
-          data?: {
-            requested?: number;
-            issued?: number;
-            alreadyIssued?: number;
-            skippedNotCheckedIn?: number;
-            notFound?: string[];
-            failed?: Array<{ applicationId: string; reason: string }>;
-          };
+          requested?: number;
+          issued?: number;
+          alreadyIssued?: number;
+          notFound?: string[];
+          failed?: Array<{ applicationId: string; reason: string }>;
         },
         {
           issued: number;
           alreadyIssued: number;
-          skippedNotCheckedIn: number;
           notFound: string[];
           failed: Array<{ applicationId: string; reason: string }>;
         }
       >({
         applicationIds: selectedApplicationIds,
         executeChunk: (chunkApplicationIds) =>
-          apiClient<{
-            data?: {
-              requested?: number;
-              issued?: number;
-              alreadyIssued?: number;
-              skippedNotCheckedIn?: number;
-              notFound?: string[];
-              failed?: Array<{ applicationId: string; reason: string }>;
-            };
-          }>(`/events/${eventId}/applications/completion-credentials/issue`, {
-            method: "POST",
-            body: { applicationIds: chunkApplicationIds },
-            csrfToken: csrfToken ?? undefined,
-          }),
+          issueCertificatesBulk(
+            eventId,
+            {
+              templateId: selectedCertificateTemplateId,
+              applicationIds: chunkApplicationIds,
+            },
+            csrfToken ?? undefined,
+          ),
         createAggregate: () => ({
           issued: 0,
           alreadyIssued: 0,
-          skippedNotCheckedIn: 0,
           notFound: [],
           failed: [],
         }),
         aggregateChunkResult: (aggregate, chunkResult) => {
-          const chunkSummary = chunkResult?.data ?? {};
+          const chunkSummary = chunkResult ?? {};
           aggregate.issued += Number(chunkSummary.issued ?? 0);
           aggregate.alreadyIssued += Number(chunkSummary.alreadyIssued ?? 0);
-          aggregate.skippedNotCheckedIn += Number(chunkSummary.skippedNotCheckedIn ?? 0);
           if (Array.isArray(chunkSummary.notFound)) {
             aggregate.notFound.push(...chunkSummary.notFound);
           }
@@ -2298,7 +2367,6 @@ export default function ApplicationsListPage() {
 
       const issued = summary.aggregate.issued;
       const alreadyIssued = summary.aggregate.alreadyIssued;
-      const skippedNotCheckedIn = summary.aggregate.skippedNotCheckedIn;
       const retryableFailedFromApi = Array.from(
         new Set(
           summary.aggregate.failed
@@ -2318,11 +2386,11 @@ export default function ApplicationsListPage() {
       if (summary.totalSucceeded > 0) {
         if (issued > 0) {
           toast.success(
-            `Issued ${issued} credential${issued === 1 ? "" : "s"}. Already issued: ${alreadyIssued}. Skipped (not checked-in): ${skippedNotCheckedIn}.`
+            `Issued ${issued} certificate${issued === 1 ? "" : "s"}. Already issued: ${alreadyIssued}.`
           );
         } else {
           toast.info(
-            `No new credentials issued. Already issued: ${alreadyIssued}. Skipped (not checked-in): ${skippedNotCheckedIn}.`
+            `No new certificates issued. Already issued: ${alreadyIssued}.`
           );
         }
       }
@@ -2335,9 +2403,10 @@ export default function ApplicationsListPage() {
       if (failedCount > 0) {
         toast.info(`${failedCount} application(s) remain selected for retry.`);
       }
-      toastBulkChunkErrors("Credential issuance", summary.errorMessages);
+      toastBulkChunkErrors("Certificate issuance", summary.errorMessages);
+      setShowIssueCertificatesDialog(false);
     } catch {
-      toast.error("Could not issue completion credentials.");
+      toast.error("Could not issue certificates.");
     } finally {
       setIsIssuingCredentials(false);
     }
@@ -3643,11 +3712,13 @@ export default function ApplicationsListPage() {
             <Button
               size="sm"
               variant="outline"
-              onClick={issueSelectedCredentials}
+              onClick={() => {
+                void openIssueCertificatesDialog();
+              }}
               disabled={!canIssueCredentials || isIssuingCredentials}
             >
               <Award className="mr-1.5 h-3.5 w-3.5" />
-              {isIssuingCredentials ? "Issuing..." : "Issue credentials"}
+              {isIssuingCredentials ? "Issuing..." : "Issue certificates"}
             </Button>
             {canPublishDecisions && (
               <Button
@@ -3934,6 +4005,77 @@ export default function ApplicationsListPage() {
             </Button>
             <Button onClick={applyBulkDecisionDraft} disabled={isApplyingBulk}>
               {isApplyingBulk ? "Applying..." : "Apply draft"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showIssueCertificatesDialog}
+        onOpenChange={setShowIssueCertificatesDialog}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Issue certificates</DialogTitle>
+            <DialogDescription>
+              Choose the certificate template for {selectedCount} selected application(s).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Template</Label>
+              <Select
+                value={selectedCertificateTemplateId}
+                onValueChange={setSelectedCertificateTemplateId}
+                disabled={isLoadingCertificateTemplates}
+              >
+                <SelectTrigger>
+                  <SelectValue
+                    placeholder={
+                      isLoadingCertificateTemplates
+                        ? "Loading templates..."
+                        : "Select certificate template"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {activeCertificateTemplates.map((template) => (
+                    <SelectItem key={template.id} value={template.id}>
+                      {template.name} • {template.typeLabel}
+                      {template.isDefault ? " (Default)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {activeCertificateTemplates.length === 0 && !isLoadingCertificateTemplates && (
+                <p className="text-xs text-muted-foreground">
+                  No active templates found. Configure templates in the Certificates page.
+                </p>
+              )}
+              {selectedCertificateTemplate && (
+                <p className="text-xs text-muted-foreground">
+                  Type: {selectedCertificateTemplate.typeLabel} (
+                  {selectedCertificateTemplate.typeKey})
+                </p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowIssueCertificatesDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={issueSelectedCredentials}
+              disabled={
+                isIssuingCredentials ||
+                isLoadingCertificateTemplates ||
+                !selectedCertificateTemplateId
+              }
+            >
+              {isIssuingCredentials ? "Issuing..." : "Issue now"}
             </Button>
           </DialogFooter>
         </DialogContent>
