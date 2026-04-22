@@ -17,12 +17,22 @@ import { PageHeader } from "@/components/shared";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import {
   DEFAULT_CERTIFICATE_LAYOUT,
   CERTIFICATE_DYNAMIC_TOKENS,
   activateCertificateTemplateVersion,
   createCertificateTemplate,
   deleteCertificateAsset,
   deleteCertificateTemplate,
+  deleteCertificateTemplateVersion,
   duplicateCertificateTemplate,
   getCertificateTemplateDraft,
   issueCertificatesBulk,
@@ -33,6 +43,7 @@ import {
   listCertificateTemplates,
   listIssuedCertificates,
   publishCertificateTemplate,
+  revokeIssuedCertificate,
   retryCertificateRenderJob,
   updateCertificateTemplate,
   updateCertificateTemplateDraft,
@@ -131,9 +142,14 @@ export function CertificateStudioWorkspace() {
   const [isSearchingIssuanceCandidates, setIsSearchingIssuanceCandidates] = useState(false);
   const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
   const [isBusyTemplateAction, setIsBusyTemplateAction] = useState(false);
+  const [isBusyVersionAction, setIsBusyVersionAction] = useState(false);
   const [isUploadingAsset, setIsUploadingAsset] = useState(false);
   const [isIssuing, setIsIssuing] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isRevokingIssuedCertificate, setIsRevokingIssuedCertificate] = useState(false);
+  const [revokeDialogOpen, setRevokeDialogOpen] = useState(false);
+  const [revokeReasonDraft, setRevokeReasonDraft] = useState("");
+  const [revokeTargetCertificate, setRevokeTargetCertificate] = useState<IssuedCertificateSummary | null>(null);
 
   const [isDraftReady, setIsDraftReady] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
@@ -852,6 +868,7 @@ export function CertificateStudioWorkspace() {
       return;
     }
 
+    setIsBusyVersionAction(true);
     activateCertificateTemplateVersion(
       eventId,
       selectedTemplateId,
@@ -862,8 +879,101 @@ export function CertificateStudioWorkspace() {
         toast.success(`Activated version ${updated.activeVersionNumber ?? ""}.`);
         setTemplates((previous) => previous.map((template) => (template.id === updated.id ? updated : template)));
       })
-      .catch(() => toast.error("Failed to activate selected version."));
+      .catch(() => toast.error("Failed to activate selected version."))
+      .finally(() => setIsBusyVersionAction(false));
   }, [csrfToken, eventId, selectedTemplateId, selectedVersionId]);
+
+  const handleDeleteSelectedVersion = useCallback(() => {
+    if (!selectedTemplateId || !selectedVersionId) {
+      toast.error("Select a published version first.");
+      return;
+    }
+
+    const selectedVersion =
+      versions.find((version) => version.id === selectedVersionId) ?? null;
+    const versionNumberLabel =
+      selectedVersion?.versionNumber != null
+        ? `version ${selectedVersion.versionNumber}`
+        : "selected version";
+
+    const confirmed = window.confirm(
+      `Delete ${versionNumberLabel}? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setIsBusyVersionAction(true);
+    deleteCertificateTemplateVersion(
+      eventId,
+      selectedTemplateId,
+      selectedVersionId,
+      csrfToken ?? undefined,
+    )
+      .then(() => {
+        toast.success("Version deleted.");
+        const remaining = versions.filter(
+          (version) => version.id !== selectedVersionId,
+        );
+        setVersions(remaining);
+        setSelectedVersionId((current) => {
+          if (current && remaining.some((version) => version.id === current)) {
+            return current;
+          }
+          return remaining[0]?.id ?? null;
+        });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof ApiError) {
+          toast.error(error.message);
+          return;
+        }
+        toast.error("Failed to delete selected version.");
+      })
+      .finally(() => setIsBusyVersionAction(false));
+  }, [csrfToken, eventId, selectedTemplateId, selectedVersionId, versions]);
+
+  const handleRequestRevokeIssuedCertificate = useCallback(
+    (certificate: IssuedCertificateSummary) => {
+      setRevokeTargetCertificate(certificate);
+      setRevokeReasonDraft("");
+      setRevokeDialogOpen(true);
+    },
+    [],
+  );
+
+  const handleConfirmRevokeIssuedCertificate = useCallback(() => {
+    if (!revokeTargetCertificate) return;
+
+    setIsRevokingIssuedCertificate(true);
+    revokeIssuedCertificate(
+      eventId,
+      revokeTargetCertificate.id,
+      revokeReasonDraft.trim() || undefined,
+      csrfToken ?? undefined,
+    )
+      .then((updated) => {
+        toast.success("Certificate revoked.");
+        setIssuedCertificates((previous) =>
+          previous.map((item) => (item.id === updated.id ? updated : item)),
+        );
+        setRevokeDialogOpen(false);
+        setRevokeTargetCertificate(null);
+        return refreshIssuance();
+      })
+      .catch((error: unknown) => {
+        if (error instanceof ApiError) {
+          toast.error(error.message);
+          return;
+        }
+        toast.error("Failed to revoke certificate.");
+      })
+      .finally(() => setIsRevokingIssuedCertificate(false));
+  }, [
+    csrfToken,
+    eventId,
+    refreshIssuance,
+    revokeReasonDraft,
+    revokeTargetCertificate,
+  ]);
 
   const handleReloadDraft = useCallback(() => {
     if (!selectedTemplateId) return;
@@ -1060,11 +1170,6 @@ export function CertificateStudioWorkspace() {
             onPublish={handlePublish}
           />
 
-          <div className="rounded-xl border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-            Draft revision r{draftRevision} | {dirty ? "unsaved changes" : "all changes saved"} | Autosave 800ms |
-            {" "}Keyboard: Arrows nudge, Shift+Arrows 10px, Ctrl/Cmd+D duplicate, Del delete
-          </div>
-
           <div className={workspaceGridClass}>
             {!isLeftRailCollapsed && (
               <div>
@@ -1078,6 +1183,8 @@ export function CertificateStudioWorkspace() {
                   selectedVersionId={selectedVersionId}
                   onSelectTemplate={setSelectedTemplateId}
                   onSelectVersion={setSelectedVersionId}
+                  onActivateSelectedVersion={handleActivateVersion}
+                  onDeleteSelectedVersion={handleDeleteSelectedVersion}
                   onCreateTemplate={handleCreateTemplate}
                   onDuplicateTemplate={handleDuplicateTemplate}
                   onDeleteTemplate={handleDeleteTemplate}
@@ -1095,6 +1202,7 @@ export function CertificateStudioWorkspace() {
                   onTypeKeyDraftChange={(value) => setTypeKeyDraft(slugifyTypeKey(value))}
                   isCreatingTemplate={isCreatingTemplate}
                   isBusyTemplateAction={isBusyTemplateAction}
+                  isBusyVersionAction={isBusyVersionAction}
                   assetMode={assetMode}
                   onAssetModeChange={setAssetMode}
                   assets={assets}
@@ -1123,6 +1231,10 @@ export function CertificateStudioWorkspace() {
                   isIssuing={isIssuing}
                   issuedCertificates={issuedCertificates}
                   renderJobs={renderJobs}
+                  onRequestRevokeIssuedCertificate={handleRequestRevokeIssuedCertificate}
+                  revokingIssuedCertificateId={
+                    isRevokingIssuedCertificate ? revokeTargetCertificate?.id ?? null : null
+                  }
                   onRetryRenderJob={handleRetryRenderJob}
                   onRefreshIssuance={() => {
                     setIsRefreshingIssuance(true);
@@ -1132,18 +1244,6 @@ export function CertificateStudioWorkspace() {
                   }}
                   isRefreshingIssuance={isRefreshingIssuance}
                 />
-
-                <div className="mt-2">
-                  <Button
-                    className="w-full"
-                    size="sm"
-                    variant="outline"
-                    onClick={handleActivateVersion}
-                    disabled={!selectedTemplateId || !selectedVersionId}
-                  >
-                    Activate selected published version
-                  </Button>
-                </div>
               </div>
             )}
 
@@ -1170,6 +1270,7 @@ export function CertificateStudioWorkspace() {
                 onPatchSelectionStyle={patchSelectionStyle}
                 onUpdatePrimaryTextContent={handleUpdateTextContent}
                 onUpdatePrimaryToken={handleUpdatePrimaryToken}
+                tokenOptions={Array.from(CERTIFICATE_DYNAMIC_TOKENS)}
                 onUpdateCanvas={handleUpdateCanvas}
                 onSetAssetMode={setAssetMode}
                 onDeleteSelection={handleDeleteSelection}
@@ -1205,6 +1306,62 @@ export function CertificateStudioWorkspace() {
               ))}
             </div>
           </div>
+
+          <Dialog
+            open={revokeDialogOpen}
+            onOpenChange={(open) => {
+              if (isRevokingIssuedCertificate) return;
+              setRevokeDialogOpen(open);
+              if (!open) {
+                setRevokeTargetCertificate(null);
+                setRevokeReasonDraft("");
+              }
+            }}
+          >
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Revoke certificate</DialogTitle>
+                <DialogDescription>
+                  {revokeTargetCertificate
+                    ? `Certificate ${revokeTargetCertificate.certificateId} will be marked as revoked.`
+                    : "This certificate will be marked as revoked."}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">Reason (optional)</p>
+                <Textarea
+                  value={revokeReasonDraft}
+                  onChange={(event) => setRevokeReasonDraft(event.target.value)}
+                  placeholder="Add a reason for revocation"
+                  disabled={isRevokingIssuedCertificate}
+                  className="min-h-24"
+                />
+              </div>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setRevokeDialogOpen(false)}
+                  disabled={isRevokingIssuedCertificate}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={handleConfirmRevokeIssuedCertificate}
+                  disabled={!revokeTargetCertificate || isRevokingIssuedCertificate}
+                >
+                  {isRevokingIssuedCertificate ? (
+                    <>
+                      <RefreshCw className="mr-1.5 h-4 w-4 animate-spin" />
+                      Revoking...
+                    </>
+                  ) : (
+                    "Confirm revoke"
+                  )}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </div>

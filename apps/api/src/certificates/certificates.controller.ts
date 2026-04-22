@@ -178,6 +178,21 @@ export class CertificatesController {
     return { data };
   }
 
+  @Delete('events/:eventId/certificates/templates/:templateId/versions/:versionId')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async deleteTemplateVersion(
+    @Param('eventId') eventId: string,
+    @Param('templateId') templateId: string,
+    @Param('versionId') versionId: string,
+  ) {
+    await this.certificatesService.deleteTemplateVersion(
+      eventId,
+      templateId,
+      versionId,
+    );
+    return { status: 'DELETED' };
+  }
+
   @Post('events/:eventId/certificates/templates/:templateId/activate-version')
   @RequirePermission(Permission.EVENT_UPDATE)
   async activateTemplateVersion(

@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { CertificatesService } from './certificates.service';
 
 function createServiceHarness() {
@@ -24,6 +24,44 @@ function createServiceHarness() {
   );
 
   return { service, prisma, storageService };
+}
+
+function createVersionLifecycleHarness() {
+  const tx = {
+    certificate_template_versions: {
+      delete: jest.fn(),
+    },
+    certificate_templates: {
+      update: jest.fn(),
+    },
+  };
+
+  const prisma = {
+    certificate_templates: {
+      findFirst: jest.fn(),
+    },
+    certificate_template_versions: {
+      findFirst: jest.fn(),
+    },
+    issued_certificates: {
+      findFirst: jest.fn(),
+    },
+    $transaction: jest.fn(async (callback: (ctx: typeof tx) => Promise<unknown>) =>
+      callback(tx),
+    ),
+  };
+  const storageService = {};
+  const cls = {
+    get: jest.fn((key: string) => (key === 'actorId' ? 'actor-1' : undefined)),
+  };
+
+  const service = new CertificatesService(
+    prisma as any,
+    cls as any,
+    storageService as any,
+  );
+
+  return { service, prisma, tx };
 }
 
 describe('CertificatesService public resolvers', () => {
@@ -123,5 +161,82 @@ describe('CertificatesService public resolvers', () => {
     await expect(
       service.resolveCertificateAssetUrl(storageKey),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('CertificatesService deleteTemplateVersion', () => {
+  it('blocks deleting the active published version', async () => {
+    const { service, prisma } = createVersionLifecycleHarness();
+
+    prisma.certificate_templates.findFirst.mockResolvedValue({
+      id: 'template-1',
+      event_id: 'event-1',
+      active_version_id: 'version-1',
+    });
+    prisma.certificate_template_versions.findFirst.mockResolvedValue({
+      id: 'version-1',
+      template_id: 'template-1',
+      version_number: 1,
+    });
+
+    await expect(
+      service.deleteTemplateVersion('event-1', 'template-1', 'version-1'),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.issued_certificates.findFirst).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('blocks deleting a version referenced by active issued certificates', async () => {
+    const { service, prisma } = createVersionLifecycleHarness();
+
+    prisma.certificate_templates.findFirst.mockResolvedValue({
+      id: 'template-1',
+      event_id: 'event-1',
+      active_version_id: 'version-2',
+    });
+    prisma.certificate_template_versions.findFirst.mockResolvedValue({
+      id: 'version-1',
+      template_id: 'template-1',
+      version_number: 1,
+    });
+    prisma.issued_certificates.findFirst.mockResolvedValue({
+      id: 'issued-1',
+    });
+
+    await expect(
+      service.deleteTemplateVersion('event-1', 'template-1', 'version-1'),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('deletes a version when only revoked references exist', async () => {
+    const { service, prisma, tx } = createVersionLifecycleHarness();
+
+    prisma.certificate_templates.findFirst.mockResolvedValue({
+      id: 'template-1',
+      event_id: 'event-1',
+      active_version_id: 'version-2',
+    });
+    prisma.certificate_template_versions.findFirst.mockResolvedValue({
+      id: 'version-1',
+      template_id: 'template-1',
+      version_number: 1,
+    });
+    prisma.issued_certificates.findFirst.mockResolvedValue(null);
+
+    await service.deleteTemplateVersion('event-1', 'template-1', 'version-1');
+
+    expect(tx.certificate_template_versions.delete).toHaveBeenCalledWith({
+      where: { id: 'version-1' },
+    });
+    expect(tx.certificate_templates.update).toHaveBeenCalledWith({
+      where: { id: 'template-1' },
+      data: {
+        updated_by: 'actor-1',
+        updated_at: expect.any(Date),
+      },
+    });
   });
 });

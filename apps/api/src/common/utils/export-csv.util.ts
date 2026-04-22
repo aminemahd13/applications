@@ -1,4 +1,5 @@
 import type { CsvPortal } from '@event-platform/shared';
+import { isIP } from 'node:net';
 
 interface BuildCsvOptions {
   includeBom?: boolean;
@@ -33,11 +34,76 @@ export function buildCsvContent(
 }
 
 export function resolveAppBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  const base =
-    (env.APP_BASE_URL && env.APP_BASE_URL.trim()) ||
-    (env.CORS_ORIGIN && env.CORS_ORIGIN.trim()) ||
-    'http://localhost:3000';
-  return base.replace(/\/+$/, '');
+  const candidates = [
+    env.PUBLIC_APP_BASE_URL,
+    env.APP_BASE_URL,
+    env.CORS_ORIGIN,
+  ];
+
+  for (const rawCandidate of candidates) {
+    const normalized = normalizePublicAppBaseUrl(rawCandidate);
+    if (normalized) return normalized;
+  }
+
+  return 'http://localhost:3000';
+}
+
+function normalizePublicAppBaseUrl(rawValue: string | undefined): string | null {
+  const trimmed = String(rawValue ?? '').trim();
+  if (!trimmed) return null;
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (isPrivateOrLoopbackHost(parsed.hostname)) {
+      return null;
+    }
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
+function isPrivateOrLoopbackHost(hostname: string): boolean {
+  const normalizedHost = hostname.trim().toLowerCase();
+  if (!normalizedHost) return true;
+  if (
+    normalizedHost === 'localhost' ||
+    normalizedHost.endsWith('.localhost') ||
+    normalizedHost === '0.0.0.0' ||
+    normalizedHost === '127.0.0.1' ||
+    normalizedHost === '::1' ||
+    normalizedHost === '[::1]'
+  ) {
+    return true;
+  }
+
+  const ipType = isIP(normalizedHost);
+  if (ipType === 4) {
+    const segments = normalizedHost.split('.').map((segment) => Number(segment));
+    const [a, b] = segments;
+    return (
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    );
+  }
+
+  if (ipType === 6) {
+    return (
+      normalizedHost === '::1' ||
+      normalizedHost.startsWith('fc') ||
+      normalizedHost.startsWith('fd') ||
+      normalizedHost.startsWith('fe80')
+    );
+  }
+
+  // Non-FQDN hostnames (for example "api", "minio") are internal-only.
+  return !normalizedHost.includes('.');
 }
 
 export function joinAppUrl(baseUrl: string, path: string): string {

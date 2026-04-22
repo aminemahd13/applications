@@ -54,6 +54,7 @@ import {
   buildApplicationPortalLinks,
   buildCsvContent,
   joinAppUrl,
+  resolveAppBaseUrl,
 } from '../common/utils/export-csv.util';
 
 type ApplicationsListRecord = {
@@ -3680,11 +3681,7 @@ export class ApplicationsService {
   }
 
   private getAppBaseUrl(): string {
-    const baseUrl =
-      process.env.APP_BASE_URL ||
-      process.env.CORS_ORIGIN ||
-      'http://localhost:3000';
-    return baseUrl.replace(/\/+$/, '');
+    return resolveAppBaseUrl(process.env);
   }
 
   private getCredentialIssuerName(): string {

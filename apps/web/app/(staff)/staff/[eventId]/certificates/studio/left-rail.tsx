@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import {
   Archive,
-  CheckCircle2,
+  Ban,
   Copy,
   ExternalLink,
   FileText,
@@ -51,6 +51,8 @@ interface LeftRailProps {
   selectedVersionId: string | null;
   onSelectTemplate: (templateId: string) => void;
   onSelectVersion: (versionId: string | null) => void;
+  onActivateSelectedVersion: () => void;
+  onDeleteSelectedVersion: () => void;
   onCreateTemplate: () => void;
   onDuplicateTemplate: () => void;
   onDeleteTemplate: () => void;
@@ -63,6 +65,7 @@ interface LeftRailProps {
   onTypeKeyDraftChange: (value: string) => void;
   isCreatingTemplate: boolean;
   isBusyTemplateAction: boolean;
+  isBusyVersionAction: boolean;
   assetMode: AssetMode;
   onAssetModeChange: (mode: AssetMode) => void;
   assets: CertificateAsset[];
@@ -91,6 +94,8 @@ interface LeftRailProps {
   isIssuing: boolean;
   issuedCertificates: IssuedCertificateSummary[];
   renderJobs: CertificateRenderJobSummary[];
+  onRequestRevokeIssuedCertificate: (certificate: IssuedCertificateSummary) => void;
+  revokingIssuedCertificateId: string | null;
   onRetryRenderJob: (jobId: string) => void;
   onRefreshIssuance: () => void;
   isRefreshingIssuance: boolean;
@@ -113,6 +118,8 @@ export function LeftRail(props: LeftRailProps) {
     selectedVersionId,
     onSelectTemplate,
     onSelectVersion,
+    onActivateSelectedVersion,
+    onDeleteSelectedVersion,
     onCreateTemplate,
     onDuplicateTemplate,
     onDeleteTemplate,
@@ -125,6 +132,7 @@ export function LeftRail(props: LeftRailProps) {
     onTypeKeyDraftChange,
     isCreatingTemplate,
     isBusyTemplateAction,
+    isBusyVersionAction,
     assetMode,
     onAssetModeChange,
     assets,
@@ -153,6 +161,8 @@ export function LeftRail(props: LeftRailProps) {
     isIssuing,
     issuedCertificates,
     renderJobs,
+    onRequestRevokeIssuedCertificate,
+    revokingIssuedCertificateId,
     onRetryRenderJob,
     onRefreshIssuance,
     isRefreshingIssuance,
@@ -308,6 +318,24 @@ export function LeftRail(props: LeftRailProps) {
                     </Select>
 
                     <div className="grid grid-cols-2 gap-2 pt-1">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="col-span-2"
+                        onClick={onActivateSelectedVersion}
+                        disabled={!canManage || !selectedVersionId || isBusyVersionAction}
+                      >
+                        Activate selected version
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        className="col-span-2"
+                        onClick={onDeleteSelectedVersion}
+                        disabled={!canManage || !selectedVersionId || isBusyVersionAction}
+                      >
+                        Delete selected version
+                      </Button>
                       <Button
                         size="sm"
                         variant="outline"
@@ -687,6 +715,22 @@ export function LeftRail(props: LeftRailProps) {
                               </a>
                             </Button>
                           )}
+                          {item.status === "ISSUED" && (
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="col-span-2 h-7 text-[11px]"
+                              onClick={() => onRequestRevokeIssuedCertificate(item)}
+                              disabled={!canManage || revokingIssuedCertificateId === item.id}
+                            >
+                              {revokingIssuedCertificateId === item.id ? (
+                                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Ban className="mr-1.5 h-3.5 w-3.5" />
+                              )}
+                              Revoke
+                            </Button>
+                          )}
                         </div>
                       </div>
                     ))
@@ -728,33 +772,6 @@ export function LeftRail(props: LeftRailProps) {
             </Accordion>
           )}
 
-          {view === "issuance" && (
-            <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-900">
-              Published versions are immutable snapshots. Draft edits are never issued until you publish.
-            </div>
-          )}
-
-          {selectedTemplate?.draftUpdatedAt && (
-            <div className="rounded-md border p-2 text-[11px] text-muted-foreground">
-              Last draft update: {formatDateTime(selectedTemplate.draftUpdatedAt)}
-            </div>
-          )}
-
-          {selectedTemplate?.activeVersionNumber && (
-            <div className="rounded-md border p-2 text-[11px] text-muted-foreground">
-              Active published version: v{selectedTemplate.activeVersionNumber}
-            </div>
-          )}
-
-          {selectedTemplate && view !== "issuance" && (
-            <div className="rounded-md border p-2 text-[11px] text-muted-foreground">
-              <div className="flex items-center gap-1">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                Template selected
-              </div>
-              <p className="mt-1 truncate">{selectedTemplate.name}</p>
-            </div>
-          )}
         </div>
       </ScrollArea>
     </aside>

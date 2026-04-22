@@ -527,6 +527,21 @@ export async function createCertificateTemplateVersion(
   return unwrapData<CertificateTemplateVersion>(response);
 }
 
+export async function deleteCertificateTemplateVersion(
+  eventId: string,
+  templateId: string,
+  versionId: string,
+  csrfToken?: string,
+): Promise<void> {
+  await apiClient(
+    `/events/${eventId}/certificates/templates/${templateId}/versions/${versionId}`,
+    {
+      method: "DELETE",
+      csrfToken,
+    },
+  );
+}
+
 export async function activateCertificateTemplateVersion(
   eventId: string,
   templateId: string,

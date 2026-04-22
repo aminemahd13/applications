@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, WandSparkles } from "lucide-react";
 import {
   Accordion,
@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { CertificateLayout, CertificateTemplateElement } from "@/lib/certificates";
 import type { AssetMode } from "./utils";
 
@@ -22,6 +23,7 @@ interface InspectorPanelProps {
   onPatchSelectionStyle: (patch: Record<string, unknown>) => void;
   onUpdatePrimaryTextContent: (value: string) => void;
   onUpdatePrimaryToken: (value: string) => void;
+  tokenOptions: string[];
   onUpdateCanvas: (patch: Partial<CertificateLayout["canvas"]>) => void;
   onSetAssetMode: (mode: AssetMode) => void;
   onDeleteSelection: () => void;
@@ -32,6 +34,8 @@ interface InspectorPanelProps {
   ) => void;
   onRemoveSignatureSlot: (slotKey: string) => void;
 }
+
+const CUSTOM_TOKEN_VALUE = "__custom__";
 
 function readNumber(value: unknown, fallback: number): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -57,6 +61,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
     onPatchSelectionStyle,
     onUpdatePrimaryTextContent,
     onUpdatePrimaryToken,
+    tokenOptions,
     onUpdateCanvas,
     onSetAssetMode,
     onDeleteSelection,
@@ -67,11 +72,29 @@ export function InspectorPanel(props: InspectorPanelProps) {
 
   const style = (selectedElement?.style ?? {}) as Record<string, unknown>;
   const selectionType = selectedElement?.type ?? "none";
+  const [isCustomTokenMode, setIsCustomTokenMode] = useState(false);
 
   const availableSlotKeys = useMemo(
     () => layout.signatureSlots.map((slot) => slot.key),
     [layout.signatureSlots],
   );
+
+  const selectedToken =
+    selectedElement?.type === "dynamic_text" || selectedElement?.type === "qr"
+      ? String(
+          selectedElement.token ?? (selectedElement.type === "qr" ? "qrVerificationUrl" : ""),
+        ).trim()
+      : "";
+
+  const isKnownToken = selectedToken.length > 0 && tokenOptions.includes(selectedToken);
+
+  useEffect(() => {
+    if (selectedElement?.type !== "dynamic_text" && selectedElement?.type !== "qr") {
+      setIsCustomTokenMode(false);
+      return;
+    }
+    setIsCustomTokenMode(!isKnownToken);
+  }, [isKnownToken, selectedElement?.id, selectedElement?.type]);
 
   return (
     <aside className="min-w-[340px] rounded-xl border bg-card/60 p-3">
@@ -206,15 +229,47 @@ export function InspectorPanel(props: InspectorPanelProps) {
                     />
                   </label>
                 ) : (
-                  <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">Token</span>
-                    <Input
-                      value={selectedElement.token}
-                      onChange={(event) => onUpdatePrimaryToken(event.target.value)}
-                      disabled={!canManage}
-                      className="h-8"
-                    />
-                  </label>
+                  <div className="space-y-2">
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">Token</span>
+                      <Select
+                        value={isCustomTokenMode ? CUSTOM_TOKEN_VALUE : isKnownToken ? selectedToken : CUSTOM_TOKEN_VALUE}
+                        onValueChange={(value) => {
+                          if (value === CUSTOM_TOKEN_VALUE) {
+                            setIsCustomTokenMode(true);
+                            return;
+                          }
+                          setIsCustomTokenMode(false);
+                          onUpdatePrimaryToken(value);
+                        }}
+                        disabled={!canManage}
+                      >
+                        <SelectTrigger className="h-8">
+                          <SelectValue placeholder="Select token" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {tokenOptions.map((token) => (
+                            <SelectItem key={token} value={token}>
+                              {token}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value={CUSTOM_TOKEN_VALUE}>Custom token</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    {isCustomTokenMode && (
+                      <label className="space-y-1">
+                        <span className="text-xs text-muted-foreground">Custom token</span>
+                        <Input
+                          value={selectedToken}
+                          onChange={(event) => onUpdatePrimaryToken(event.target.value)}
+                          disabled={!canManage}
+                          className="h-8"
+                          placeholder="tokenName"
+                        />
+                      </label>
+                    )}
+                  </div>
                 )}
 
                 <div className="grid grid-cols-2 gap-2">
@@ -250,12 +305,20 @@ export function InspectorPanel(props: InspectorPanelProps) {
                   </label>
                   <label className="space-y-1">
                     <span className="text-xs text-muted-foreground">Align</span>
-                    <Input
+                    <Select
                       value={readString(style.textAlign, "left")}
                       disabled={!canManage}
-                      className="h-8"
-                      onChange={(event) => onPatchSelectionStyle({ textAlign: event.target.value })}
-                    />
+                      onValueChange={(value) => onPatchSelectionStyle({ textAlign: value })}
+                    >
+                      <SelectTrigger className="h-8">
+                        <SelectValue placeholder="Alignment" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="left">Left</SelectItem>
+                        <SelectItem value="center">Center</SelectItem>
+                        <SelectItem value="right">Right</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </label>
                 </div>
               </>
@@ -263,12 +326,20 @@ export function InspectorPanel(props: InspectorPanelProps) {
               <div className="grid grid-cols-2 gap-2">
                 <label className="space-y-1">
                   <span className="text-xs text-muted-foreground">Fit</span>
-                  <Input
+                  <Select
                     value={readString(style.fit, "contain")}
-                    className="h-8"
                     disabled={!canManage}
-                    onChange={(event) => onPatchSelectionStyle({ fit: event.target.value })}
-                  />
+                    onValueChange={(value) => onPatchSelectionStyle({ fit: value })}
+                  >
+                    <SelectTrigger className="h-8">
+                      <SelectValue placeholder="Fit mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="contain">Contain</SelectItem>
+                      <SelectItem value="cover">Cover</SelectItem>
+                      <SelectItem value="fill">Fill</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </label>
                 <label className="space-y-1">
                   <span className="text-xs text-muted-foreground">Radius</span>
@@ -283,15 +354,47 @@ export function InspectorPanel(props: InspectorPanelProps) {
               </div>
             ) : selectedElement?.type === "qr" ? (
               <div className="grid grid-cols-2 gap-2">
-                <label className="space-y-1">
-                  <span className="text-xs text-muted-foreground">Token</span>
-                  <Input
-                    value={selectedElement.token ?? "qrVerificationUrl"}
-                    className="h-8"
-                    disabled={!canManage}
-                    onChange={(event) => onUpdatePrimaryToken(event.target.value)}
-                  />
-                </label>
+                <div className="col-span-2 space-y-2">
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Token</span>
+                    <Select
+                      value={isCustomTokenMode ? CUSTOM_TOKEN_VALUE : isKnownToken ? selectedToken : CUSTOM_TOKEN_VALUE}
+                      onValueChange={(value) => {
+                        if (value === CUSTOM_TOKEN_VALUE) {
+                          setIsCustomTokenMode(true);
+                          return;
+                        }
+                        setIsCustomTokenMode(false);
+                        onUpdatePrimaryToken(value);
+                      }}
+                      disabled={!canManage}
+                    >
+                      <SelectTrigger className="h-8">
+                        <SelectValue placeholder="Select token" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {tokenOptions.map((token) => (
+                          <SelectItem key={token} value={token}>
+                            {token}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value={CUSTOM_TOKEN_VALUE}>Custom token</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
+                  {isCustomTokenMode && (
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">Custom token</span>
+                      <Input
+                        value={selectedToken}
+                        className="h-8"
+                        disabled={!canManage}
+                        onChange={(event) => onUpdatePrimaryToken(event.target.value)}
+                        placeholder="tokenName"
+                      />
+                    </label>
+                  )}
+                </div>
                 <label className="space-y-1">
                   <span className="text-xs text-muted-foreground">Foreground</span>
                   <Input

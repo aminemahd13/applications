@@ -964,6 +964,56 @@ export class CertificatesService {
     return this.mapTemplateVersionRow(created);
   }
 
+  async deleteTemplateVersion(
+    eventId: string,
+    templateId: string,
+    versionId: string,
+  ) {
+    const actorId = this.getActorId();
+    const template = await this.getTemplateForEvent(eventId, templateId);
+    const version = await this.getTemplateVersion(templateId, versionId);
+
+    if (template.active_version_id === version.id) {
+      throw new ConflictException(
+        'Cannot delete the active published version. Activate another version first.',
+      );
+    }
+
+    const activeReference = await (this.prisma as any).issued_certificates.findFirst({
+      where: {
+        event_id: eventId,
+        template_version_id: version.id,
+        revoked_at: null,
+        NOT: {
+          status: 'REVOKED',
+        },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (activeReference) {
+      throw new ConflictException(
+        'Cannot delete this version because active issued certificates still reference it.',
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await (tx as any).certificate_template_versions.delete({
+        where: { id: version.id },
+      });
+
+      await (tx as any).certificate_templates.update({
+        where: { id: template.id },
+        data: {
+          updated_by: actorId,
+          updated_at: new Date(),
+        },
+      });
+    });
+  }
+
   async activateTemplateVersion(
     eventId: string,
     templateId: string,

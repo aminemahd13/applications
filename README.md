@@ -101,6 +101,7 @@ The application is highly configurable via environment variables.
 | `SESSION_SECRET` | Secret for signing session cookies. | **YES** |
 | `CORS_ORIGIN` | Allowed origin for CORS (e.g., `https://my-event-app.com`). | No (defaults to localhost) |
 | `COOKIE_DOMAIN` | Domain for session cookies (e.g., `.my-event-app.com`). | No |
+| `PUBLIC_APP_BASE_URL` | Optional canonical public app URL used for generated certificate/QR links when backend base URLs are internal. | No |
 
 ### 📂 File Storage (S3 / MinIO)
 
