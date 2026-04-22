@@ -219,6 +219,24 @@ export class CertificatesController {
     return { data };
   }
 
+  @Get('events/:eventId/certificates/issuance-candidates')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async searchIssuanceCandidates(
+    @Param('eventId') eventId: string,
+    @Query('search') search?: string,
+    @Query('limit') rawLimit?: string,
+  ) {
+    const parsedLimit = Number(rawLimit ?? 20);
+    const data = await this.certificatesService.searchIssuanceCandidates(
+      eventId,
+      {
+        search: String(search ?? ''),
+        limit: Number.isFinite(parsedLimit) ? parsedLimit : 20,
+      },
+    );
+    return { data };
+  }
+
   @Post('events/:eventId/certificates/:issuedCertificateId/revoke')
   @RequirePermission(Permission.EVENT_UPDATE)
   async revokeCertificate(

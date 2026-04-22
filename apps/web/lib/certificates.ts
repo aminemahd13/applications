@@ -192,6 +192,15 @@ export interface CertificateAsset {
   kind: "background" | "signature" | "logo" | "image";
 }
 
+export interface CertificateIssuanceCandidate {
+  applicationId: string;
+  applicantName: string;
+  applicantEmail: string;
+  decisionStatus: string;
+  attendanceStatus: string;
+  checkedInAt: string | null;
+}
+
 function unwrapData<T>(value: unknown): T {
   if (
     value &&
@@ -563,6 +572,24 @@ export async function issueCertificatesBulk(
     },
   );
   return unwrapData(response);
+}
+
+export async function searchCertificateIssuanceCandidates(
+  eventId: string,
+  input: { search: string; limit?: number },
+): Promise<CertificateIssuanceCandidate[]> {
+  const search = input.search.trim();
+  if (!search) return [];
+
+  const query = new URLSearchParams();
+  query.set("search", search);
+  if (input.limit) query.set("limit", String(input.limit));
+
+  const suffix = query.toString() ? `?${query}` : "";
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/issuance-candidates${suffix}`,
+  );
+  return unwrapData<CertificateIssuanceCandidate[]>(response) ?? [];
 }
 
 export async function listIssuedCertificates(

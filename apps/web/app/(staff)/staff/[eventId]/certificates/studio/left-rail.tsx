@@ -9,6 +9,7 @@ import {
   Package,
   Plus,
   RefreshCw,
+  Search,
   Sparkles,
   Trash2,
   Upload,
@@ -30,6 +31,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import type {
   CertificateAsset,
+  CertificateIssuanceCandidate,
   CertificateRenderJobSummary,
   CertificateTemplateSummary,
   CertificateTemplateVersion,
@@ -74,11 +76,18 @@ interface LeftRailProps {
   isUploadingAsset: boolean;
   issuanceApplicationIds: string;
   onIssuanceApplicationIdsChange: (value: string) => void;
+  issuanceSearchInput: string;
+  onIssuanceSearchInputChange: (value: string) => void;
+  onSearchIssuanceCandidates: () => void;
+  issuanceCandidates: CertificateIssuanceCandidate[];
+  issuanceSearchAttempted: boolean;
+  isSearchingIssuanceCandidates: boolean;
   issuanceIssuerName: string;
   onIssuanceIssuerNameChange: (value: string) => void;
   issuanceReissueIfExists: boolean;
   onIssuanceReissueIfExistsChange: (value: boolean) => void;
   onIssueCertificates: () => void;
+  onIssueCandidate: (applicationId: string) => void;
   isIssuing: boolean;
   issuedCertificates: IssuedCertificateSummary[];
   renderJobs: CertificateRenderJobSummary[];
@@ -129,11 +138,18 @@ export function LeftRail(props: LeftRailProps) {
     isUploadingAsset,
     issuanceApplicationIds,
     onIssuanceApplicationIdsChange,
+    issuanceSearchInput,
+    onIssuanceSearchInputChange,
+    onSearchIssuanceCandidates,
+    issuanceCandidates,
+    issuanceSearchAttempted,
+    isSearchingIssuanceCandidates,
     issuanceIssuerName,
     onIssuanceIssuerNameChange,
     issuanceReissueIfExists,
     onIssuanceReissueIfExistsChange,
     onIssueCertificates,
+    onIssueCandidate,
     isIssuing,
     issuedCertificates,
     renderJobs,
@@ -527,6 +543,75 @@ export function LeftRail(props: LeftRailProps) {
                       onCheckedChange={onIssuanceReissueIfExistsChange}
                       disabled={!canManage || isIssuing}
                     />
+                  </div>
+
+                  <div className="space-y-2 rounded-md border p-2">
+                    <Label className="text-xs">Search by name or email</Label>
+                    <div className="grid grid-cols-[1fr_auto] gap-2">
+                      <Input
+                        value={issuanceSearchInput}
+                        onChange={(event) => onIssuanceSearchInputChange(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            onSearchIssuanceCandidates();
+                          }
+                        }}
+                        className="h-8"
+                        placeholder="Jane Doe or jane@example.com"
+                        disabled={!canManage || isSearchingIssuanceCandidates}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={onSearchIssuanceCandidates}
+                        disabled={!canManage || isSearchingIssuanceCandidates}
+                      >
+                        {isSearchingIssuanceCandidates ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Search className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+
+                    {issuanceSearchAttempted && !isSearchingIssuanceCandidates && issuanceCandidates.length === 0 && (
+                      <p className="text-xs text-muted-foreground">No applications found.</p>
+                    )}
+
+                    {issuanceCandidates.length > 0 && (
+                      <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
+                        {issuanceCandidates.map((candidate) => (
+                          <div
+                            key={candidate.applicationId}
+                            className="flex items-center justify-between gap-2 rounded-md border p-2"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-medium">{candidate.applicantName}</p>
+                              <p className="truncate text-[11px] text-muted-foreground">{candidate.applicantEmail || "-"}</p>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                <Badge variant="outline">{candidate.decisionStatus}</Badge>
+                                <Badge
+                                  variant={
+                                    candidate.attendanceStatus === "CHECKED_IN" ? "secondary" : "outline"
+                                  }
+                                >
+                                  {candidate.attendanceStatus}
+                                </Badge>
+                              </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              className="h-7 text-[11px]"
+                              onClick={() => onIssueCandidate(candidate.applicationId)}
+                              disabled={!canManage || !selectedTemplate || isIssuing}
+                            >
+                              Issue
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <label className="block space-y-1">

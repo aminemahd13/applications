@@ -26,6 +26,7 @@ import {
   duplicateCertificateTemplate,
   getCertificateTemplateDraft,
   issueCertificatesBulk,
+  searchCertificateIssuanceCandidates,
   listCertificateAssets,
   listCertificateRenderJobs,
   listCertificateTemplateVersions,
@@ -43,6 +44,7 @@ import {
   type CertificateTemplateVersion,
   type IssuedCertificateSummary,
   type CertificateRenderJobSummary,
+  type CertificateIssuanceCandidate,
 } from "@/lib/certificates";
 import {
   addElement,
@@ -119,10 +121,14 @@ export function CertificateStudioWorkspace() {
   const [issuanceApplicationIds, setIssuanceApplicationIds] = useState("");
   const [issuanceIssuerName, setIssuanceIssuerName] = useState("");
   const [issuanceReissueIfExists, setIssuanceReissueIfExists] = useState(false);
+  const [issuanceSearchInput, setIssuanceSearchInput] = useState("");
+  const [issuanceCandidates, setIssuanceCandidates] = useState<CertificateIssuanceCandidate[]>([]);
+  const [issuanceSearchAttempted, setIssuanceSearchAttempted] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isRefreshingIssuance, setIsRefreshingIssuance] = useState(false);
+  const [isSearchingIssuanceCandidates, setIsSearchingIssuanceCandidates] = useState(false);
   const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
   const [isBusyTemplateAction, setIsBusyTemplateAction] = useState(false);
   const [isUploadingAsset, setIsUploadingAsset] = useState(false);
@@ -307,6 +313,12 @@ export function CertificateStudioWorkspace() {
       cancelled = true;
     };
   }, [assetKindFilter, canManage, eventId, isLoading]);
+
+  useEffect(() => {
+    if (issuanceSearchInput.trim()) return;
+    setIssuanceCandidates([]);
+    setIssuanceSearchAttempted(false);
+  }, [issuanceSearchInput]);
 
   useEffect(() => {
     if (!canManage || !selectedTemplateId || !isDraftReady) return;
@@ -714,6 +726,25 @@ export function CertificateStudioWorkspace() {
     [csrfToken, eventId],
   );
 
+  const handleSearchIssuanceCandidates = useCallback(() => {
+    const search = issuanceSearchInput.trim();
+    if (!search) {
+      setIssuanceCandidates([]);
+      setIssuanceSearchAttempted(false);
+      return;
+    }
+
+    setIsSearchingIssuanceCandidates(true);
+    setIssuanceSearchAttempted(true);
+    searchCertificateIssuanceCandidates(eventId, { search, limit: 20 })
+      .then((rows) => setIssuanceCandidates(rows))
+      .catch(() => {
+        setIssuanceCandidates([]);
+        toast.error("Failed to search applications.");
+      })
+      .finally(() => setIsSearchingIssuanceCandidates(false));
+  }, [eventId, issuanceSearchInput]);
+
   const handleIssueCertificates = useCallback(() => {
     if (!selectedTemplateId) {
       toast.error("Select a template first.");
@@ -755,6 +786,53 @@ export function CertificateStudioWorkspace() {
     selectedTemplateId,
     selectedVersionId,
   ]);
+
+  const handleIssueSingleCandidate = useCallback(
+    (applicationId: string) => {
+      if (!selectedTemplateId) {
+        toast.error("Select a template first.");
+        return;
+      }
+
+      setIsIssuing(true);
+      issueCertificatesBulk(
+        eventId,
+        {
+          templateId: selectedTemplateId,
+          templateVersionId: selectedVersionId ?? undefined,
+          applicationIds: [applicationId],
+          issuerName: issuanceIssuerName.trim() || undefined,
+          reissueIfExists: issuanceReissueIfExists,
+        },
+        csrfToken ?? undefined,
+      )
+        .then((result) => {
+          if (result.issued > 0) {
+            toast.success("Certificate issued.");
+          } else if (result.alreadyIssued > 0) {
+            toast.info("Certificate already issued.");
+          } else if (result.notFound.length > 0) {
+            toast.error("Application not found.");
+          } else if (result.failed.length > 0) {
+            toast.error(result.failed[0]?.reason || "Failed to issue certificate.");
+          } else {
+            toast.error("Failed to issue certificate.");
+          }
+          return refreshIssuance();
+        })
+        .catch(() => toast.error("Failed to issue certificate."))
+        .finally(() => setIsIssuing(false));
+    },
+    [
+      csrfToken,
+      eventId,
+      issuanceIssuerName,
+      issuanceReissueIfExists,
+      refreshIssuance,
+      selectedTemplateId,
+      selectedVersionId,
+    ],
+  );
 
   const handleRetryRenderJob = useCallback(
     (jobId: string) => {
@@ -1030,11 +1108,18 @@ export function CertificateStudioWorkspace() {
                   isUploadingAsset={isUploadingAsset}
                   issuanceApplicationIds={issuanceApplicationIds}
                   onIssuanceApplicationIdsChange={setIssuanceApplicationIds}
+                  issuanceSearchInput={issuanceSearchInput}
+                  onIssuanceSearchInputChange={setIssuanceSearchInput}
+                  onSearchIssuanceCandidates={handleSearchIssuanceCandidates}
+                  issuanceCandidates={issuanceCandidates}
+                  issuanceSearchAttempted={issuanceSearchAttempted}
+                  isSearchingIssuanceCandidates={isSearchingIssuanceCandidates}
                   issuanceIssuerName={issuanceIssuerName}
                   onIssuanceIssuerNameChange={setIssuanceIssuerName}
                   issuanceReissueIfExists={issuanceReissueIfExists}
                   onIssuanceReissueIfExistsChange={setIssuanceReissueIfExists}
                   onIssueCertificates={handleIssueCertificates}
+                  onIssueCandidate={handleIssueSingleCandidate}
                   isIssuing={isIssuing}
                   issuedCertificates={issuedCertificates}
                   renderJobs={renderJobs}

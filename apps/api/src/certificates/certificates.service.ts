@@ -1572,6 +1572,113 @@ export class CertificatesService {
     });
   }
 
+  async searchIssuanceCandidates(
+    eventId: string,
+    input: { search: string; limit?: number },
+  ) {
+    const search = String(input.search ?? '').trim();
+    if (!search) return [];
+
+    const limit = Math.min(Math.max(Number(input.limit ?? 20), 1), 50);
+    const isLikelyIdentifier = /^[0-9a-fA-F-]{16,}$/.test(search);
+
+    const orConditions: Record<string, unknown>[] = [
+      {
+        users_applications_applicant_user_idTousers: {
+          is: {
+            email: { contains: search, mode: 'insensitive' },
+          },
+        },
+      },
+      {
+        users_applications_applicant_user_idTousers: {
+          is: {
+            applicant_profiles: {
+              is: {
+                full_name: { contains: search, mode: 'insensitive' },
+              },
+            },
+          },
+        },
+      },
+      {
+        users_applications_applicant_user_idTousers: {
+          is: {
+            applicant_profiles: {
+              is: {
+                first_name: { contains: search, mode: 'insensitive' },
+              },
+            },
+          },
+        },
+      },
+      {
+        users_applications_applicant_user_idTousers: {
+          is: {
+            applicant_profiles: {
+              is: {
+                last_name: { contains: search, mode: 'insensitive' },
+              },
+            },
+          },
+        },
+      },
+    ];
+
+    if (isLikelyIdentifier) {
+      orConditions.push(
+        { id: search },
+        { applicant_user_id: search },
+      );
+    }
+
+    const rows = await (this.prisma as any).applications.findMany({
+      where: {
+        event_id: eventId,
+        OR: orConditions,
+      },
+      orderBy: [{ updated_at: 'desc' }, { id: 'desc' }],
+      take: limit,
+      select: {
+        id: true,
+        decision_status: true,
+        attendance_records: {
+          select: {
+            status: true,
+            checked_in_at: true,
+          },
+        },
+        users_applications_applicant_user_idTousers: {
+          select: {
+            email: true,
+            applicant_profiles: {
+              select: {
+                first_name: true,
+                last_name: true,
+                full_name: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return rows.map((row: any) => ({
+      applicationId: row.id,
+      applicantName:
+        this.getDisplayName(
+          row.users_applications_applicant_user_idTousers?.applicant_profiles,
+        ) || 'Attendee',
+      applicantEmail:
+        row.users_applications_applicant_user_idTousers?.email ?? '',
+      decisionStatus: String(row.decision_status ?? 'NONE').toUpperCase(),
+      attendanceStatus: String(
+        row.attendance_records?.status ?? 'PENDING',
+      ).toUpperCase(),
+      checkedInAt: row.attendance_records?.checked_in_at ?? null,
+    }));
+  }
+
   async deleteAsset(eventId: string, fileId: string) {
     const file = await this.prisma.file_objects.findFirst({
       where: {
