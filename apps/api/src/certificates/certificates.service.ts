@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -11,14 +12,17 @@ import { StorageService } from '../common/storage/storage.service';
 import {
   CreateCertificateTemplateDto,
   CreateCertificateTemplateVersionDto,
+  DuplicateCertificateTemplateDto,
   FileSensitivity,
   IssueCertificateDto,
   IssueCertificatesBulkDto,
   ListCertificateRenderJobsQueryDto,
   ListCertificateTemplatesQueryDto,
   ListIssuedCertificatesQueryDto,
+  PublishCertificateTemplateDto,
   RegisterCertificateAssetUploadDto,
   RevokeIssuedCertificateDto,
+  UpdateCertificateTemplateDraftDto,
   UpdateCertificateTemplateDto,
 } from '@event-platform/shared';
 import { Prisma } from '@event-platform/db';
@@ -308,6 +312,9 @@ export class CertificatesService {
       updatedAt: row.updated_at,
       activeVersionId: activeVersion?.id ?? null,
       activeVersionNumber: activeVersion?.version_number ?? null,
+      draftRevision: Number(row.draft_revision ?? 0),
+      draftUpdatedAt: row.draft_updated_at ?? null,
+      layoutSchemaVersion: Number(row.layout_schema_version ?? 2),
     };
   }
 
@@ -319,6 +326,36 @@ export class CertificatesService {
       layout: row.layout_json,
       createdBy: row.created_by,
       createdAt: row.created_at,
+    };
+  }
+
+  private getTemplateDraftLayout(row: any) {
+    const draft = this.toRecord(row?.draft_layout_json);
+    const metadata = this.toRecord(draft.metadata);
+    const canvas = this.toRecord(draft.canvas);
+    const normalizedCanvas: Record<string, unknown> = {
+      width: Number(canvas.width ?? 1600),
+      height: Number(canvas.height ?? 1131),
+      unit: String(canvas.unit ?? 'px'),
+      gridSize: Number(canvas.gridSize ?? 8),
+      snapEnabled:
+        typeof canvas.snapEnabled === 'boolean' ? canvas.snapEnabled : true,
+    };
+    if (typeof canvas.backgroundColor === 'string') {
+      normalizedCanvas.backgroundColor = canvas.backgroundColor;
+    }
+    if (typeof canvas.backgroundAssetKey === 'string') {
+      normalizedCanvas.backgroundAssetKey = canvas.backgroundAssetKey;
+    }
+
+    return {
+      layoutSchemaVersion: 2,
+      canvas: normalizedCanvas,
+      elements: Array.isArray(draft.elements) ? draft.elements : [],
+      signatureSlots: Array.isArray(draft.signatureSlots)
+        ? draft.signatureSlots
+        : [],
+      metadata,
     };
   }
 
@@ -623,10 +660,9 @@ export class CertificatesService {
         });
       }
 
-      const templateId = crypto.randomUUID();
-      const template = await (tx as any).certificate_templates.create({
+      return (tx as any).certificate_templates.create({
         data: {
-          id: templateId,
+          id: crypto.randomUUID(),
           event_id: eventId,
           name: dto.name.trim(),
           type_key: typeKey,
@@ -635,40 +671,19 @@ export class CertificatesService {
           is_active: true,
           is_default: Boolean(dto.isDefault),
           metadata: dto.metadata ?? {},
+          layout_schema_version: 2,
+          draft_layout_json: dto.layout,
+          draft_revision: 0,
+          draft_updated_at: new Date(),
           created_by: actorId,
           updated_by: actorId,
           created_at: new Date(),
           updated_at: new Date(),
         },
       });
-
-      const version = await (tx as any).certificate_template_versions.create({
-        data: {
-          id: crypto.randomUUID(),
-          template_id: templateId,
-          version_number: 1,
-          layout_json: dto.layout,
-          created_by: actorId,
-          created_at: new Date(),
-        },
-      });
-
-      const updatedTemplate = await (tx as any).certificate_templates.update({
-        where: { id: templateId },
-        data: {
-          active_version_id: version.id,
-          updated_at: new Date(),
-          updated_by: actorId,
-        },
-      });
-
-      return { template: updatedTemplate, version };
     });
 
-    return this.mapTemplateRow(created.template, {
-      id: created.version.id,
-      version_number: created.version.version_number,
-    });
+    return this.mapTemplateRow(created, null);
   }
 
   async updateTemplate(
@@ -732,6 +747,164 @@ export class CertificatesService {
       : null;
 
     return this.mapTemplateRow(updated, activeVersion);
+  }
+
+  async deleteTemplate(eventId: string, templateId: string) {
+    await this.getTemplateForEvent(eventId, templateId);
+    await (this.prisma as any).certificate_templates.delete({
+      where: { id: templateId },
+    });
+  }
+
+  async getTemplateDraft(eventId: string, templateId: string) {
+    const template = await this.getTemplateForEvent(eventId, templateId);
+    return {
+      templateId: template.id,
+      revision: Number(template.draft_revision ?? 0),
+      layout: this.getTemplateDraftLayout(template),
+      updatedAt: template.draft_updated_at ?? null,
+    };
+  }
+
+  async upsertTemplateDraft(
+    eventId: string,
+    templateId: string,
+    dto: UpdateCertificateTemplateDraftDto,
+  ) {
+    const actorId = this.getActorId();
+    const existing = await this.getTemplateForEvent(eventId, templateId);
+    const currentRevision = Number(existing.draft_revision ?? 0);
+
+    if (dto.revision !== currentRevision) {
+      throw new ConflictException(
+        `Draft revision conflict. Current revision is ${currentRevision}.`,
+      );
+    }
+
+    const updated = await (this.prisma as any).certificate_templates.update({
+      where: { id: templateId },
+      data: {
+        draft_layout_json: dto.layout,
+        layout_schema_version: 2,
+        draft_revision: currentRevision + 1,
+        draft_updated_at: new Date(),
+        updated_by: actorId,
+        updated_at: new Date(),
+      },
+    });
+
+    return {
+      templateId: updated.id,
+      revision: Number(updated.draft_revision ?? 0),
+      layout: this.getTemplateDraftLayout(updated),
+      updatedAt: updated.draft_updated_at ?? null,
+    };
+  }
+
+  async publishTemplate(
+    eventId: string,
+    templateId: string,
+    dto: PublishCertificateTemplateDto,
+  ) {
+    const actorId = this.getActorId();
+    await this.getTemplateForEvent(eventId, templateId);
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const template = await (tx as any).certificate_templates.findFirst({
+        where: { id: templateId, event_id: eventId },
+      });
+
+      if (!template) {
+        throw new NotFoundException('Certificate template not found');
+      }
+
+      const latestVersion = await (tx as any).certificate_template_versions.findFirst({
+        where: { template_id: templateId },
+        orderBy: { version_number: 'desc' },
+        select: { version_number: true },
+      });
+
+      const nextVersion = Number(latestVersion?.version_number ?? 0) + 1;
+      const version = await (tx as any).certificate_template_versions.create({
+        data: {
+          id: crypto.randomUUID(),
+          template_id: templateId,
+          version_number: nextVersion,
+          layout_json: this.getTemplateDraftLayout(template),
+          created_by: actorId,
+          created_at: new Date(),
+        },
+      });
+
+      const updatedTemplate = await (tx as any).certificate_templates.update({
+        where: { id: templateId },
+        data: {
+          updated_by: actorId,
+          updated_at: new Date(),
+          active_version_id: dto.activate ? version.id : template.active_version_id,
+        },
+      });
+
+      return { template: updatedTemplate, version };
+    });
+
+    return {
+      template: this.mapTemplateRow(created.template, {
+        id: created.version.id,
+        version_number: created.version.version_number,
+      }),
+      version: this.mapTemplateVersionRow(created.version),
+    };
+  }
+
+  async duplicateTemplate(
+    eventId: string,
+    templateId: string,
+    dto: DuplicateCertificateTemplateDto,
+  ) {
+    const actorId = this.getActorId();
+    const source = await this.getTemplateForEvent(eventId, templateId);
+    const preferredName = (dto.name ?? '').trim() || `${source.name} Copy`;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      let name = preferredName;
+      let suffix = 2;
+
+      // Resolve unique name per event.
+      while (
+        await (tx as any).certificate_templates.findFirst({
+          where: { event_id: eventId, name },
+          select: { id: true },
+        })
+      ) {
+        name = `${preferredName} ${suffix}`;
+        suffix += 1;
+      }
+
+      return (tx as any).certificate_templates.create({
+        data: {
+          id: crypto.randomUUID(),
+          event_id: eventId,
+          name,
+          type_key: source.type_key,
+          type_label: source.type_label,
+          description: source.description ?? null,
+          is_active: Boolean(source.is_active),
+          is_default: false,
+          metadata: source.metadata ?? {},
+          layout_schema_version: 2,
+          draft_layout_json: this.getTemplateDraftLayout(source),
+          draft_revision: 0,
+          draft_updated_at: new Date(),
+          created_by: actorId,
+          updated_by: actorId,
+          created_at: new Date(),
+          updated_at: new Date(),
+        },
+      });
+    });
+
+    return this.mapTemplateRow(created, null);
   }
 
   async listTemplateVersions(eventId: string, templateId: string) {

@@ -14,58 +14,116 @@ export type CertificateElementType = z.infer<
   typeof CertificateElementTypeSchema
 >;
 
-export const CertificateTemplateElementSchema = z
-  .object({
-    id: z.string().min(1).max(128),
-    type: CertificateElementTypeSchema,
-    x: z.number().min(0),
-    y: z.number().min(0),
-    width: z.number().positive(),
-    height: z.number().positive(),
-    zIndex: z.number().int().min(0).max(9999).optional().default(0),
-    content: z.string().max(1000).optional(),
-    token: z.string().max(120).optional(),
-    assetKey: z.string().max(500).optional(),
-    signatureSlotKey: z.string().max(120).optional(),
-    style: z.record(z.string(), z.unknown()).optional().default({}),
-  })
-  .passthrough();
+const CertificateElementBaseSchema = z.object({
+  id: z.string().min(1).max(128),
+  x: z.number().min(0),
+  y: z.number().min(0),
+  width: z.number().positive(),
+  height: z.number().positive(),
+  zIndex: z.number().int().min(0).max(9999).optional().default(0),
+  rotation: z.number().min(-360).max(360).optional().default(0),
+  opacity: z.number().min(0).max(1).optional().default(1),
+  locked: z.boolean().optional().default(false),
+});
+
+export const CertificateTextStyleSchema = z.object({
+  fontFamily: z.string().trim().min(1).max(120).optional(),
+  fontSize: z.number().min(8).max(400).optional(),
+  fontWeight: z.number().int().min(100).max(900).optional(),
+  lineHeight: z.number().min(0.8).max(3).optional(),
+  letterSpacing: z.number().min(-10).max(40).optional(),
+  color: z.string().regex(HEX_COLOR).optional(),
+  textAlign: z.enum(['left', 'center', 'right']).optional(),
+});
+
+export type CertificateTextStyle = z.infer<typeof CertificateTextStyleSchema>;
+
+export const CertificateImageStyleSchema = z.object({
+  fit: z.enum(['contain', 'cover', 'fill']).optional(),
+  borderRadius: z.number().min(0).max(200).optional(),
+});
+
+export type CertificateImageStyle = z.infer<typeof CertificateImageStyleSchema>;
+
+export const CertificateQrStyleSchema = z.object({
+  foregroundColor: z.string().regex(HEX_COLOR).optional(),
+  backgroundColor: z.string().regex(HEX_COLOR).optional(),
+  showLabel: z.boolean().optional(),
+});
+
+export type CertificateQrStyle = z.infer<typeof CertificateQrStyleSchema>;
+
+export const CertificateTextElementSchema = CertificateElementBaseSchema.extend({
+  type: z.literal('text'),
+  content: z.string().trim().min(1).max(1000),
+  style: CertificateTextStyleSchema.optional().default({}),
+});
+
+export const CertificateDynamicTextElementSchema =
+  CertificateElementBaseSchema.extend({
+    type: z.literal('dynamic_text'),
+    token: z.string().trim().min(1).max(120),
+    style: CertificateTextStyleSchema.optional().default({}),
+  });
+
+export const CertificateImageElementSchema = CertificateElementBaseSchema.extend({
+  type: z.literal('image'),
+  assetKey: z.string().trim().max(500).optional(),
+  style: CertificateImageStyleSchema.optional().default({}),
+});
+
+export const CertificateSignatureElementSchema =
+  CertificateElementBaseSchema.extend({
+    type: z.literal('signature'),
+    signatureSlotKey: z.string().trim().min(1).max(120),
+    style: CertificateImageStyleSchema.optional().default({}),
+  });
+
+export const CertificateQrElementSchema = CertificateElementBaseSchema.extend({
+  type: z.literal('qr'),
+  token: z.string().trim().min(1).max(120).optional().default('qrVerificationUrl'),
+  style: CertificateQrStyleSchema.optional().default({}),
+});
+
+export const CertificateTemplateElementSchema = z.discriminatedUnion('type', [
+  CertificateTextElementSchema,
+  CertificateDynamicTextElementSchema,
+  CertificateImageElementSchema,
+  CertificateSignatureElementSchema,
+  CertificateQrElementSchema,
+]);
 
 export type CertificateTemplateElement = z.infer<
   typeof CertificateTemplateElementSchema
 >;
 
-export const CertificateSignatureSlotSchema = z
-  .object({
-    key: z.string().min(1).max(120),
-    label: z.string().min(1).max(120),
-    signerName: z.string().max(160).optional(),
-    signerTitle: z.string().max(160).optional(),
-    assetKey: z.string().max(500).optional(),
-  })
-  .passthrough();
+export const CertificateSignatureSlotSchema = z.object({
+  key: z.string().min(1).max(120),
+  label: z.string().min(1).max(120),
+  signerName: z.string().max(160).optional(),
+  signerTitle: z.string().max(160).optional(),
+  assetKey: z.string().max(500).optional(),
+});
 
 export type CertificateSignatureSlot = z.infer<
   typeof CertificateSignatureSlotSchema
 >;
 
-export const CertificateLayoutSchema = z
-  .object({
-    version: z.number().int().min(1).default(1),
-    canvas: z
-      .object({
-        width: z.number().positive().max(8000).default(1600),
-        height: z.number().positive().max(8000).default(1131),
-        unit: z.enum(['px']).default('px'),
-        backgroundColor: z.string().regex(HEX_COLOR).optional(),
-        backgroundAssetKey: z.string().max(500).optional(),
-      })
-      .passthrough(),
-    elements: z.array(CertificateTemplateElementSchema).default([]),
-    signatureSlots: z.array(CertificateSignatureSlotSchema).optional().default([]),
-    metadata: z.record(z.string(), z.unknown()).optional().default({}),
-  })
-  .passthrough();
+export const CertificateLayoutSchema = z.object({
+  layoutSchemaVersion: z.literal(2).default(2),
+  canvas: z.object({
+    width: z.number().positive().max(8000).default(1600),
+    height: z.number().positive().max(8000).default(1131),
+    unit: z.enum(['px']).default('px'),
+    backgroundColor: z.string().regex(HEX_COLOR).optional(),
+    backgroundAssetKey: z.string().max(500).optional(),
+    gridSize: z.number().int().min(4).max(128).optional().default(8),
+    snapEnabled: z.boolean().optional().default(true),
+  }),
+  elements: z.array(CertificateTemplateElementSchema).default([]),
+  signatureSlots: z.array(CertificateSignatureSlotSchema).optional().default([]),
+  metadata: z.record(z.string(), z.unknown()).optional().default({}),
+});
 
 export type CertificateLayout = z.infer<typeof CertificateLayoutSchema>;
 
@@ -128,6 +186,31 @@ export type ActivateCertificateTemplateVersionDto = z.infer<
   typeof ActivateCertificateTemplateVersionSchema
 >;
 
+export const UpdateCertificateTemplateDraftSchema = z.object({
+  revision: z.number().int().min(0),
+  layout: CertificateLayoutSchema,
+});
+
+export type UpdateCertificateTemplateDraftDto = z.infer<
+  typeof UpdateCertificateTemplateDraftSchema
+>;
+
+export const PublishCertificateTemplateSchema = z.object({
+  activate: z.boolean().optional().default(true),
+});
+
+export type PublishCertificateTemplateDto = z.infer<
+  typeof PublishCertificateTemplateSchema
+>;
+
+export const DuplicateCertificateTemplateSchema = z.object({
+  name: z.string().trim().min(1).max(150).optional(),
+});
+
+export type DuplicateCertificateTemplateDto = z.infer<
+  typeof DuplicateCertificateTemplateSchema
+>;
+
 export const ListCertificateTemplatesQuerySchema = z.object({
   includeArchived: z.coerce.boolean().optional().default(false),
   typeKey: z.string().trim().max(80).optional(),
@@ -150,6 +233,17 @@ export type CertificateTemplateVersionResponse = z.infer<
   typeof CertificateTemplateVersionResponseSchema
 >;
 
+export const CertificateTemplateDraftResponseSchema = z.object({
+  templateId: z.string().uuid(),
+  revision: z.number().int().min(0),
+  layout: CertificateLayoutSchema,
+  updatedAt: z.coerce.date().nullable(),
+});
+
+export type CertificateTemplateDraftResponse = z.infer<
+  typeof CertificateTemplateDraftResponseSchema
+>;
+
 export const CertificateTemplateResponseSchema = z.object({
   id: z.string().uuid(),
   eventId: z.string().uuid(),
@@ -167,6 +261,9 @@ export const CertificateTemplateResponseSchema = z.object({
   updatedAt: z.coerce.date(),
   activeVersionId: z.string().uuid().nullable().optional(),
   activeVersionNumber: z.number().int().nullable().optional(),
+  draftRevision: z.number().int().min(0),
+  draftUpdatedAt: z.coerce.date().nullable(),
+  layoutSchemaVersion: z.number().int().min(2).default(2),
 });
 
 export type CertificateTemplateResponse = z.infer<

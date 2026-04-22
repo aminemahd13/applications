@@ -63,39 +63,69 @@ function normalizeElement(value: unknown): CertificateTemplateElement | null {
     return null;
   }
 
-  const element: CertificateTemplateElement = {
+  const base = {
     id,
     type: type as CertificateTemplateElement["type"],
     x,
     y,
     width,
     height,
+    zIndex: Math.max(0, Math.round(toFiniteNumber(record.zIndex) ?? 0)),
+    rotation: toFiniteNumber(record.rotation) ?? 0,
+    opacity: Math.min(1, Math.max(0, toFiniteNumber(record.opacity) ?? 1)),
+    locked: Boolean(record.locked),
   };
 
-  const zIndex = toFiniteNumber(record.zIndex);
-  if (zIndex !== null) {
-    element.zIndex = Math.max(0, Math.round(zIndex));
+  const style = toRecord(record.style) ?? {};
+
+  if (base.type === "text") {
+    return {
+      ...base,
+      type: "text",
+      content: typeof record.content === "string" ? record.content : "",
+      style,
+    };
   }
 
-  if (typeof record.content === "string") {
-    element.content = record.content;
-  }
-  if (typeof record.token === "string") {
-    element.token = record.token;
-  }
-  if (typeof record.assetKey === "string") {
-    element.assetKey = record.assetKey;
-  }
-  if (typeof record.signatureSlotKey === "string") {
-    element.signatureSlotKey = record.signatureSlotKey;
+  if (base.type === "dynamic_text") {
+    return {
+      ...base,
+      type: "dynamic_text",
+      token: typeof record.token === "string" ? record.token : "participantName",
+      style,
+    };
   }
 
-  const style = toRecord(record.style);
-  if (style) {
-    element.style = style;
+  if (base.type === "image") {
+    return {
+      ...base,
+      type: "image",
+      assetKey: typeof record.assetKey === "string" ? record.assetKey : undefined,
+      style,
+    };
   }
 
-  return element;
+  if (base.type === "signature") {
+    return {
+      ...base,
+      type: "signature",
+      signatureSlotKey:
+        typeof record.signatureSlotKey === "string" && record.signatureSlotKey.trim()
+          ? record.signatureSlotKey.trim()
+          : "signature_slot",
+      style,
+    };
+  }
+
+  return {
+    ...base,
+    type: "qr",
+    token:
+      typeof record.token === "string" && record.token.trim().length > 0
+        ? record.token.trim()
+        : "qrVerificationUrl",
+    style,
+  };
 }
 
 function normalizeSignatureSlot(value: unknown): CertificateSignatureSlot | null {
@@ -155,7 +185,6 @@ export function parseCertificateLayout(value: unknown): CertificateLayout | null
     .filter((slot): slot is CertificateSignatureSlot => slot !== null);
   if (signatureSlots.length !== rawSlots.length) return null;
 
-  const versionRaw = toFiniteNumber(layoutRecord.version);
   const backgroundColor =
     typeof canvasRecord.backgroundColor === "string" ? canvasRecord.backgroundColor : undefined;
   const backgroundAssetKey =
@@ -163,15 +192,21 @@ export function parseCertificateLayout(value: unknown): CertificateLayout | null
       ? canvasRecord.backgroundAssetKey
       : undefined;
 
+  const gridSizeRaw = toFiniteNumber(canvasRecord.gridSize);
+  const gridSize = gridSizeRaw === null ? 8 : Math.max(4, Math.round(gridSizeRaw));
+  const snapEnabled =
+    typeof canvasRecord.snapEnabled === "boolean" ? canvasRecord.snapEnabled : true;
+
   return {
-    version:
-      versionRaw === null || versionRaw <= 0 ? 1 : Math.max(1, Math.round(versionRaw)),
+    layoutSchemaVersion: 2,
     canvas: {
       width: canvasWidth,
       height: canvasHeight,
       unit: "px",
       backgroundColor,
       backgroundAssetKey,
+      gridSize,
+      snapEnabled,
     },
     elements,
     signatureSlots,
@@ -220,4 +255,3 @@ export function computeCanvasScale(input: {
   if (!Number.isFinite(nextScale) || nextScale <= 0) return 1;
   return Math.max(nextScale, 0.05);
 }
-

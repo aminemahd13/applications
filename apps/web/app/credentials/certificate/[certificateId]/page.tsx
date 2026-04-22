@@ -107,11 +107,12 @@ function formatDateTime(value: string | null | undefined): string {
 }
 
 function getStyleNumber(
-  style: Record<string, unknown> | undefined,
+  style: unknown,
   key: string,
   fallback: number,
 ): number {
-  const raw = style?.[key];
+  const record = style && typeof style === "object" ? (style as Record<string, unknown>) : null;
+  const raw = record?.[key];
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
   if (typeof raw === "string") {
     const parsed = Number(raw);
@@ -121,11 +122,12 @@ function getStyleNumber(
 }
 
 function getStyleString(
-  style: Record<string, unknown> | undefined,
+  style: unknown,
   key: string,
   fallback: string,
 ): string {
-  const raw = style?.[key];
+  const record = style && typeof style === "object" ? (style as Record<string, unknown>) : null;
+  const raw = record?.[key];
   if (typeof raw === "string" && raw.trim().length > 0) return raw;
   return fallback;
 }
@@ -393,7 +395,10 @@ export default function CertificatePage() {
                           const fontWeight = getStyleNumber(style, "fontWeight", 500);
                           const textAlign = getStyleString(style, "textAlign", "left");
                           const color = getStyleString(style, "color", "#0f172a");
-                          const tokenKey = (element.token ?? "").trim();
+                          const tokenKey =
+                            element.type === "dynamic_text" || element.type === "qr"
+                              ? (element.token ?? "").trim()
+                              : "";
                           const tokenValue = tokenKey ? tokenValues[tokenKey] : "";
 
                           const frameStyle: CSSProperties = {

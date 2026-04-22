@@ -7,7 +7,7 @@ export type CertificateElementType =
   | "signature"
   | "qr";
 
-export interface CertificateTemplateElement {
+export interface CertificateElementBase {
   id: string;
   type: CertificateElementType;
   x: number;
@@ -15,12 +15,68 @@ export interface CertificateTemplateElement {
   width: number;
   height: number;
   zIndex?: number;
-  content?: string;
-  token?: string;
-  assetKey?: string;
-  signatureSlotKey?: string;
-  style?: Record<string, unknown>;
+  rotation?: number;
+  opacity?: number;
+  locked?: boolean;
 }
+
+export interface CertificateTextStyle {
+  fontFamily?: string;
+  fontSize?: number;
+  fontWeight?: number;
+  lineHeight?: number;
+  letterSpacing?: number;
+  color?: string;
+  textAlign?: "left" | "center" | "right";
+}
+
+export interface CertificateImageStyle {
+  fit?: "contain" | "cover" | "fill";
+  borderRadius?: number;
+}
+
+export interface CertificateQrStyle {
+  foregroundColor?: string;
+  backgroundColor?: string;
+  showLabel?: boolean;
+}
+
+export interface CertificateTextElement extends CertificateElementBase {
+  type: "text";
+  content: string;
+  style?: CertificateTextStyle;
+}
+
+export interface CertificateDynamicTextElement extends CertificateElementBase {
+  type: "dynamic_text";
+  token: string;
+  style?: CertificateTextStyle;
+}
+
+export interface CertificateImageElement extends CertificateElementBase {
+  type: "image";
+  assetKey?: string;
+  style?: CertificateImageStyle;
+}
+
+export interface CertificateSignatureElement extends CertificateElementBase {
+  type: "signature";
+  signatureSlotKey: string;
+  style?: CertificateImageStyle;
+}
+
+export interface CertificateQrElement extends CertificateElementBase {
+  type: "qr";
+  token?: string;
+  style?: CertificateQrStyle;
+}
+
+export type CertificateTemplateElement =
+  | CertificateTextElement
+  | CertificateDynamicTextElement
+  | CertificateImageElement
+  | CertificateSignatureElement
+  | CertificateQrElement;
 
 export interface CertificateSignatureSlot {
   key: string;
@@ -31,13 +87,15 @@ export interface CertificateSignatureSlot {
 }
 
 export interface CertificateLayout {
-  version: number;
+  layoutSchemaVersion: 2;
   canvas: {
     width: number;
     height: number;
     unit: "px";
     backgroundColor?: string;
     backgroundAssetKey?: string;
+    gridSize?: number;
+    snapEnabled?: boolean;
   };
   elements: CertificateTemplateElement[];
   signatureSlots: CertificateSignatureSlot[];
@@ -61,6 +119,16 @@ export interface CertificateTemplateSummary {
   updatedAt: string;
   activeVersionId: string | null;
   activeVersionNumber: number | null;
+  draftRevision: number;
+  draftUpdatedAt: string | null;
+  layoutSchemaVersion: number;
+}
+
+export interface CertificateTemplateDraft {
+  templateId: string;
+  revision: number;
+  layout: CertificateLayout;
+  updatedAt: string | null;
 }
 
 export interface CertificateTemplateVersion {
@@ -136,12 +204,14 @@ function unwrapData<T>(value: unknown): T {
 }
 
 export const DEFAULT_CERTIFICATE_LAYOUT: CertificateLayout = {
-  version: 1,
+  layoutSchemaVersion: 2,
   canvas: {
     width: 1600,
     height: 1131,
     unit: "px",
     backgroundColor: "#ffffff",
+    gridSize: 8,
+    snapEnabled: true,
   },
   elements: [
     {
@@ -154,6 +224,7 @@ export const DEFAULT_CERTIFICATE_LAYOUT: CertificateLayout = {
       zIndex: 1,
       content: "Certificate of Participation",
       style: {
+        fontFamily: "Geist",
         fontSize: 58,
         fontWeight: 700,
         color: "#0f172a",
@@ -167,9 +238,10 @@ export const DEFAULT_CERTIFICATE_LAYOUT: CertificateLayout = {
       y: 260,
       width: 760,
       height: 44,
-      zIndex: 1,
+      zIndex: 2,
       content: "This certifies that",
       style: {
+        fontFamily: "Geist",
         fontSize: 30,
         color: "#334155",
         textAlign: "center",
@@ -182,9 +254,10 @@ export const DEFAULT_CERTIFICATE_LAYOUT: CertificateLayout = {
       y: 330,
       width: 1000,
       height: 90,
-      zIndex: 1,
+      zIndex: 3,
       token: "participantName",
       style: {
+        fontFamily: "Geist",
         fontSize: 72,
         fontWeight: 700,
         color: "#0f172a",
@@ -198,9 +271,10 @@ export const DEFAULT_CERTIFICATE_LAYOUT: CertificateLayout = {
       y: 460,
       width: 940,
       height: 42,
-      zIndex: 1,
+      zIndex: 4,
       content: "has successfully participated in",
       style: {
+        fontFamily: "Geist",
         fontSize: 30,
         color: "#334155",
         textAlign: "center",
@@ -213,9 +287,10 @@ export const DEFAULT_CERTIFICATE_LAYOUT: CertificateLayout = {
       y: 520,
       width: 1080,
       height: 72,
-      zIndex: 1,
+      zIndex: 5,
       token: "eventTitle",
       style: {
+        fontFamily: "Geist",
         fontSize: 52,
         fontWeight: 600,
         color: "#0f172a",
@@ -229,9 +304,10 @@ export const DEFAULT_CERTIFICATE_LAYOUT: CertificateLayout = {
       y: 980,
       width: 420,
       height: 36,
-      zIndex: 1,
+      zIndex: 6,
       token: "issuedDate",
       style: {
+        fontFamily: "Geist",
         fontSize: 24,
         color: "#334155",
       },
@@ -243,8 +319,13 @@ export const DEFAULT_CERTIFICATE_LAYOUT: CertificateLayout = {
       y: 840,
       width: 200,
       height: 200,
-      zIndex: 1,
+      zIndex: 7,
       token: "qrVerificationUrl",
+      style: {
+        foregroundColor: "#0f172a",
+        backgroundColor: "#ffffff",
+        showLabel: true,
+      },
     },
   ],
   signatureSlots: [
@@ -328,6 +409,81 @@ export async function updateCertificateTemplate(
     `/events/${eventId}/certificates/templates/${templateId}`,
     {
       method: "PATCH",
+      body: input,
+      csrfToken,
+    },
+  );
+  return unwrapData<CertificateTemplateSummary>(response);
+}
+
+export async function deleteCertificateTemplate(
+  eventId: string,
+  templateId: string,
+  csrfToken?: string,
+): Promise<void> {
+  await apiClient(`/events/${eventId}/certificates/templates/${templateId}`, {
+    method: "DELETE",
+    csrfToken,
+  });
+}
+
+export async function getCertificateTemplateDraft(
+  eventId: string,
+  templateId: string,
+): Promise<CertificateTemplateDraft> {
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/templates/${templateId}/draft`,
+  );
+  return unwrapData<CertificateTemplateDraft>(response);
+}
+
+export async function updateCertificateTemplateDraft(
+  eventId: string,
+  templateId: string,
+  input: { revision: number; layout: CertificateLayout },
+  csrfToken?: string,
+): Promise<CertificateTemplateDraft> {
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/templates/${templateId}/draft`,
+    {
+      method: "PUT",
+      body: input,
+      csrfToken,
+    },
+  );
+  return unwrapData<CertificateTemplateDraft>(response);
+}
+
+export async function publishCertificateTemplate(
+  eventId: string,
+  templateId: string,
+  input: { activate?: boolean } = { activate: true },
+  csrfToken?: string,
+): Promise<{ template: CertificateTemplateSummary; version: CertificateTemplateVersion }> {
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/templates/${templateId}/publish`,
+    {
+      method: "POST",
+      body: input,
+      csrfToken,
+    },
+  );
+  return unwrapData<{
+    template: CertificateTemplateSummary;
+    version: CertificateTemplateVersion;
+  }>(response);
+}
+
+export async function duplicateCertificateTemplate(
+  eventId: string,
+  templateId: string,
+  input: { name?: string } = {},
+  csrfToken?: string,
+): Promise<CertificateTemplateSummary> {
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/templates/${templateId}/duplicate`,
+    {
+      method: "POST",
       body: input,
       csrfToken,
     },

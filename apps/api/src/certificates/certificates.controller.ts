@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Res,
   UseGuards,
@@ -16,13 +17,16 @@ import {
   ActivateCertificateTemplateVersionSchema,
   CreateCertificateTemplateSchema,
   CreateCertificateTemplateVersionSchema,
+  DuplicateCertificateTemplateSchema,
   IssueCertificateSchema,
   IssueCertificatesBulkSchema,
   ListCertificateRenderJobsQuerySchema,
   ListCertificateTemplatesQuerySchema,
   ListIssuedCertificatesQuerySchema,
+  PublishCertificateTemplateSchema,
   RegisterCertificateAssetUploadSchema,
   RevokeIssuedCertificateSchema,
+  UpdateCertificateTemplateDraftSchema,
   UpdateCertificateTemplateSchema,
   Permission,
 } from '@event-platform/shared';
@@ -67,6 +71,77 @@ export class CertificatesController {
   ) {
     const dto = UpdateCertificateTemplateSchema.parse(body ?? {});
     const data = await this.certificatesService.updateTemplate(
+      eventId,
+      templateId,
+      dto,
+    );
+    return { data };
+  }
+
+  @Delete('events/:eventId/certificates/templates/:templateId')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async deleteTemplate(
+    @Param('eventId') eventId: string,
+    @Param('templateId') templateId: string,
+  ) {
+    await this.certificatesService.deleteTemplate(eventId, templateId);
+    return { status: 'DELETED' };
+  }
+
+  @Get('events/:eventId/certificates/templates/:templateId/draft')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async getTemplateDraft(
+    @Param('eventId') eventId: string,
+    @Param('templateId') templateId: string,
+  ) {
+    const data = await this.certificatesService.getTemplateDraft(
+      eventId,
+      templateId,
+    );
+    return { data };
+  }
+
+  @Put('events/:eventId/certificates/templates/:templateId/draft')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async upsertTemplateDraft(
+    @Param('eventId') eventId: string,
+    @Param('templateId') templateId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const dto = UpdateCertificateTemplateDraftSchema.parse(body ?? {});
+    const data = await this.certificatesService.upsertTemplateDraft(
+      eventId,
+      templateId,
+      dto,
+    );
+    return { data };
+  }
+
+  @Post('events/:eventId/certificates/templates/:templateId/publish')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async publishTemplate(
+    @Param('eventId') eventId: string,
+    @Param('templateId') templateId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const dto = PublishCertificateTemplateSchema.parse(body ?? {});
+    const data = await this.certificatesService.publishTemplate(
+      eventId,
+      templateId,
+      dto,
+    );
+    return { data };
+  }
+
+  @Post('events/:eventId/certificates/templates/:templateId/duplicate')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async duplicateTemplate(
+    @Param('eventId') eventId: string,
+    @Param('templateId') templateId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const dto = DuplicateCertificateTemplateSchema.parse(body ?? {});
+    const data = await this.certificatesService.duplicateTemplate(
       eventId,
       templateId,
       dto,

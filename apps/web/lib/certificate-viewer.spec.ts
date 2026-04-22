@@ -47,11 +47,13 @@ describe("certificate-viewer helpers", () => {
 
   it("parses valid certificate layout payloads", () => {
     const layout = parseCertificateLayout({
-      version: 2,
+      layoutSchemaVersion: 2,
       canvas: {
         width: 1600,
         height: 1131,
         unit: "px",
+        gridSize: 8,
+        snapEnabled: true,
       },
       elements: [
         {
@@ -73,8 +75,11 @@ describe("certificate-viewer helpers", () => {
     });
 
     expect(layout).not.toBeNull();
+    expect(layout?.layoutSchemaVersion).toBe(2);
     expect(layout?.canvas.width).toBe(1600);
     expect(layout?.canvas.height).toBe(1131);
+    expect(layout?.canvas.gridSize).toBe(8);
+    expect(layout?.canvas.snapEnabled).toBe(true);
     expect(layout?.elements[0]?.id).toBe("title");
     expect(layout?.signatureSlots[0]?.key).toBe("lead");
   });
@@ -115,4 +120,3 @@ describe("certificate-viewer helpers", () => {
     });
   });
 });
-

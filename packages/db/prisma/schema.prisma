@@ -545,6 +545,10 @@ model certificate_templates {
   archived_at                  DateTime?                       @db.Timestamptz(6)
   active_version_id            String?                         @db.Uuid
   metadata                     Json                            @default("{}")
+  layout_schema_version        Int                             @default(2)
+  draft_layout_json            Json                            @default("{}")
+  draft_revision               Int                             @default(0)
+  draft_updated_at             DateTime?                       @db.Timestamptz(6)
   created_by                   String                          @db.Uuid
   updated_by                   String?                         @db.Uuid
   created_at                   DateTime                        @default(now()) @db.Timestamptz(6)
