@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { Monitor, RefreshCw } from "lucide-react";
+import {
+  Monitor,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  RefreshCw,
+} from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/lib/api";
 import { useAuth, usePermissions } from "@/lib/auth-context";
@@ -129,6 +136,8 @@ export function CertificateStudioWorkspace() {
 
   const [zoomPercent, setZoomPercent] = useState(100);
   const [fitRequestId, setFitRequestId] = useState(0);
+  const [isLeftRailCollapsed, setIsLeftRailCollapsed] = useState(false);
+  const [isInspectorCollapsed, setIsInspectorCollapsed] = useState(false);
 
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -145,6 +154,18 @@ export function CertificateStudioWorkspace() {
 
   const activeVersionNumber = selectedTemplate?.activeVersionNumber ?? null;
   const dirty = useMemo(() => layoutHash(layout) !== savedHash, [layout, savedHash]);
+  const workspaceGridClass = useMemo(() => {
+    if (isLeftRailCollapsed && isInspectorCollapsed) {
+      return "grid gap-4";
+    }
+    if (isLeftRailCollapsed) {
+      return "grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]";
+    }
+    if (isInspectorCollapsed) {
+      return "grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]";
+    }
+    return "grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)_360px]";
+  }, [isInspectorCollapsed, isLeftRailCollapsed]);
 
   const refreshIssuance = useCallback(async () => {
     const [issuedRows, jobRows] = await Promise.all([
@@ -264,6 +285,27 @@ export function CertificateStudioWorkspace() {
     if (!selectedTemplateId) return;
     window.localStorage.setItem(`cert-studio-zoom:${selectedTemplateId}`, String(zoomPercent));
   }, [selectedTemplateId, zoomPercent]);
+
+  useEffect(() => {
+    if (!canManage || isLoading) return;
+    let cancelled = false;
+
+    listCertificateAssets(eventId, assetKindFilter)
+      .then((rows) => {
+        if (!cancelled) {
+          setAssets(rows);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          toast.error("Failed to refresh assets.");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assetKindFilter, canManage, eventId, isLoading]);
 
   useEffect(() => {
     if (!canManage || !selectedTemplateId || !isDraftReady) return;
@@ -849,9 +891,25 @@ export function CertificateStudioWorkspace() {
     <div className="space-y-4">
       <PageHeader
         title="Certificate Studio"
-        description="Unified pro workspace for templates, assets, draft autosave, publishing, and issuance."
+        description="Templates, assets, publishing, and issuance in one place."
       >
         <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setIsLeftRailCollapsed((previous) => !previous)}>
+            {isLeftRailCollapsed ? (
+              <PanelLeftOpen className="mr-1.5 h-4 w-4" />
+            ) : (
+              <PanelLeftClose className="mr-1.5 h-4 w-4" />
+            )}
+            {isLeftRailCollapsed ? "Show left panel" : "Hide left panel"}
+          </Button>
+          <Button variant="outline" onClick={() => setIsInspectorCollapsed((previous) => !previous)}>
+            {isInspectorCollapsed ? (
+              <PanelRightOpen className="mr-1.5 h-4 w-4" />
+            ) : (
+              <PanelRightClose className="mr-1.5 h-4 w-4" />
+            )}
+            {isInspectorCollapsed ? "Show inspector" : "Hide inspector"}
+          </Button>
           <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
             <RefreshCw className={`mr-1.5 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
             Refresh status
@@ -922,80 +980,82 @@ export function CertificateStudioWorkspace() {
           />
 
           <div className="rounded-xl border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-            Draft revision r{draftRevision} • {dirty ? "unsaved changes" : "all changes saved"} • Autosave 800ms •
+            Draft revision r{draftRevision} | {dirty ? "unsaved changes" : "all changes saved"} | Autosave 800ms |
             {" "}Keyboard: Arrows nudge, Shift+Arrows 10px, Ctrl/Cmd+D duplicate, Del delete
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)_360px]">
-            <div>
-              <LeftRail
-                canManage={canManage}
-                view={view}
-                onViewChange={setView}
-                templates={templates}
-                selectedTemplateId={selectedTemplateId}
-                versions={versions}
-                selectedVersionId={selectedVersionId}
-                onSelectTemplate={setSelectedTemplateId}
-                onSelectVersion={setSelectedVersionId}
-                onCreateTemplate={handleCreateTemplate}
-                onDuplicateTemplate={handleDuplicateTemplate}
-                onDeleteTemplate={handleDeleteTemplate}
-                onArchiveTemplate={handleArchiveTemplate}
-                templateNameDraft={templateNameDraft}
-                typeLabelDraft={typeLabelDraft}
-                typeKeyDraft={typeKeyDraft}
-                onTemplateNameDraftChange={setTemplateNameDraft}
-                onTypeLabelDraftChange={(value) => {
-                  setTypeLabelDraft(value);
-                  if (!typeKeyDraft.trim()) {
-                    setTypeKeyDraft(slugifyTypeKey(value));
-                  }
-                }}
-                onTypeKeyDraftChange={(value) => setTypeKeyDraft(slugifyTypeKey(value))}
-                isCreatingTemplate={isCreatingTemplate}
-                isBusyTemplateAction={isBusyTemplateAction}
-                assetMode={assetMode}
-                onAssetModeChange={setAssetMode}
-                assets={assets}
-                assetSearch={assetSearch}
-                onAssetSearchChange={setAssetSearch}
-                assetKindFilter={assetKindFilter}
-                onAssetKindFilterChange={setAssetKindFilter}
-                onApplyAsset={handleApplyAsset}
-                onUploadAsset={handleUploadAsset}
-                onDeleteAsset={handleDeleteAsset}
-                isUploadingAsset={isUploadingAsset}
-                issuanceApplicationIds={issuanceApplicationIds}
-                onIssuanceApplicationIdsChange={setIssuanceApplicationIds}
-                issuanceIssuerName={issuanceIssuerName}
-                onIssuanceIssuerNameChange={setIssuanceIssuerName}
-                onIssueCertificates={handleIssueCertificates}
-                isIssuing={isIssuing}
-                issuedCertificates={issuedCertificates}
-                renderJobs={renderJobs}
-                onRetryRenderJob={handleRetryRenderJob}
-                onRefreshIssuance={() => {
-                  setIsRefreshingIssuance(true);
-                  refreshIssuance()
-                    .catch(() => toast.error("Failed to refresh issuance status."))
-                    .finally(() => setIsRefreshingIssuance(false));
-                }}
-                isRefreshingIssuance={isRefreshingIssuance}
-              />
+          <div className={workspaceGridClass}>
+            {!isLeftRailCollapsed && (
+              <div>
+                <LeftRail
+                  canManage={canManage}
+                  view={view}
+                  onViewChange={setView}
+                  templates={templates}
+                  selectedTemplateId={selectedTemplateId}
+                  versions={versions}
+                  selectedVersionId={selectedVersionId}
+                  onSelectTemplate={setSelectedTemplateId}
+                  onSelectVersion={setSelectedVersionId}
+                  onCreateTemplate={handleCreateTemplate}
+                  onDuplicateTemplate={handleDuplicateTemplate}
+                  onDeleteTemplate={handleDeleteTemplate}
+                  onArchiveTemplate={handleArchiveTemplate}
+                  templateNameDraft={templateNameDraft}
+                  typeLabelDraft={typeLabelDraft}
+                  typeKeyDraft={typeKeyDraft}
+                  onTemplateNameDraftChange={setTemplateNameDraft}
+                  onTypeLabelDraftChange={(value) => {
+                    setTypeLabelDraft(value);
+                    if (!typeKeyDraft.trim()) {
+                      setTypeKeyDraft(slugifyTypeKey(value));
+                    }
+                  }}
+                  onTypeKeyDraftChange={(value) => setTypeKeyDraft(slugifyTypeKey(value))}
+                  isCreatingTemplate={isCreatingTemplate}
+                  isBusyTemplateAction={isBusyTemplateAction}
+                  assetMode={assetMode}
+                  onAssetModeChange={setAssetMode}
+                  assets={assets}
+                  assetSearch={assetSearch}
+                  onAssetSearchChange={setAssetSearch}
+                  assetKindFilter={assetKindFilter}
+                  onAssetKindFilterChange={setAssetKindFilter}
+                  onApplyAsset={handleApplyAsset}
+                  onUploadAsset={handleUploadAsset}
+                  onDeleteAsset={handleDeleteAsset}
+                  isUploadingAsset={isUploadingAsset}
+                  issuanceApplicationIds={issuanceApplicationIds}
+                  onIssuanceApplicationIdsChange={setIssuanceApplicationIds}
+                  issuanceIssuerName={issuanceIssuerName}
+                  onIssuanceIssuerNameChange={setIssuanceIssuerName}
+                  onIssueCertificates={handleIssueCertificates}
+                  isIssuing={isIssuing}
+                  issuedCertificates={issuedCertificates}
+                  renderJobs={renderJobs}
+                  onRetryRenderJob={handleRetryRenderJob}
+                  onRefreshIssuance={() => {
+                    setIsRefreshingIssuance(true);
+                    refreshIssuance()
+                      .catch(() => toast.error("Failed to refresh issuance status."))
+                      .finally(() => setIsRefreshingIssuance(false));
+                  }}
+                  isRefreshingIssuance={isRefreshingIssuance}
+                />
 
-              <div className="mt-2">
-                <Button
-                  className="w-full"
-                  size="sm"
-                  variant="outline"
-                  onClick={handleActivateVersion}
-                  disabled={!selectedTemplateId || !selectedVersionId}
-                >
-                  Activate selected published version
-                </Button>
+                <div className="mt-2">
+                  <Button
+                    className="w-full"
+                    size="sm"
+                    variant="outline"
+                    onClick={handleActivateVersion}
+                    disabled={!selectedTemplateId || !selectedVersionId}
+                  >
+                    Activate selected published version
+                  </Button>
+                </div>
               </div>
-            </div>
+            )}
 
             <EditorCanvas
               canManage={canManage}
@@ -1010,22 +1070,24 @@ export function CertificateStudioWorkspace() {
               onFitCalculated={setZoomPercent}
             />
 
-            <InspectorPanel
-              canManage={canManage}
-              layout={layout}
-              selectedElement={selectedElement}
-              selectedCount={selectedIds.length}
-              onPatchSelection={patchSelection}
-              onPatchSelectionStyle={patchSelectionStyle}
-              onUpdatePrimaryTextContent={handleUpdateTextContent}
-              onUpdatePrimaryToken={handleUpdatePrimaryToken}
-              onUpdateCanvas={handleUpdateCanvas}
-              onSetAssetMode={setAssetMode}
-              onDeleteSelection={handleDeleteSelection}
-              onAddSignatureSlot={handleAddSignatureSlot}
-              onUpdateSignatureSlot={handleUpdateSignatureSlot}
-              onRemoveSignatureSlot={handleRemoveSignatureSlot}
-            />
+            {!isInspectorCollapsed && (
+              <InspectorPanel
+                canManage={canManage}
+                layout={layout}
+                selectedElement={selectedElement}
+                selectedCount={selectedIds.length}
+                onPatchSelection={patchSelection}
+                onPatchSelectionStyle={patchSelectionStyle}
+                onUpdatePrimaryTextContent={handleUpdateTextContent}
+                onUpdatePrimaryToken={handleUpdatePrimaryToken}
+                onUpdateCanvas={handleUpdateCanvas}
+                onSetAssetMode={setAssetMode}
+                onDeleteSelection={handleDeleteSelection}
+                onAddSignatureSlot={handleAddSignatureSlot}
+                onUpdateSignatureSlot={handleUpdateSignatureSlot}
+                onRemoveSignatureSlot={handleRemoveSignatureSlot}
+              />
+            )}
           </div>
 
           <div className="rounded-xl border p-3">

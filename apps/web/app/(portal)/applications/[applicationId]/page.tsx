@@ -11,12 +11,14 @@ import {
   AlertCircle,
   CheckCircle2,
   Clock,
+  FileText,
   PartyPopper,
   QrCode,
   ShieldCheck,
   Ticket,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
@@ -37,6 +39,18 @@ interface StepState {
   category: string;
 }
 
+interface ApplicationCertificate {
+  id: string;
+  certificateTypeLabel: string;
+  certificateUrl: string;
+  verifiableCredentialUrl: string;
+  issuedAt: string;
+  revokedAt: string | null;
+  status: "ISSUED" | "REVOKED";
+  renderStatus: "PENDING" | "PROCESSING" | "DONE" | "FAILED";
+  pdfUrl: string | null;
+}
+
 interface ApplicationDetail {
   id: string;
   eventId: string;
@@ -53,6 +67,7 @@ interface ApplicationDetail {
     revokedAt: string | null;
     status: "ISSUED" | "REVOKED";
   };
+  certificates?: ApplicationCertificate[];
   stepStates: StepState[];
   submissionHistory?: Array<{
     id: string;
@@ -177,6 +192,33 @@ export default function ApplicationWorkspacePage() {
                   status: raw.completionCredential.status ?? "ISSUED",
                 }
               : undefined,
+          certificates: Array.isArray(raw.certificates)
+            ? raw.certificates
+                .filter((certificate: unknown) => Boolean(certificate) && typeof certificate === "object")
+                .map((certificate: any) => ({
+                  id: String(certificate.id ?? ""),
+                  certificateTypeLabel: String(certificate.certificateTypeLabel ?? "Certificate"),
+                  certificateUrl: String(certificate.certificateUrl ?? ""),
+                  verifiableCredentialUrl: String(certificate.verifiableCredentialUrl ?? ""),
+                  issuedAt: String(certificate.issuedAt ?? ""),
+                  revokedAt: certificate.revokedAt ?? null,
+                  status: certificate.status === "REVOKED" ? "REVOKED" : "ISSUED",
+                  renderStatus:
+                    certificate.renderStatus === "DONE" ||
+                    certificate.renderStatus === "FAILED" ||
+                    certificate.renderStatus === "PROCESSING"
+                      ? certificate.renderStatus
+                      : "PENDING",
+                  pdfUrl:
+                    typeof certificate.pdfUrl === "string" && certificate.pdfUrl.length > 0
+                      ? certificate.pdfUrl
+                      : null,
+                }))
+                .filter((certificate: ApplicationCertificate) =>
+                  certificate.certificateUrl.length > 0 &&
+                  certificate.verifiableCredentialUrl.length > 0,
+                )
+            : [],
           stepStates: (raw.stepStates ?? []).map((s: any) => ({
             id: s.stepId ?? s.id,
             stepId: s.stepId ?? s.id,
@@ -227,10 +269,39 @@ export default function ApplicationWorkspacePage() {
     confirmationSteps.every((s) => s.status === "APPROVED");
   const showTicketBanner =
     app.decisionStatus === "ACCEPTED" && allConfirmationStepsApproved;
-  const completionCredential =
+  const completionCredentialFallback =
     app.completionCredential?.status === "ISSUED"
       ? app.completionCredential
       : undefined;
+  const issuedCertificates =
+    (app.certificates ?? []).filter(
+      (certificate) => certificate.status === "ISSUED",
+    ) ?? [];
+  const visibleCertificates =
+    issuedCertificates.length > 0
+      ? issuedCertificates.map((certificate) => ({
+          id: certificate.id,
+          label: certificate.certificateTypeLabel,
+          certificateUrl: certificate.certificateUrl,
+          verificationUrl: certificate.verifiableCredentialUrl,
+          issuedAt: certificate.issuedAt,
+          renderStatus: certificate.renderStatus,
+          pdfUrl: certificate.pdfUrl,
+        }))
+      : completionCredentialFallback
+        ? [
+            {
+              id: completionCredentialFallback.certificateId,
+              label: "Completion credential",
+              certificateUrl: completionCredentialFallback.certificateUrl,
+              verificationUrl: completionCredentialFallback.verifiableCredentialUrl,
+              issuedAt: completionCredentialFallback.issuedAt,
+              renderStatus: "DONE" as const,
+              pdfUrl: null,
+            },
+          ]
+        : [];
+  const primaryCertificate = visibleCertificates[0];
   const hasLongDescription = (app.eventDescription?.trim().length ?? 0) > 280;
 
   const decisionColors: Record<string, string> = {
@@ -339,46 +410,73 @@ export default function ApplicationWorkspacePage() {
         </motion.div>
       )}
 
-      {completionCredential && (
+      {visibleCertificates.length > 0 && (
         <motion.div
           initial={{ opacity: 0, y: -8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, delay: 0.2 }}
         >
           <Card className="border-primary/30 bg-primary/5">
-            <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+            <CardContent className="space-y-3 p-4">
               <div className="flex items-start gap-3">
                 <div className="rounded-full bg-primary/10 p-2">
                   <Award className="h-5 w-5 text-primary" />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold">Completion credential issued</p>
+                  <p className="text-sm font-semibold">
+                    {visibleCertificates.length === 1
+                      ? "Certificate issued"
+                      : `${visibleCertificates.length} certificates issued`}
+                  </p>
                   <p className="text-xs text-muted-foreground">
-                    Issued {new Date(completionCredential.issuedAt).toLocaleDateString("en-GB")}
+                    Latest issue{" "}
+                    {new Date(visibleCertificates[0].issuedAt).toLocaleDateString("en-GB")}
                   </p>
                 </div>
               </div>
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" asChild>
-                  <a
-                    href={completionCredential.certificateUrl}
-                    target="_blank"
-                    rel="noreferrer"
+
+              <div className="space-y-2">
+                {visibleCertificates.slice(0, 4).map((certificate) => (
+                  <div
+                    key={certificate.id}
+                    className="rounded-md border bg-background/70 p-2"
                   >
-                    <Award className="mr-1.5 h-3.5 w-3.5" />
-                    Certificate
-                  </a>
-                </Button>
-                <Button size="sm" asChild>
-                  <a
-                    href={completionCredential.verifiableCredentialUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
-                    Verify
-                  </a>
-                </Button>
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-medium">{certificate.label}</p>
+                      <Badge variant="outline">{certificate.renderStatus}</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Issued {new Date(certificate.issuedAt).toLocaleDateString("en-GB")}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button size="sm" variant="outline" asChild>
+                        <a href={certificate.certificateUrl} target="_blank" rel="noreferrer">
+                          <Award className="mr-1.5 h-3.5 w-3.5" />
+                          Certificate
+                        </a>
+                      </Button>
+                      <Button size="sm" asChild>
+                        <a href={certificate.verificationUrl} target="_blank" rel="noreferrer">
+                          <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
+                          Verify
+                        </a>
+                      </Button>
+                      {certificate.pdfUrl && (
+                        <Button size="sm" variant="outline" asChild>
+                          <a href={certificate.pdfUrl} target="_blank" rel="noreferrer">
+                            <FileText className="mr-1.5 h-3.5 w-3.5" />
+                            PDF
+                          </a>
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {visibleCertificates.length > 4 && (
+                  <p className="text-xs text-muted-foreground">
+                    +{visibleCertificates.length - 4} more certificate(s) are available.
+                  </p>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -478,19 +576,19 @@ export default function ApplicationWorkspacePage() {
                   </div>
                 </>
               )}
-              {completionCredential && (
+              {primaryCertificate && (
                 <>
                   <Separator className="my-1" />
                   <div className="flex justify-between items-center text-sm">
                     <span className="text-muted-foreground">Credential</span>
                     <Button variant="link" size="sm" className="h-auto p-0 text-xs" asChild>
                       <a
-                        href={completionCredential.certificateUrl}
+                        href={primaryCertificate.certificateUrl}
                         target="_blank"
                         rel="noreferrer"
                       >
                         <Award className="mr-1 h-3 w-3" />
-                        Issued
+                        {visibleCertificates.length > 1 ? `${visibleCertificates.length} issued` : "Issued"}
                       </a>
                     </Button>
                   </div>

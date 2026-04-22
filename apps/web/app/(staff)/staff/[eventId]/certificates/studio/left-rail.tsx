@@ -3,6 +3,8 @@ import {
   Archive,
   CheckCircle2,
   Copy,
+  ExternalLink,
+  FileText,
   Loader2,
   Package,
   Plus,
@@ -12,6 +14,12 @@ import {
   Upload,
   WandSparkles,
 } from "lucide-react";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -164,10 +172,16 @@ export function LeftRail(props: LeftRailProps) {
       <ScrollArea className="h-full">
         <div className="space-y-4 p-3">
           {view === "templates" && (
-            <div className="space-y-4">
-              <div className="rounded-lg border p-3">
-                <p className="text-sm font-semibold">Create template</p>
-                <div className="mt-3 space-y-2">
+            <Accordion
+              type="multiple"
+              defaultValue={["template-create", "template-library", "template-actions"]}
+              className="space-y-2"
+            >
+              <AccordionItem value="template-create" className="rounded-lg border px-3">
+                <AccordionTrigger className="py-2 text-sm hover:no-underline">
+                  Create template
+                </AccordionTrigger>
+                <AccordionContent className="space-y-2 pb-3">
                   <label className="space-y-1">
                     <span className="text-xs text-muted-foreground">Name</span>
                     <Input
@@ -203,15 +217,17 @@ export function LeftRail(props: LeftRailProps) {
                     )}
                     Create
                   </Button>
-                </div>
-              </div>
+                </AccordionContent>
+              </AccordionItem>
 
-              <div className="rounded-lg border p-2">
-                <div className="mb-2 flex items-center justify-between px-1">
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Template library</p>
-                  <Badge variant="outline">{templates.length}</Badge>
-                </div>
-                <div className="space-y-2">
+              <AccordionItem value="template-library" className="rounded-lg border px-3">
+                <AccordionTrigger className="py-2 text-sm hover:no-underline">
+                  <span className="flex items-center gap-2">
+                    Template library
+                    <Badge variant="outline">{templates.length}</Badge>
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="space-y-2 pb-3">
                   {templates.length === 0 ? (
                     <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
                       No templates yet.
@@ -243,253 +259,282 @@ export function LeftRail(props: LeftRailProps) {
                       );
                     })
                   )}
-                </div>
-              </div>
+                </AccordionContent>
+              </AccordionItem>
 
               {selectedTemplate && (
-                <div className="space-y-2 rounded-lg border p-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-semibold">Template actions</p>
-                    <Badge variant="outline">{versions.length} versions</Badge>
-                  </div>
+                <AccordionItem value="template-actions" className="rounded-lg border px-3">
+                  <AccordionTrigger className="py-2 text-sm hover:no-underline">
+                    <span className="flex items-center gap-2">
+                      Template actions
+                      <Badge variant="outline">{versions.length} versions</Badge>
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-2 pb-3">
+                    <Label className="text-xs text-muted-foreground">Published version</Label>
+                    <Select value={selectedVersionId ?? "none"} onValueChange={(value) => onSelectVersion(value === "none" ? null : value)}>
+                      <SelectTrigger className="h-8">
+                        <SelectValue placeholder="Select version" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        {versions.map((version) => (
+                          <SelectItem key={version.id} value={version.id}>
+                            Version {version.versionNumber}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
 
-                  <Label className="text-xs text-muted-foreground">Published version</Label>
-                  <Select value={selectedVersionId ?? "none"} onValueChange={(value) => onSelectVersion(value === "none" ? null : value)}>
-                    <SelectTrigger className="h-8">
-                      <SelectValue placeholder="Select version" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">None</SelectItem>
-                      {versions.map((version) => (
-                        <SelectItem key={version.id} value={version.id}>
-                          Version {version.versionNumber}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  <div className="grid grid-cols-2 gap-2 pt-1">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={onDuplicateTemplate}
-                      disabled={!canManage || isBusyTemplateAction}
-                    >
-                      <Copy className="mr-1.5 h-4 w-4" />
-                      Duplicate
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={onArchiveTemplate}
-                      disabled={!canManage || isBusyTemplateAction}
-                    >
-                      <Archive className="mr-1.5 h-4 w-4" />
-                      Archive
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      className="col-span-2"
-                      onClick={onDeleteTemplate}
-                      disabled={!canManage || isBusyTemplateAction}
-                    >
-                      <Trash2 className="mr-1.5 h-4 w-4" />
-                      Delete template
-                    </Button>
-                  </div>
-                </div>
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={onDuplicateTemplate}
+                        disabled={!canManage || isBusyTemplateAction}
+                      >
+                        <Copy className="mr-1.5 h-4 w-4" />
+                        Duplicate
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={onArchiveTemplate}
+                        disabled={!canManage || isBusyTemplateAction}
+                      >
+                        <Archive className="mr-1.5 h-4 w-4" />
+                        Archive
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        className="col-span-2"
+                        onClick={onDeleteTemplate}
+                        disabled={!canManage || isBusyTemplateAction}
+                      >
+                        <Trash2 className="mr-1.5 h-4 w-4" />
+                        Delete template
+                      </Button>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
               )}
-            </div>
+            </Accordion>
           )}
 
           {view === "assets" && (
-            <div className="space-y-3">
-              <div className="rounded-lg border p-3">
-                <p className="text-sm font-semibold">Asset mode</p>
-                <div className="mt-2 grid grid-cols-3 gap-1 rounded-md bg-muted p-1">
-                  <button
-                    type="button"
-                    className={cn(
-                      "rounded px-2 py-1 text-xs",
-                      assetMode === "background" ? "bg-background shadow-sm" : "text-muted-foreground",
-                    )}
-                    onClick={() => onAssetModeChange("background")}
-                  >
-                    Background
-                  </button>
-                  <button
-                    type="button"
-                    className={cn(
-                      "rounded px-2 py-1 text-xs",
-                      assetMode === "image" ? "bg-background shadow-sm" : "text-muted-foreground",
-                    )}
-                    onClick={() => onAssetModeChange("image")}
-                  >
-                    Image
-                  </button>
-                  <button
-                    type="button"
-                    className={cn(
-                      "rounded px-2 py-1 text-xs",
-                      assetMode === "signature" ? "bg-background shadow-sm" : "text-muted-foreground",
-                    )}
-                    onClick={() => onAssetModeChange("signature")}
-                  >
-                    Signature
-                  </button>
-                </div>
-                <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
-                  <Select value={assetKindFilter} onValueChange={(value) => onAssetKindFilterChange(value as LeftRailProps["assetKindFilter"])}>
-                    <SelectTrigger className="h-8">
-                      <SelectValue placeholder="Kind" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All</SelectItem>
-                      <SelectItem value="background">Background</SelectItem>
-                      <SelectItem value="signature">Signature</SelectItem>
-                      <SelectItem value="logo">Logo</SelectItem>
-                      <SelectItem value="image">Image</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <label>
-                    <input
-                      type="file"
-                      className="hidden"
-                      onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        if (!file) return;
-                        const fallbackKind =
-                          assetKindFilter === "all" ? (assetMode === "background" ? "background" : assetMode === "signature" ? "signature" : "image") : assetKindFilter;
-                        onUploadAsset(file, fallbackKind);
-                        event.currentTarget.value = "";
-                      }}
-                      disabled={!canManage || isUploadingAsset}
-                    />
-                    <Button asChild size="sm" variant="outline" disabled={!canManage || isUploadingAsset}>
-                      <span>
-                        {isUploadingAsset ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Upload className="h-4 w-4" />
-                        )}
-                      </span>
-                    </Button>
-                  </label>
-                </div>
-                <Input
-                  value={assetSearch}
-                  onChange={(event) => onAssetSearchChange(event.target.value)}
-                  className="mt-2 h-8"
-                  placeholder="Search assets"
-                />
-              </div>
+            <Accordion
+              type="multiple"
+              defaultValue={["assets-controls", "assets-library"]}
+              className="space-y-2"
+            >
+              <AccordionItem value="assets-controls" className="rounded-lg border px-3">
+                <AccordionTrigger className="py-2 text-sm hover:no-underline">
+                  Asset controls
+                </AccordionTrigger>
+                <AccordionContent className="space-y-2 pb-3">
+                  <div className="mt-1 grid grid-cols-3 gap-1 rounded-md bg-muted p-1">
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded px-2 py-1 text-xs",
+                        assetMode === "background" ? "bg-background shadow-sm" : "text-muted-foreground",
+                      )}
+                      onClick={() => onAssetModeChange("background")}
+                    >
+                      Background
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded px-2 py-1 text-xs",
+                        assetMode === "image" ? "bg-background shadow-sm" : "text-muted-foreground",
+                      )}
+                      onClick={() => onAssetModeChange("image")}
+                    >
+                      Image
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded px-2 py-1 text-xs",
+                        assetMode === "signature" ? "bg-background shadow-sm" : "text-muted-foreground",
+                      )}
+                      onClick={() => onAssetModeChange("signature")}
+                    >
+                      Signature
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <Select value={assetKindFilter} onValueChange={(value) => onAssetKindFilterChange(value as LeftRailProps["assetKindFilter"])}>
+                      <SelectTrigger className="h-8">
+                        <SelectValue placeholder="Kind" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="background">Background</SelectItem>
+                        <SelectItem value="signature">Signature</SelectItem>
+                        <SelectItem value="logo">Logo</SelectItem>
+                        <SelectItem value="image">Image</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <label>
+                      <input
+                        type="file"
+                        className="hidden"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (!file) return;
+                          const fallbackKind =
+                            assetKindFilter === "all" ? (assetMode === "background" ? "background" : assetMode === "signature" ? "signature" : "image") : assetKindFilter;
+                          onUploadAsset(file, fallbackKind);
+                          event.currentTarget.value = "";
+                        }}
+                        disabled={!canManage || isUploadingAsset}
+                      />
+                      <Button asChild size="sm" variant="outline" disabled={!canManage || isUploadingAsset}>
+                        <span>
+                          {isUploadingAsset ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Upload className="h-4 w-4" />
+                          )}
+                        </span>
+                      </Button>
+                    </label>
+                  </div>
+                  <Input
+                    value={assetSearch}
+                    onChange={(event) => onAssetSearchChange(event.target.value)}
+                    className="h-8"
+                    placeholder="Search assets"
+                  />
+                </AccordionContent>
+              </AccordionItem>
 
-              <div className="space-y-2">
-                {filteredAssets.length === 0 ? (
-                  <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                    No assets found.
-                  </p>
-                ) : (
-                  filteredAssets.map((asset) => (
-                    <div key={asset.id} className="rounded-lg border p-2">
-                      <div className="mb-2 aspect-video overflow-hidden rounded bg-muted/40">
-                        {asset.mimeType.startsWith("image/") ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={resolveAssetUrl(asset.storageKey)}
-                            alt={asset.originalFilename}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-                            {asset.mimeType}
-                          </div>
-                        )}
+              <AccordionItem value="assets-library" className="rounded-lg border px-3">
+                <AccordionTrigger className="py-2 text-sm hover:no-underline">
+                  <span className="flex items-center gap-2">
+                    Asset library
+                    <Badge variant="outline">{filteredAssets.length}</Badge>
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="space-y-2 pb-3">
+                  {filteredAssets.length === 0 ? (
+                    <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                      No assets found.
+                    </p>
+                  ) : (
+                    filteredAssets.map((asset) => (
+                      <div key={asset.id} className="rounded-lg border p-2">
+                        <div className="mb-2 aspect-video overflow-hidden rounded bg-muted/40">
+                          {asset.mimeType.startsWith("image/") ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={resolveAssetUrl(asset.storageKey)}
+                              alt={asset.originalFilename}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+                              {asset.mimeType}
+                            </div>
+                          )}
+                        </div>
+                        <p className="truncate text-xs font-medium">{asset.originalFilename}</p>
+                        <p className="truncate text-[11px] text-muted-foreground">{asset.storageKey}</p>
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <Badge variant="outline">{asset.kind}</Badge>
+                          <span className="text-[10px] text-muted-foreground">{formatDateTime(asset.createdAt)}</span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                          <Button size="sm" variant="outline" onClick={() => onApplyAsset(asset)}>
+                            <WandSparkles className="mr-1.5 h-4 w-4" />
+                            Apply
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-destructive"
+                            onClick={() => onDeleteAsset(asset)}
+                            disabled={!canManage}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </div>
-                      <p className="truncate text-xs font-medium">{asset.originalFilename}</p>
-                      <p className="truncate text-[11px] text-muted-foreground">{asset.storageKey}</p>
-                      <div className="mt-2 flex items-center justify-between gap-2">
-                        <Badge variant="outline">{asset.kind}</Badge>
-                        <span className="text-[10px] text-muted-foreground">{formatDateTime(asset.createdAt)}</span>
-                      </div>
-                      <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
-                        <Button size="sm" variant="outline" onClick={() => onApplyAsset(asset)}>
-                          <WandSparkles className="mr-1.5 h-4 w-4" />
-                          Apply
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-destructive"
-                          onClick={() => onDeleteAsset(asset)}
-                          disabled={!canManage}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
+                    ))
+                  )}
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           )}
 
           {view === "issuance" && (
-            <div className="space-y-3">
-              <div className="rounded-lg border p-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold">Batch issuance</p>
-                  <Button size="sm" variant="outline" onClick={onRefreshIssuance} disabled={isRefreshingIssuance}>
-                    <RefreshCw className={`h-4 w-4 ${isRefreshingIssuance ? "animate-spin" : ""}`} />
+            <Accordion
+              type="multiple"
+              defaultValue={["issuance-batch", "issuance-history", "issuance-jobs"]}
+              className="space-y-2"
+            >
+              <AccordionItem value="issuance-batch" className="rounded-lg border px-3">
+                <AccordionTrigger className="py-2 text-sm hover:no-underline">
+                  Batch issuance
+                </AccordionTrigger>
+                <AccordionContent className="space-y-2 pb-3">
+                  <div className="flex items-center justify-end">
+                    <Button size="sm" variant="outline" onClick={onRefreshIssuance} disabled={isRefreshingIssuance}>
+                      <RefreshCw className={`h-4 w-4 ${isRefreshingIssuance ? "animate-spin" : ""}`} />
+                    </Button>
+                  </div>
+
+                  <div className="rounded-md border bg-muted/30 p-2 text-xs">
+                    {selectedTemplate ? (
+                      <>
+                        <p className="font-medium">{selectedTemplate.name}</p>
+                        <p className="text-muted-foreground">
+                          Active version {selectedTemplate.activeVersionNumber ?? "-"}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-muted-foreground">Select a template first.</p>
+                    )}
+                  </div>
+
+                  <label className="block space-y-1">
+                    <span className="text-xs text-muted-foreground">Issuer Name</span>
+                    <Input
+                      value={issuanceIssuerName}
+                      onChange={(event) => onIssuanceIssuerNameChange(event.target.value)}
+                      className="h-8"
+                      placeholder="Math&Maroc Event Platform"
+                    />
+                  </label>
+
+                  <label className="block space-y-1">
+                    <span className="text-xs text-muted-foreground">Application IDs (comma/newline separated)</span>
+                    <Textarea
+                      value={issuanceApplicationIds}
+                      onChange={(event) => onIssuanceApplicationIdsChange(event.target.value)}
+                      className="min-h-[100px]"
+                      placeholder="uuid-1\nuuid-2"
+                    />
+                  </label>
+
+                  <Button className="w-full" size="sm" onClick={onIssueCertificates} disabled={!canManage || isIssuing || !selectedTemplate}>
+                    {isIssuing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Sparkles className="mr-1.5 h-4 w-4" />}
+                    Issue certificates
                   </Button>
-                </div>
+                </AccordionContent>
+              </AccordionItem>
 
-                <div className="mt-2 rounded-md border bg-muted/30 p-2 text-xs">
-                  {selectedTemplate ? (
-                    <>
-                      <p className="font-medium">{selectedTemplate.name}</p>
-                      <p className="text-muted-foreground">
-                        Active version {selectedTemplate.activeVersionNumber ?? "-"}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="text-muted-foreground">Select a template first.</p>
-                  )}
-                </div>
-
-                <label className="mt-2 block space-y-1">
-                  <span className="text-xs text-muted-foreground">Issuer Name</span>
-                  <Input
-                    value={issuanceIssuerName}
-                    onChange={(event) => onIssuanceIssuerNameChange(event.target.value)}
-                    className="h-8"
-                    placeholder="Math&Maroc Event Platform"
-                  />
-                </label>
-
-                <label className="mt-2 block space-y-1">
-                  <span className="text-xs text-muted-foreground">Application IDs (comma/newline separated)</span>
-                  <Textarea
-                    value={issuanceApplicationIds}
-                    onChange={(event) => onIssuanceApplicationIdsChange(event.target.value)}
-                    className="min-h-[100px]"
-                    placeholder="uuid-1\nuuid-2"
-                  />
-                </label>
-
-                <Button className="mt-2 w-full" size="sm" onClick={onIssueCertificates} disabled={!canManage || isIssuing || !selectedTemplate}>
-                  {isIssuing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Sparkles className="mr-1.5 h-4 w-4" />}
-                  Issue certificates
-                </Button>
-              </div>
-
-              <div className="rounded-lg border p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="text-sm font-semibold">Issued history</p>
-                  <Badge variant="outline">{issuedCertificates.length}</Badge>
-                </div>
-                <div className="space-y-2">
+              <AccordionItem value="issuance-history" className="rounded-lg border px-3">
+                <AccordionTrigger className="py-2 text-sm hover:no-underline">
+                  <span className="flex items-center gap-2">
+                    Issued history
+                    <Badge variant="outline">{issuedCertificates.length}</Badge>
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="space-y-2 pb-3">
                   {issuedCertificates.length === 0 ? (
                     <p className="text-xs text-muted-foreground">No certificates issued yet.</p>
                   ) : (
@@ -497,24 +542,62 @@ export function LeftRail(props: LeftRailProps) {
                       <div key={item.id} className="rounded-md border p-2 text-xs">
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-medium">{item.certificateTypeLabel}</span>
-                          <Badge variant={item.renderStatus === "DONE" ? "secondary" : item.renderStatus === "FAILED" ? "destructive" : "outline"}>
-                            {item.renderStatus}
-                          </Badge>
+                          <div className="flex items-center gap-1">
+                            <Badge variant={item.status === "REVOKED" ? "destructive" : "outline"}>
+                              {item.status}
+                            </Badge>
+                            <Badge
+                              variant={
+                                item.renderStatus === "DONE"
+                                  ? "secondary"
+                                  : item.renderStatus === "FAILED"
+                                    ? "destructive"
+                                    : "outline"
+                              }
+                            >
+                              {item.renderStatus}
+                            </Badge>
+                          </div>
                         </div>
                         <p className="truncate text-muted-foreground">Application {item.applicationId}</p>
+                        <p className="truncate text-muted-foreground">Certificate {item.certificateId}</p>
                         <p className="text-muted-foreground">{formatDateTime(item.issuedAt)}</p>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <Button size="sm" variant="outline" className="h-7 text-[11px]" asChild>
+                            <a href={item.certificateUrl} target="_blank" rel="noreferrer">
+                              <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                              Certificate
+                            </a>
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-7 text-[11px]" asChild>
+                            <a href={item.verifiableCredentialUrl} target="_blank" rel="noreferrer">
+                              <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                              Verify
+                            </a>
+                          </Button>
+                          {item.pdfUrl && (
+                            <Button size="sm" variant="outline" className="col-span-2 h-7 text-[11px]" asChild>
+                              <a href={item.pdfUrl} target="_blank" rel="noreferrer">
+                                <FileText className="mr-1.5 h-3.5 w-3.5" />
+                                PDF
+                              </a>
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     ))
                   )}
-                </div>
-              </div>
+                </AccordionContent>
+              </AccordionItem>
 
-              <div className="rounded-lg border p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="text-sm font-semibold">Render queue</p>
-                  <Badge variant="outline">{renderJobs.length}</Badge>
-                </div>
-                <div className="space-y-2">
+              <AccordionItem value="issuance-jobs" className="rounded-lg border px-3">
+                <AccordionTrigger className="py-2 text-sm hover:no-underline">
+                  <span className="flex items-center gap-2">
+                    Render queue
+                    <Badge variant="outline">{renderJobs.length}</Badge>
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="space-y-2 pb-3">
                   {renderJobs.length === 0 ? (
                     <p className="text-xs text-muted-foreground">No render jobs.</p>
                   ) : (
@@ -536,9 +619,9 @@ export function LeftRail(props: LeftRailProps) {
                       </div>
                     ))
                   )}
-                </div>
-              </div>
-            </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           )}
 
           {view === "issuance" && (
