@@ -145,6 +145,14 @@ function formatDateTime(value: string | null | undefined): string {
   return parsed.toLocaleString("en-GB");
 }
 
+function blurActiveElement(): void {
+  if (typeof document === "undefined") return;
+  const active = document.activeElement;
+  if (active instanceof HTMLElement) {
+    active.blur();
+  }
+}
+
 function getStyleNumber(
   style: Record<string, unknown> | undefined,
   key: string,
@@ -211,6 +219,20 @@ export default function CertificatesPage() {
     pointerOffsetX: number;
     pointerOffsetY: number;
   } | null>(null);
+
+  const handleCreateDialogOpenChange = useCallback((open: boolean) => {
+    if (!open) {
+      blurActiveElement();
+    }
+    setShowCreateDialog(open);
+  }, []);
+
+  const handleDrawSignatureDialogOpenChange = useCallback((open: boolean) => {
+    if (!open) {
+      blurActiveElement();
+    }
+    setShowDrawSignatureDialog(open);
+  }, []);
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === selectedTemplateId) ?? null,
@@ -510,7 +532,7 @@ export default function CertificatesPage() {
         },
         csrfToken ?? undefined,
       );
-      setShowCreateDialog(false);
+      handleCreateDialogOpenChange(false);
       await refreshDashboard();
       setSelectedTemplateId(created.id);
       toast.success("Template created.");
@@ -523,6 +545,7 @@ export default function CertificatesPage() {
     createTypeLabel,
     csrfToken,
     eventId,
+    handleCreateDialogOpenChange,
     refreshDashboard,
     templates,
   ]);
@@ -796,14 +819,21 @@ export default function CertificatesPage() {
         ...slot,
         assetKey: asset.storageKey,
       }));
-      setShowDrawSignatureDialog(false);
+      handleDrawSignatureDialogOpenChange(false);
       toast.success("Signature saved.");
       const rows = await listCertificateAssets(eventId, assetKindFilter);
       setAssets(rows);
     } catch {
       toast.error("Failed to save signature.");
     }
-  }, [assetKindFilter, csrfToken, drawingSlotKey, eventId, updateSignatureSlot]);
+  }, [
+    assetKindFilter,
+    csrfToken,
+    drawingSlotKey,
+    eventId,
+    handleDrawSignatureDialogOpenChange,
+    updateSignatureSlot,
+  ]);
 
   if (!canManage) {
     return (
@@ -817,7 +847,7 @@ export default function CertificatesPage() {
   }
 
   const canvasBackgroundImage = resolveAssetUrl(editorLayout.canvas.backgroundAssetKey);
-  const templateLibraryScrollClass = "h-[min(56svh,620px)] pr-2";
+  const templateLibraryScrollClass = "h-[min(62svh,700px)] pr-2";
 
   const renderTemplateLibraryPanel = (className?: string) => (
     <Card className={`min-h-0 ${className ?? ""}`.trim()}>
@@ -964,7 +994,7 @@ export default function CertificatesPage() {
       <CardHeader>
         <CardTitle className="text-base">Inspector</CardTitle>
       </CardHeader>
-      <CardContent className="max-h-[min(74svh,860px)] space-y-4 overflow-y-auto pr-1">
+      <CardContent className="max-h-[min(78svh,920px)] space-y-5 overflow-y-auto pr-2">
         <div className="flex gap-2">
           <Button
             size="sm"
@@ -1114,7 +1144,7 @@ export default function CertificatesPage() {
                     }))
                   }
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select slot" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1355,47 +1385,72 @@ export default function CertificatesPage() {
               </Button>
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[350px_minmax(0,1fr)_340px]">
+            <div className="grid gap-5 xl:grid-cols-[minmax(280px,340px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(300px,360px)_minmax(0,1fr)_minmax(320px,380px)]">
               <div className="hidden xl:block">{renderTemplateLibraryPanel()}</div>
 
               <Card className="min-h-0">
-                <CardHeader className="pb-2">
+                <CardHeader className="pb-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <CardTitle className="text-base">Canvas Editor</CardTitle>
-                    <div className="flex flex-wrap gap-1">
-                      <Button size="sm" variant="outline" onClick={() => addElement("text")}>
+                    <div className="flex flex-wrap items-center gap-1.5 xl:justify-end">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 px-2.5"
+                        onClick={() => addElement("text")}
+                      >
                         <FilePlus2 className="mr-1.5 h-3.5 w-3.5" />
                         Text
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => addElement("dynamic_text")}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 px-2.5"
+                        onClick={() => addElement("dynamic_text")}
+                      >
                         <SquarePen className="mr-1.5 h-3.5 w-3.5" />
                         Token
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => addElement("image")}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 px-2.5"
+                        onClick={() => addElement("image")}
+                      >
                         <ImagePlus className="mr-1.5 h-3.5 w-3.5" />
                         Image
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => addElement("signature")}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 px-2.5"
+                        onClick={() => addElement("signature")}
+                      >
                         <Signature className="mr-1.5 h-3.5 w-3.5" />
                         Signature
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => addElement("qr")}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 px-2.5"
+                        onClick={() => addElement("qr")}
+                      >
                         <QrCode className="mr-1.5 h-3.5 w-3.5" />
                         QR
                       </Button>
                     </div>
                   </div>
                 </CardHeader>
-                <CardContent className="space-y-3">
+                <CardContent className="space-y-4">
                   <div
                     ref={canvasWrapperRef}
-                    className="relative h-[clamp(320px,62svh,760px)] overflow-auto rounded-md border bg-muted/20"
+                    className="relative h-[clamp(360px,66svh,840px)] overflow-auto rounded-md border bg-muted/20"
                   >
                     <div
-                      className="origin-top-left p-4"
+                      className="origin-top-left p-5"
                       style={{
-                        width: editorLayout.canvas.width * canvasScale + 32,
-                        height: editorLayout.canvas.height * canvasScale + 32,
+                        width: editorLayout.canvas.width * canvasScale + 40,
+                        height: editorLayout.canvas.height * canvasScale + 40,
                       }}
                     >
                       <div
@@ -1560,7 +1615,9 @@ export default function CertificatesPage() {
                 </CardContent>
               </Card>
 
-              <div className="hidden xl:block">{renderInspectorPanel()}</div>
+              <div className="hidden xl:col-span-2 xl:block 2xl:col-span-1">
+                {renderInspectorPanel()}
+              </div>
             </div>
 
             <Sheet open={showTemplateLibrarySheet} onOpenChange={setShowTemplateLibrarySheet}>
@@ -1857,7 +1914,7 @@ export default function CertificatesPage() {
         </Tabs>
       )}
 
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+      <Dialog open={showCreateDialog} onOpenChange={handleCreateDialogOpenChange}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create Template</DialogTitle>
@@ -1896,7 +1953,7 @@ export default function CertificatesPage() {
             </label>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
+            <Button variant="outline" onClick={() => handleCreateDialogOpenChange(false)}>
               Cancel
             </Button>
             <Button onClick={() => void createTemplateFromDialog()}>Create template</Button>
@@ -1904,7 +1961,7 @@ export default function CertificatesPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showDrawSignatureDialog} onOpenChange={setShowDrawSignatureDialog}>
+      <Dialog open={showDrawSignatureDialog} onOpenChange={handleDrawSignatureDialogOpenChange}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>Draw Organizer Signature</DialogTitle>
@@ -1916,7 +1973,7 @@ export default function CertificatesPage() {
             <label className="space-y-1">
               <span className="text-sm">Signature slot</span>
               <Select value={drawingSlotKey} onValueChange={setDrawingSlotKey}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select slot" />
                 </SelectTrigger>
                 <SelectContent>

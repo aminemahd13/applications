@@ -21,6 +21,7 @@ import {
   RevokeIssuedCertificateDto,
   UpdateCertificateTemplateDto,
 } from '@event-platform/shared';
+import { Prisma } from '@event-platform/db';
 import * as crypto from 'crypto';
 import * as jwt from 'jsonwebtoken';
 import { createHmac } from 'node:crypto';
@@ -80,6 +81,29 @@ export class CertificatesService {
       return {};
     }
     return value as Record<string, unknown>;
+  }
+
+  private isCertificateStudioSchemaMissing(error: unknown): boolean {
+    const knownErrorCode =
+      error instanceof Prisma.PrismaClientKnownRequestError ? error.code : '';
+    if (knownErrorCode === 'P2021' || knownErrorCode === 'P2022') {
+      return true;
+    }
+
+    const message = String(
+      (
+        error as
+          | { message?: string; meta?: { cause?: string; table?: string } }
+          | undefined
+      )?.message ??
+        (error as { meta?: { cause?: string } } | undefined)?.meta?.cause ??
+        '',
+    ).toLowerCase();
+
+    return (
+      message.includes('certificate_templates') ||
+      message.includes('certificate_template_versions')
+    );
   }
 
   private normalizeMimeType(rawMimeType: string | undefined): string {
@@ -525,47 +549,57 @@ export class CertificatesService {
       where.type_key = query.typeKey.trim().toLowerCase();
     }
 
-    const templates = await (this.prisma as any).certificate_templates.findMany({
-      where,
-      orderBy: [
-        { type_key: 'asc' },
-        { is_default: 'desc' },
-        { created_at: 'desc' },
-      ],
-    });
+    try {
+      const templates = await (this.prisma as any).certificate_templates.findMany({
+        where,
+        orderBy: [
+          { type_key: 'asc' },
+          { is_default: 'desc' },
+          { created_at: 'desc' },
+        ],
+      });
 
-    const activeVersionIds = Array.from(
-      new Set(
-        templates
-          .map((template: any) => template.active_version_id)
-          .filter((id: string | null): id is string => Boolean(id)),
-      ),
-    );
+      const activeVersionIds = Array.from(
+        new Set(
+          templates
+            .map((template: any) => template.active_version_id)
+            .filter((id: string | null): id is string => Boolean(id)),
+        ),
+      );
 
-    const activeVersions = activeVersionIds.length
-      ? await (this.prisma as any).certificate_template_versions.findMany({
-          where: { id: { in: activeVersionIds } },
-          select: { id: true, version_number: true },
-        })
-      : [];
+      const activeVersions = activeVersionIds.length
+        ? await (this.prisma as any).certificate_template_versions.findMany({
+            where: { id: { in: activeVersionIds } },
+            select: { id: true, version_number: true },
+          })
+        : [];
 
-    const activeVersionById = new Map<
-      string,
-      { id: string; version_number: number }
-    >(
-      (activeVersions as Array<{ id: string; version_number: number }>).map(
-        (version) => [version.id, version],
-      ),
-    );
+      const activeVersionById = new Map<
+        string,
+        { id: string; version_number: number }
+      >(
+        (activeVersions as Array<{ id: string; version_number: number }>).map(
+          (version) => [version.id, version],
+        ),
+      );
 
-    return templates.map((template: any) =>
-      this.mapTemplateRow(
-        template,
-        template.active_version_id
-          ? activeVersionById.get(template.active_version_id) ?? null
-          : null,
-      ),
-    );
+      return templates.map((template: any) =>
+        this.mapTemplateRow(
+          template,
+          template.active_version_id
+            ? activeVersionById.get(template.active_version_id) ?? null
+            : null,
+        ),
+      );
+    } catch (error) {
+      if (this.isCertificateStudioSchemaMissing(error)) {
+        this.logger.warn(
+          `Certificate Studio schema missing while listing templates for event ${eventId}. Returning an empty result.`,
+        );
+        return [];
+      }
+      throw error;
+    }
   }
 
   async createTemplate(eventId: string, dto: CreateCertificateTemplateDto) {
