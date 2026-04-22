@@ -79,8 +79,13 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 
 type AssetKind = "all" | "background" | "signature" | "logo" | "image";
 
@@ -205,6 +210,7 @@ export default function CertificatesPage() {
   const [showDrawSignatureDialog, setShowDrawSignatureDialog] = useState(false);
   const [showTemplateLibrarySheet, setShowTemplateLibrarySheet] = useState(false);
   const [showInspectorSheet, setShowInspectorSheet] = useState(false);
+  const [templateSearch, setTemplateSearch] = useState("");
   const [createName, setCreateName] = useState("Participation Certificate");
   const [createTypeLabel, setCreateTypeLabel] = useState("Participation");
   const [createTypeKey, setCreateTypeKey] = useState("participation");
@@ -242,6 +248,8 @@ export default function CertificatesPage() {
     () => editorLayout.elements.find((element) => element.id === selectedElementId) ?? null,
     [editorLayout.elements, selectedElementId],
   );
+  const selectedElementSupportsTypography =
+    selectedElement?.type === "text" || selectedElement?.type === "dynamic_text";
 
   const tokenValidation = useMemo(() => {
     const allowed = new Set<string>(CERTIFICATE_DYNAMIC_TOKENS);
@@ -274,6 +282,43 @@ export default function CertificatesPage() {
     }
     return Array.from(groups.values()).sort((a, b) => a.typeKey.localeCompare(b.typeKey));
   }, [templates]);
+
+  const normalizedTemplateSearch = templateSearch.trim().toLowerCase();
+  const visibleTemplateGroups = useMemo(() => {
+    if (!normalizedTemplateSearch) {
+      return groupedTemplates;
+    }
+
+    return groupedTemplates
+      .map((group) => ({
+        ...group,
+        templates: group.templates.filter((template) => {
+          const haystack = [
+            template.name,
+            template.typeLabel,
+            template.typeKey,
+            template.description ?? "",
+          ]
+            .join(" ")
+            .toLowerCase();
+          return haystack.includes(normalizedTemplateSearch);
+        }),
+      }))
+      .filter((group) => group.templates.length > 0);
+  }, [groupedTemplates, normalizedTemplateSearch]);
+
+  const visibleTemplatesCount = useMemo(
+    () =>
+      visibleTemplateGroups.reduce((count, group) => {
+        return count + group.templates.length;
+      }, 0),
+    [visibleTemplateGroups],
+  );
+
+  const sortedElementsByLayer = useMemo(
+    () => [...editorLayout.elements].sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0)),
+    [editorLayout.elements],
+  );
 
   const refreshDashboard = useCallback(async () => {
     const [templateRows, assetRows, issuedRows, jobRows] = await Promise.all([
@@ -851,148 +896,212 @@ export default function CertificatesPage() {
 
   const renderTemplateLibraryPanel = (className?: string) => (
     <Card className={`min-h-0 ${className ?? ""}`.trim()}>
-      <CardHeader>
-        <CardTitle className="text-base">Template Library</CardTitle>
+      <CardHeader className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base">Template Library</CardTitle>
+          <Badge variant="outline" className="text-[10px]">
+            {visibleTemplatesCount}/{templates.length} shown
+          </Badge>
+        </div>
+        <Input
+          value={templateSearch}
+          onChange={(event) => setTemplateSearch(event.target.value)}
+          placeholder="Search by template name, type, or key"
+          className="h-8"
+        />
       </CardHeader>
       <CardContent className="space-y-3">
-        <ScrollArea className={templateLibraryScrollClass}>
-          <div className="space-y-4">
-            {groupedTemplates.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No templates yet. Create your first certificate template.
-              </p>
-            ) : (
-              groupedTemplates.map((group) => (
-                <div key={group.typeKey} className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      {group.typeLabel}
+        <Accordion type="multiple" defaultValue={["templates", "versions"]} className="w-full space-y-2">
+          <AccordionItem value="templates" className="rounded-md border px-3 last:border">
+            <AccordionTrigger className="py-3 hover:no-underline">
+              <div className="flex items-center gap-2">
+                <span className="text-sm">Templates</span>
+                <Badge variant="secondary" className="text-[10px]">
+                  {visibleTemplatesCount}
+                </Badge>
+              </div>
+            </AccordionTrigger>
+            <AccordionContent className="pb-3">
+              <ScrollArea className={templateLibraryScrollClass}>
+                <div className="space-y-3 pr-2">
+                  {visibleTemplateGroups.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      {normalizedTemplateSearch
+                        ? "No templates match your search."
+                        : "No templates yet. Create your first certificate template."}
                     </p>
-                    <Badge variant="outline" className="text-[10px]">
-                      {group.typeKey}
-                    </Badge>
-                  </div>
-                  <div className="space-y-2">
-                    {group.templates.map((template) => (
-                      <button
-                        type="button"
-                        key={template.id}
-                        className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${
-                          selectedTemplateId === template.id
-                            ? "border-primary bg-primary/5"
-                            : "border-border hover:border-primary/50"
-                        }`}
-                        onClick={() => {
-                          setSelectedTemplateId(template.id);
-                          setShowTemplateLibrarySheet(false);
-                        }}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-sm font-medium">{template.name}</p>
-                            <p className="text-xs text-muted-foreground">
-                              v{template.activeVersionNumber ?? "-"}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            {template.isDefault && <Badge className="text-[10px]">Default</Badge>}
-                            {!template.isActive && (
+                  ) : (
+                    <Accordion
+                      type="multiple"
+                      className="w-full space-y-2"
+                      defaultValue={visibleTemplateGroups.map((group) => `group-${group.typeKey}`)}
+                    >
+                      {visibleTemplateGroups.map((group) => (
+                        <AccordionItem
+                          key={group.typeKey}
+                          value={`group-${group.typeKey}`}
+                          className="rounded-md border px-2 last:border"
+                        >
+                          <AccordionTrigger className="py-2 hover:no-underline">
+                            <div className="flex w-full items-center gap-2">
+                              <span className="truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                {group.typeLabel}
+                              </span>
                               <Badge variant="secondary" className="text-[10px]">
-                                Archived
+                                {group.templates.length}
                               </Badge>
-                            )}
-                          </div>
-                        </div>
-                        <div className="mt-2 flex flex-wrap items-center gap-1">
-                          {!template.isDefault && template.isActive && (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-6 text-[10px]"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void toggleTemplateDefault(template);
-                              }}
-                            >
-                              Set default
-                            </Button>
-                          )}
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="h-6 text-[10px]"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void toggleTemplateArchive(template);
-                            }}
-                          >
-                            {template.isActive ? "Archive" : "Restore"}
-                          </Button>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
+                              <Badge variant="outline" className="text-[10px]">
+                                {group.typeKey}
+                              </Badge>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent className="pb-2">
+                            <div className="space-y-2">
+                              {group.templates.map((template) => (
+                                <button
+                                  type="button"
+                                  key={template.id}
+                                  className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${
+                                    selectedTemplateId === template.id
+                                      ? "border-primary bg-primary/5"
+                                      : "border-border hover:border-primary/50"
+                                  }`}
+                                  onClick={() => {
+                                    setSelectedTemplateId(template.id);
+                                    setShowTemplateLibrarySheet(false);
+                                  }}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div>
+                                      <p className="text-sm font-medium">{template.name}</p>
+                                      <p className="text-xs text-muted-foreground">
+                                        v{template.activeVersionNumber ?? "-"}
+                                      </p>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      {template.isDefault && (
+                                        <Badge className="text-[10px]">Default</Badge>
+                                      )}
+                                      {!template.isActive && (
+                                        <Badge variant="secondary" className="text-[10px]">
+                                          Archived
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="mt-2 flex flex-wrap items-center gap-1">
+                                    {!template.isDefault && template.isActive && (
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-6 text-[10px]"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          void toggleTemplateDefault(template);
+                                        }}
+                                      >
+                                        Set default
+                                      </Button>
+                                    )}
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-6 text-[10px]"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void toggleTemplateArchive(template);
+                                      }}
+                                    >
+                                      {template.isActive ? "Archive" : "Restore"}
+                                    </Button>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      ))}
+                    </Accordion>
+                  )}
                 </div>
-              ))
-            )}
-          </div>
-        </ScrollArea>
+              </ScrollArea>
+            </AccordionContent>
+          </AccordionItem>
 
-        <Separator />
-        <div className="space-y-2">
-          <Label className="text-xs uppercase text-muted-foreground">Versions</Label>
-          <div className="space-y-2">
-            <Select
-              value={selectedVersionId ?? ""}
-              onValueChange={(value) => setSelectedVersionId(value)}
-              disabled={versions.length === 0}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select version" />
-              </SelectTrigger>
-              <SelectContent>
-                {versions.map((version) => (
-                  <SelectItem key={version.id} value={version.id}>
-                    Version {version.versionNumber}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={saveAsNewVersion}
-                disabled={!selectedTemplateId || isSavingVersion}
-              >
-                {isSavingVersion ? (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Save className="mr-1.5 h-3.5 w-3.5" />
-                )}
-                Save version
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!selectedTemplateId || !selectedVersionId}
-                onClick={() => selectedVersionId && void activateVersion(selectedVersionId)}
-              >
-                Activate
-              </Button>
-            </div>
-          </div>
-        </div>
+          <AccordionItem value="versions" className="rounded-md border px-3 last:border">
+            <AccordionTrigger className="py-3 hover:no-underline">
+              <div className="flex items-center gap-2">
+                <span className="text-sm">Versions</span>
+                <Badge variant="outline" className="text-[10px]">
+                  {versions.length}
+                </Badge>
+              </div>
+            </AccordionTrigger>
+            <AccordionContent className="pb-3">
+              <div className="space-y-2">
+                <Select
+                  value={selectedVersionId ?? ""}
+                  onValueChange={(value) => setSelectedVersionId(value)}
+                  disabled={versions.length === 0}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select version" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {versions.map((version) => (
+                      <SelectItem key={version.id} value={version.id}>
+                        Version {version.versionNumber}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={saveAsNewVersion}
+                    disabled={!selectedTemplateId || isSavingVersion}
+                  >
+                    {isSavingVersion ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Save className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Save version
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!selectedTemplateId || !selectedVersionId}
+                    onClick={() => selectedVersionId && void activateVersion(selectedVersionId)}
+                  >
+                    Activate
+                  </Button>
+                </div>
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
       </CardContent>
     </Card>
   );
 
   const renderInspectorPanel = (className?: string) => (
     <Card className={`min-h-0 ${className ?? ""}`.trim()}>
-      <CardHeader>
-        <CardTitle className="text-base">Inspector</CardTitle>
+      <CardHeader className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base">Inspector</CardTitle>
+          <Badge variant="outline" className="text-[10px]">
+            {editorLayout.elements.length} elements
+          </Badge>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {selectedElement
+            ? `Editing ${buildElementLabel(selectedElement)}`
+            : "Select an element to start editing settings."}
+        </p>
       </CardHeader>
       <CardContent className="max-h-[min(78svh,920px)] space-y-5 overflow-y-auto pr-2">
         <div className="flex gap-2">
@@ -1017,322 +1126,405 @@ export default function CertificatesPage() {
           </Button>
         </div>
 
-        {!selectedElement ? (
-          <p className="text-sm text-muted-foreground">
-            Select an element on the canvas to edit its settings.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <Label>Element</Label>
-              <Input value={buildElementLabel(selectedElement)} disabled />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">X</span>
-                <Input
-                  type="number"
-                  value={selectedElement.x}
-                  onChange={(event) =>
-                    updateElement(selectedElement.id, (element) => ({
-                      ...element,
-                      x: Number(event.target.value || 0),
-                    }))
-                  }
-                />
-              </label>
-              <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">Y</span>
-                <Input
-                  type="number"
-                  value={selectedElement.y}
-                  onChange={(event) =>
-                    updateElement(selectedElement.id, (element) => ({
-                      ...element,
-                      y: Number(event.target.value || 0),
-                    }))
-                  }
-                />
-              </label>
-              <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">Width</span>
-                <Input
-                  type="number"
-                  value={selectedElement.width}
-                  onChange={(event) =>
-                    updateElement(selectedElement.id, (element) => ({
-                      ...element,
-                      width: Number(event.target.value || 1),
-                    }))
-                  }
-                />
-              </label>
-              <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">Height</span>
-                <Input
-                  type="number"
-                  value={selectedElement.height}
-                  onChange={(event) =>
-                    updateElement(selectedElement.id, (element) => ({
-                      ...element,
-                      height: Number(event.target.value || 1),
-                    }))
-                  }
-                />
-              </label>
-            </div>
+        <Accordion
+          type="multiple"
+          defaultValue={["layers", "element", "background", "signatures"]}
+          className="w-full space-y-2"
+        >
+          <AccordionItem value="layers" className="rounded-md border px-3 last:border">
+            <AccordionTrigger className="py-3 hover:no-underline">
+              <div className="flex items-center gap-2">
+                <span className="text-sm">Layers</span>
+                <Badge variant="secondary" className="text-[10px]">
+                  {sortedElementsByLayer.length}
+                </Badge>
+              </div>
+            </AccordionTrigger>
+            <AccordionContent className="pb-3">
+              {sortedElementsByLayer.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No elements on canvas yet.</p>
+              ) : (
+                <ScrollArea className="h-[min(28svh,220px)] rounded-md border p-2">
+                  <div className="space-y-2 pr-1">
+                    {sortedElementsByLayer.map((element) => (
+                      <button
+                        key={element.id}
+                        type="button"
+                        className={`w-full rounded-md border px-2 py-1.5 text-left transition-colors ${
+                          selectedElementId === element.id
+                            ? "border-primary bg-primary/10"
+                            : "border-border hover:border-primary/50"
+                        }`}
+                        onClick={() => setSelectedElementId(element.id)}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-sm">{buildElementLabel(element)}</span>
+                          <span className="text-[11px] text-muted-foreground">
+                            z{element.zIndex ?? 0}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
+            </AccordionContent>
+          </AccordionItem>
 
-            {(selectedElement.type === "text" || selectedElement.type === "dynamic_text") && (
-              <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">Content / Token</span>
-                <Input
-                  value={
-                    selectedElement.type === "text"
-                      ? selectedElement.content ?? ""
-                      : selectedElement.token ?? ""
-                  }
-                  onChange={(event) =>
-                    updateElement(selectedElement.id, (element) =>
-                      element.type === "text"
-                        ? { ...element, content: event.target.value }
-                        : { ...element, token: event.target.value },
-                    )
-                  }
-                />
-              </label>
-            )}
+          <AccordionItem value="element" className="rounded-md border px-3 last:border">
+            <AccordionTrigger className="py-3 hover:no-underline">
+              <div className="flex items-center gap-2">
+                <span className="text-sm">Element Settings</span>
+                {selectedElement ? (
+                  <Badge variant="outline" className="text-[10px]">
+                    {selectedElement.type}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-[10px]">
+                    none selected
+                  </Badge>
+                )}
+              </div>
+            </AccordionTrigger>
+            <AccordionContent className="pb-3">
+              {!selectedElement ? (
+                <p className="text-sm text-muted-foreground">
+                  Select an element on the canvas or from the Layers list.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <Label>Element</Label>
+                    <Input value={buildElementLabel(selectedElement)} disabled />
+                  </div>
 
-            {selectedElement.type === "qr" && (
-              <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">QR token field</span>
-                <Input
-                  value={selectedElement.token ?? ""}
-                  onChange={(event) =>
-                    updateElement(selectedElement.id, (element) => ({
-                      ...element,
-                      token: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-            )}
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">X</span>
+                      <Input
+                        type="number"
+                        value={selectedElement.x}
+                        onChange={(event) =>
+                          updateElement(selectedElement.id, (element) => ({
+                            ...element,
+                            x: Number(event.target.value || 0),
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">Y</span>
+                      <Input
+                        type="number"
+                        value={selectedElement.y}
+                        onChange={(event) =>
+                          updateElement(selectedElement.id, (element) => ({
+                            ...element,
+                            y: Number(event.target.value || 0),
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">Width</span>
+                      <Input
+                        type="number"
+                        value={selectedElement.width}
+                        onChange={(event) =>
+                          updateElement(selectedElement.id, (element) => ({
+                            ...element,
+                            width: Number(event.target.value || 1),
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">Height</span>
+                      <Input
+                        type="number"
+                        value={selectedElement.height}
+                        onChange={(event) =>
+                          updateElement(selectedElement.id, (element) => ({
+                            ...element,
+                            height: Number(event.target.value || 1),
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
 
-            {selectedElement.type === "image" && (
-              <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">Asset key</span>
-                <Input
-                  value={selectedElement.assetKey ?? ""}
-                  onChange={(event) =>
-                    updateElement(selectedElement.id, (element) => ({
-                      ...element,
-                      assetKey: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-            )}
+                  {(selectedElement.type === "text" || selectedElement.type === "dynamic_text") && (
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">
+                        {selectedElement.type === "text" ? "Content" : "Token"}
+                      </span>
+                      <Input
+                        value={
+                          selectedElement.type === "text"
+                            ? selectedElement.content ?? ""
+                            : selectedElement.token ?? ""
+                        }
+                        onChange={(event) =>
+                          updateElement(selectedElement.id, (element) =>
+                            element.type === "text"
+                              ? { ...element, content: event.target.value }
+                              : { ...element, token: event.target.value },
+                          )
+                        }
+                      />
+                    </label>
+                  )}
 
-            {selectedElement.type === "signature" && (
-              <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">Signature slot</span>
-                <Select
-                  value={selectedElement.signatureSlotKey ?? ""}
-                  onValueChange={(value) =>
-                    updateElement(selectedElement.id, (element) => ({
-                      ...element,
-                      signatureSlotKey: value,
+                  {selectedElement.type === "qr" && (
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">QR token field</span>
+                      <Input
+                        value={selectedElement.token ?? ""}
+                        onChange={(event) =>
+                          updateElement(selectedElement.id, (element) => ({
+                            ...element,
+                            token: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  )}
+
+                  {selectedElement.type === "image" && (
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">Asset key</span>
+                      <Input
+                        value={selectedElement.assetKey ?? ""}
+                        onChange={(event) =>
+                          updateElement(selectedElement.id, (element) => ({
+                            ...element,
+                            assetKey: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  )}
+
+                  {selectedElement.type === "signature" && (
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">Signature slot</span>
+                      <Select
+                        value={selectedElement.signatureSlotKey ?? ""}
+                        onValueChange={(value) =>
+                          updateElement(selectedElement.id, (element) => ({
+                            ...element,
+                            signatureSlotKey: value,
+                          }))
+                        }
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select slot" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {editorLayout.signatureSlots.map((slot) => (
+                            <SelectItem key={slot.key} value={slot.key}>
+                              {slot.label} ({slot.key})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
+                  )}
+
+                  {selectedElementSupportsTypography && (
+                    <div className="space-y-2 rounded-md border border-dashed p-2">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Typography
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="space-y-1">
+                          <span className="text-xs text-muted-foreground">Font size</span>
+                          <Input
+                            type="number"
+                            value={getStyleNumber(selectedElement.style, "fontSize", 32)}
+                            onChange={(event) =>
+                              updateElement(selectedElement.id, (element) => ({
+                                ...element,
+                                style: {
+                                  ...(element.style ?? {}),
+                                  fontSize: Number(event.target.value || 0),
+                                },
+                              }))
+                            }
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-xs text-muted-foreground">Font weight</span>
+                          <Input
+                            type="number"
+                            value={getStyleNumber(selectedElement.style, "fontWeight", 500)}
+                            onChange={(event) =>
+                              updateElement(selectedElement.id, (element) => ({
+                                ...element,
+                                style: {
+                                  ...(element.style ?? {}),
+                                  fontWeight: Number(event.target.value || 0),
+                                },
+                              }))
+                            }
+                          />
+                        </label>
+                      </div>
+                      <label className="space-y-1">
+                        <span className="text-xs text-muted-foreground">Text color</span>
+                        <Input
+                          type="color"
+                          value={getStyleString(selectedElement.style, "color", "#0f172a")}
+                          onChange={(event) =>
+                            updateElement(selectedElement.id, (element) => ({
+                              ...element,
+                              style: {
+                                ...(element.style ?? {}),
+                                color: event.target.value,
+                              },
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                  )}
+                </div>
+              )}
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="background" className="rounded-md border px-3 last:border">
+            <AccordionTrigger className="py-3 hover:no-underline">
+              <span className="text-sm">Background</span>
+            </AccordionTrigger>
+            <AccordionContent className="space-y-2 pb-3">
+              <div className="flex items-center justify-between">
+                <Label>Canvas background</Label>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    setEditorLayout((previous) => ({
+                      ...previous,
+                      canvas: { ...previous.canvas, backgroundAssetKey: "" },
                     }))
                   }
                 >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select slot" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {editorLayout.signatureSlots.map((slot) => (
-                      <SelectItem key={slot.key} value={slot.key}>
-                        {slot.label} ({slot.key})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </label>
-            )}
+                  Clear
+                </Button>
+              </div>
+              <Input
+                value={editorLayout.canvas.backgroundAssetKey ?? ""}
+                onChange={(event) =>
+                  setEditorLayout((previous) => ({
+                    ...previous,
+                    canvas: {
+                      ...previous.canvas,
+                      backgroundAssetKey: event.target.value,
+                    },
+                  }))
+                }
+                placeholder="Storage key"
+              />
+              <Input
+                type="color"
+                value={editorLayout.canvas.backgroundColor ?? "#ffffff"}
+                onChange={(event) =>
+                  setEditorLayout((previous) => ({
+                    ...previous,
+                    canvas: {
+                      ...previous.canvas,
+                      backgroundColor: event.target.value,
+                    },
+                  }))
+                }
+              />
+            </AccordionContent>
+          </AccordionItem>
 
-            {(selectedElement.type === "text" || selectedElement.type === "dynamic_text") && (
-              <>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">Font size</span>
-                    <Input
-                      type="number"
-                      value={getStyleNumber(selectedElement.style, "fontSize", 32)}
-                      onChange={(event) =>
-                        updateElement(selectedElement.id, (element) => ({
-                          ...element,
-                          style: {
-                            ...(element.style ?? {}),
-                            fontSize: Number(event.target.value || 0),
-                          },
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">Font weight</span>
-                    <Input
-                      type="number"
-                      value={getStyleNumber(selectedElement.style, "fontWeight", 500)}
-                      onChange={(event) =>
-                        updateElement(selectedElement.id, (element) => ({
-                          ...element,
-                          style: {
-                            ...(element.style ?? {}),
-                            fontWeight: Number(event.target.value || 0),
-                          },
-                        }))
-                      }
-                    />
-                  </label>
+          <AccordionItem value="signatures" className="rounded-md border px-3 last:border">
+            <AccordionTrigger className="py-3 hover:no-underline">
+              <div className="flex items-center gap-2">
+                <span className="text-sm">Signature Slots</span>
+                <Badge variant="outline" className="text-[10px]">
+                  {editorLayout.signatureSlots.length}
+                </Badge>
+              </div>
+            </AccordionTrigger>
+            <AccordionContent className="space-y-2 pb-3">
+              <div className="flex items-center justify-between">
+                <Label>Slot configuration</Label>
+                <Button size="sm" variant="outline" onClick={addSignatureSlot}>
+                  <Plus className="mr-1 h-3.5 w-3.5" />
+                  Slot
+                </Button>
+              </div>
+              <ScrollArea className="h-[min(28svh,260px)] rounded-md border p-2">
+                <div className="space-y-3 pr-1">
+                  {editorLayout.signatureSlots.map((slot) => (
+                    <div key={slot.key} className="space-y-1 rounded border p-2">
+                      <Input
+                        value={slot.label}
+                        onChange={(event) =>
+                          updateSignatureSlot(slot.key, (current) => ({
+                            ...current,
+                            label: event.target.value,
+                          }))
+                        }
+                        placeholder="Label"
+                        className="h-8"
+                      />
+                      <Input
+                        value={slot.signerName ?? ""}
+                        onChange={(event) =>
+                          updateSignatureSlot(slot.key, (current) => ({
+                            ...current,
+                            signerName: event.target.value,
+                          }))
+                        }
+                        placeholder="Signer name"
+                        className="h-8"
+                      />
+                      <Input
+                        value={slot.signerTitle ?? ""}
+                        onChange={(event) =>
+                          updateSignatureSlot(slot.key, (current) => ({
+                            ...current,
+                            signerTitle: event.target.value,
+                          }))
+                        }
+                        placeholder="Signer title"
+                        className="h-8"
+                      />
+                      <Input
+                        value={slot.assetKey ?? ""}
+                        onChange={(event) =>
+                          updateSignatureSlot(slot.key, (current) => ({
+                            ...current,
+                            assetKey: event.target.value,
+                          }))
+                        }
+                        placeholder="Signature asset key"
+                        className="h-8"
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs"
+                        onClick={() => {
+                          setDrawingSlotKey(slot.key);
+                          setShowDrawSignatureDialog(true);
+                        }}
+                      >
+                        Draw for slot
+                      </Button>
+                    </div>
+                  ))}
                 </div>
-                <label className="space-y-1">
-                  <span className="text-xs text-muted-foreground">Text color</span>
-                  <Input
-                    type="color"
-                    value={getStyleString(selectedElement.style, "color", "#0f172a")}
-                    onChange={(event) =>
-                      updateElement(selectedElement.id, (element) => ({
-                        ...element,
-                        style: {
-                          ...(element.style ?? {}),
-                          color: event.target.value,
-                        },
-                      }))
-                    }
-                  />
-                </label>
-              </>
-            )}
-          </div>
-        )}
-
-        <Separator />
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label>Background</Label>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                setEditorLayout((previous) => ({
-                  ...previous,
-                  canvas: { ...previous.canvas, backgroundAssetKey: "" },
-                }))
-              }
-            >
-              Clear
-            </Button>
-          </div>
-          <Input
-            value={editorLayout.canvas.backgroundAssetKey ?? ""}
-            onChange={(event) =>
-              setEditorLayout((previous) => ({
-                ...previous,
-                canvas: {
-                  ...previous.canvas,
-                  backgroundAssetKey: event.target.value,
-                },
-              }))
-            }
-            placeholder="Storage key"
-          />
-          <Input
-            type="color"
-            value={editorLayout.canvas.backgroundColor ?? "#ffffff"}
-            onChange={(event) =>
-              setEditorLayout((previous) => ({
-                ...previous,
-                canvas: {
-                  ...previous.canvas,
-                  backgroundColor: event.target.value,
-                },
-              }))
-            }
-          />
-        </div>
-
-        <Separator />
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label>Signature Slots</Label>
-            <Button size="sm" variant="outline" onClick={addSignatureSlot}>
-              <Plus className="mr-1 h-3.5 w-3.5" />
-              Slot
-            </Button>
-          </div>
-          <ScrollArea className="h-[min(26svh,240px)] rounded-md border p-2">
-            <div className="space-y-3">
-              {editorLayout.signatureSlots.map((slot) => (
-                <div key={slot.key} className="space-y-1 rounded border p-2">
-                  <Input
-                    value={slot.label}
-                    onChange={(event) =>
-                      updateSignatureSlot(slot.key, (current) => ({
-                        ...current,
-                        label: event.target.value,
-                      }))
-                    }
-                    placeholder="Label"
-                    className="h-8"
-                  />
-                  <Input
-                    value={slot.signerName ?? ""}
-                    onChange={(event) =>
-                      updateSignatureSlot(slot.key, (current) => ({
-                        ...current,
-                        signerName: event.target.value,
-                      }))
-                    }
-                    placeholder="Signer name"
-                    className="h-8"
-                  />
-                  <Input
-                    value={slot.signerTitle ?? ""}
-                    onChange={(event) =>
-                      updateSignatureSlot(slot.key, (current) => ({
-                        ...current,
-                        signerTitle: event.target.value,
-                      }))
-                    }
-                    placeholder="Signer title"
-                    className="h-8"
-                  />
-                  <Input
-                    value={slot.assetKey ?? ""}
-                    onChange={(event) =>
-                      updateSignatureSlot(slot.key, (current) => ({
-                        ...current,
-                        assetKey: event.target.value,
-                      }))
-                    }
-                    placeholder="Signature asset key"
-                    className="h-8"
-                  />
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs"
-                    onClick={() => {
-                      setDrawingSlotKey(slot.key);
-                      setShowDrawSignatureDialog(true);
-                    }}
-                  >
-                    Draw for slot
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </ScrollArea>
-        </div>
+              </ScrollArea>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
       </CardContent>
     </Card>
   );
@@ -1383,6 +1575,33 @@ export default function CertificatesPage() {
                 <SlidersHorizontal className="mr-1.5 h-4 w-4" />
                 Inspector
               </Button>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-md border bg-muted/20 p-2">
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                  Templates
+                </p>
+                <p className="text-sm font-semibold">{templates.length}</p>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-2">
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                  Versions
+                </p>
+                <p className="text-sm font-semibold">{versions.length}</p>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-2">
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                  Canvas Elements
+                </p>
+                <p className="text-sm font-semibold">{editorLayout.elements.length}</p>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-2">
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                  Signature Slots
+                </p>
+                <p className="text-sm font-semibold">{editorLayout.signatureSlots.length}</p>
+              </div>
             </div>
 
             <div className="grid gap-5 xl:grid-cols-[minmax(280px,340px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(300px,360px)_minmax(0,1fr)_minmax(320px,380px)]">
@@ -1582,36 +1801,67 @@ export default function CertificatesPage() {
                     </div>
                   </div>
 
-                  <div className="rounded-md border bg-muted/20 p-3">
-                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Preview Tokens
-                    </p>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      {Object.entries(previewData).map(([key, value]) => (
-                        <label key={key} className="space-y-1">
-                          <span className="text-[11px] text-muted-foreground">{key}</span>
-                          <Input
-                            value={value}
-                            onChange={(event) =>
-                              setPreviewData((previous) => ({
-                                ...previous,
-                                [key]: event.target.value,
-                              }))
-                            }
-                            className="h-8 text-xs"
-                          />
-                        </label>
-                      ))}
-                    </div>
-                    {tokenValidation.unknown.length > 0 && (
-                      <Alert className="mt-3 border-amber-300 bg-amber-50 text-amber-900">
-                        <AlertCircle className="h-4 w-4" />
-                        <AlertDescription>
-                          Unknown tokens: {tokenValidation.unknown.join(", ")}
-                        </AlertDescription>
-                      </Alert>
-                    )}
-                  </div>
+                  <Accordion
+                    type="multiple"
+                    defaultValue={["preview-tokens"]}
+                    className="rounded-md border bg-muted/20 px-3"
+                  >
+                    <AccordionItem value="preview-tokens" className="border-0">
+                      <AccordionTrigger className="py-3 hover:no-underline">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Preview Tokens
+                          </span>
+                          <Badge variant="secondary" className="text-[10px]">
+                            {Object.keys(previewData).length}
+                          </Badge>
+                          {tokenValidation.unknown.length > 0 && (
+                            <Badge variant="destructive" className="text-[10px]">
+                              {tokenValidation.unknown.length} unknown
+                            </Badge>
+                          )}
+                        </div>
+                      </AccordionTrigger>
+                      <AccordionContent className="pb-3">
+                        <div className="mb-2 flex justify-end">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => setPreviewData({ ...DEFAULT_PREVIEW_DATA })}
+                          >
+                            Reset values
+                          </Button>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {Object.entries(previewData).map(([key, value]) => (
+                            <label key={key} className="space-y-1">
+                              <span className="text-[11px] text-muted-foreground">{key}</span>
+                              <Input
+                                value={value}
+                                onChange={(event) =>
+                                  setPreviewData((previous) => ({
+                                    ...previous,
+                                    [key]: event.target.value,
+                                  }))
+                                }
+                                className="h-8 text-xs"
+                              />
+                            </label>
+                          ))}
+                        </div>
+                        {tokenValidation.unknown.length > 0 && (
+                          <Alert className="mt-3 border-amber-300 bg-amber-50 text-amber-900">
+                            <AlertCircle className="h-4 w-4" />
+                            <AlertDescription>
+                              Unknown tokens: {tokenValidation.unknown.join(", ")}
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                      </AccordionContent>
+                    </AccordionItem>
+                  </Accordion>
                 </CardContent>
               </Card>
 
