@@ -1103,7 +1103,7 @@ export default function CertificatesPage() {
             : "Select an element to start editing settings."}
         </p>
       </CardHeader>
-      <CardContent className="max-h-[min(78svh,920px)] space-y-5 overflow-y-auto pr-2">
+      <CardContent className="space-y-5 pr-2">
         <div className="flex gap-2">
           <Button
             size="sm"
@@ -1144,8 +1144,8 @@ export default function CertificatesPage() {
               {sortedElementsByLayer.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No elements on canvas yet.</p>
               ) : (
-                <ScrollArea className="h-[min(28svh,220px)] rounded-md border p-2">
-                  <div className="space-y-2 pr-1">
+                <div className="rounded-md border p-2">
+                  <div className="space-y-2">
                     {sortedElementsByLayer.map((element) => (
                       <button
                         key={element.id}
@@ -1166,7 +1166,7 @@ export default function CertificatesPage() {
                       </button>
                     ))}
                   </div>
-                </ScrollArea>
+                </div>
               )}
             </AccordionContent>
           </AccordionItem>
@@ -1459,8 +1459,8 @@ export default function CertificatesPage() {
                   Slot
                 </Button>
               </div>
-              <ScrollArea className="h-[min(28svh,260px)] rounded-md border p-2">
-                <div className="space-y-3 pr-1">
+              <div className="rounded-md border p-2">
+                <div className="space-y-3">
                   {editorLayout.signatureSlots.map((slot) => (
                     <div key={slot.key} className="space-y-1 rounded border p-2">
                       <Input
@@ -1521,7 +1521,7 @@ export default function CertificatesPage() {
                     </div>
                   ))}
                 </div>
-              </ScrollArea>
+              </div>
             </AccordionContent>
           </AccordionItem>
         </Accordion>
