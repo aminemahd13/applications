@@ -916,6 +916,16 @@ export default function ApplicationsListPage() {
     setShowFieldZipDialog(false);
   }, [eventId]);
 
+  const selectedApplicationIds = useMemo(
+    () => Array.from(new Set(selectedIds)),
+    [selectedIds],
+  );
+  const selectedIdSet = useMemo(
+    () => new Set(selectedApplicationIds),
+    [selectedApplicationIds],
+  );
+  const selectedCount = selectedApplicationIds.length;
+
   useEffect(() => {
     if (fieldZipExportScope === "selected" && selectedApplicationIds.length === 0) {
       setFieldZipExportScope("all");
@@ -990,15 +1000,6 @@ export default function ApplicationsListPage() {
     });
   }, [filteredData.length]);
 
-  const selectedApplicationIds = useMemo(
-    () => Array.from(new Set(selectedIds)),
-    [selectedIds],
-  );
-  const selectedIdSet = useMemo(
-    () => new Set(selectedApplicationIds),
-    [selectedApplicationIds],
-  );
-  const selectedCount = selectedApplicationIds.length;
   const parsedPastedEmails = useMemo(
     () => parsePastedEmails(pastedEmailsText),
     [pastedEmailsText],
