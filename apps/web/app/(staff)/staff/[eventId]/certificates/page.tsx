@@ -9,17 +9,20 @@ import {
   FilePlus2,
   ImagePlus,
   Loader2,
+  PanelLeft,
   Plus,
   QrCode,
   RefreshCw,
   Save,
   Signature,
+  SlidersHorizontal,
   SquarePen,
   Trash2,
   Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth, usePermissions } from "@/lib/auth-context";
+import { computeCanvasScale } from "@/lib/certificate-viewer";
 import {
   CERTIFICATE_DYNAMIC_TOKENS,
   createCertificateTemplate,
@@ -51,7 +54,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -69,6 +71,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -186,6 +195,8 @@ export default function CertificatesPage() {
   const [isUploadingAsset, setIsUploadingAsset] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showDrawSignatureDialog, setShowDrawSignatureDialog] = useState(false);
+  const [showTemplateLibrarySheet, setShowTemplateLibrarySheet] = useState(false);
+  const [showInspectorSheet, setShowInspectorSheet] = useState(false);
   const [createName, setCreateName] = useState("Participation Certificate");
   const [createTypeLabel, setCreateTypeLabel] = useState("Participation");
   const [createTypeKey, setCreateTypeKey] = useState("participation");
@@ -205,21 +216,10 @@ export default function CertificatesPage() {
     () => templates.find((template) => template.id === selectedTemplateId) ?? null,
     [templates, selectedTemplateId],
   );
-  const selectedVersion = useMemo(
-    () => versions.find((version) => version.id === selectedVersionId) ?? null,
-    [versions, selectedVersionId],
-  );
   const selectedElement = useMemo(
     () => editorLayout.elements.find((element) => element.id === selectedElementId) ?? null,
     [editorLayout.elements, selectedElementId],
   );
-  const selectedSignatureSlot = useMemo(() => {
-    if (!selectedElement || selectedElement.type !== "signature") return null;
-    return (
-      editorLayout.signatureSlots.find((slot) => slot.key === selectedElement.signatureSlotKey) ??
-      null
-    );
-  }, [editorLayout.signatureSlots, selectedElement]);
 
   const tokenValidation = useMemo(() => {
     const allowed = new Set<string>(CERTIFICATE_DYNAMIC_TOKENS);
@@ -330,14 +330,24 @@ export default function CertificatesPage() {
   useEffect(() => {
     const wrapper = canvasWrapperRef.current;
     if (!wrapper) return;
-    const observer = new ResizeObserver(() => {
-      const width = wrapper.clientWidth;
-      const scale = Math.min(1, width / Math.max(editorLayout.canvas.width, 1));
-      setCanvasScale(scale > 0 ? scale : 1);
-    });
+    const updateScale = () => {
+      const width = Math.max(wrapper.clientWidth - 32, 1);
+      const height = Math.max(wrapper.clientHeight - 32, 1);
+      setCanvasScale(
+        computeCanvasScale({
+          containerWidth: width,
+          containerHeight: height,
+          canvasWidth: editorLayout.canvas.width,
+          canvasHeight: editorLayout.canvas.height,
+          maxScale: 1,
+        }),
+      );
+    };
+    const observer = new ResizeObserver(updateScale);
     observer.observe(wrapper);
+    updateScale();
     return () => observer.disconnect();
-  }, [editorLayout.canvas.width]);
+  }, [editorLayout.canvas.height, editorLayout.canvas.width]);
 
   const updateElement = useCallback(
     (elementId: string, updater: (element: CertificateTemplateElement) => CertificateTemplateElement) => {
@@ -807,6 +817,495 @@ export default function CertificatesPage() {
   }
 
   const canvasBackgroundImage = resolveAssetUrl(editorLayout.canvas.backgroundAssetKey);
+  const templateLibraryScrollClass = "h-[min(56svh,620px)] pr-2";
+
+  const renderTemplateLibraryPanel = (className?: string) => (
+    <Card className={`min-h-0 ${className ?? ""}`.trim()}>
+      <CardHeader>
+        <CardTitle className="text-base">Template Library</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <ScrollArea className={templateLibraryScrollClass}>
+          <div className="space-y-4">
+            {groupedTemplates.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No templates yet. Create your first certificate template.
+              </p>
+            ) : (
+              groupedTemplates.map((group) => (
+                <div key={group.typeKey} className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {group.typeLabel}
+                    </p>
+                    <Badge variant="outline" className="text-[10px]">
+                      {group.typeKey}
+                    </Badge>
+                  </div>
+                  <div className="space-y-2">
+                    {group.templates.map((template) => (
+                      <button
+                        type="button"
+                        key={template.id}
+                        className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${
+                          selectedTemplateId === template.id
+                            ? "border-primary bg-primary/5"
+                            : "border-border hover:border-primary/50"
+                        }`}
+                        onClick={() => {
+                          setSelectedTemplateId(template.id);
+                          setShowTemplateLibrarySheet(false);
+                        }}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-medium">{template.name}</p>
+                            <p className="text-xs text-muted-foreground">
+                              v{template.activeVersionNumber ?? "-"}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {template.isDefault && <Badge className="text-[10px]">Default</Badge>}
+                            {!template.isActive && (
+                              <Badge variant="secondary" className="text-[10px]">
+                                Archived
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-1">
+                          {!template.isDefault && template.isActive && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-6 text-[10px]"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void toggleTemplateDefault(template);
+                              }}
+                            >
+                              Set default
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-6 text-[10px]"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void toggleTemplateArchive(template);
+                            }}
+                          >
+                            {template.isActive ? "Archive" : "Restore"}
+                          </Button>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </ScrollArea>
+
+        <Separator />
+        <div className="space-y-2">
+          <Label className="text-xs uppercase text-muted-foreground">Versions</Label>
+          <div className="space-y-2">
+            <Select
+              value={selectedVersionId ?? ""}
+              onValueChange={(value) => setSelectedVersionId(value)}
+              disabled={versions.length === 0}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select version" />
+              </SelectTrigger>
+              <SelectContent>
+                {versions.map((version) => (
+                  <SelectItem key={version.id} value={version.id}>
+                    Version {version.versionNumber}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={saveAsNewVersion}
+                disabled={!selectedTemplateId || isSavingVersion}
+              >
+                {isSavingVersion ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Save version
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!selectedTemplateId || !selectedVersionId}
+                onClick={() => selectedVersionId && void activateVersion(selectedVersionId)}
+              >
+                Activate
+              </Button>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  const renderInspectorPanel = (className?: string) => (
+    <Card className={`min-h-0 ${className ?? ""}`.trim()}>
+      <CardHeader>
+        <CardTitle className="text-base">Inspector</CardTitle>
+      </CardHeader>
+      <CardContent className="max-h-[min(74svh,860px)] space-y-4 overflow-y-auto pr-1">
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="flex-1"
+            disabled={!selectedElementId}
+            onClick={removeSelectedElement}
+          >
+            <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+            Remove
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="flex-1"
+            onClick={() => setShowDrawSignatureDialog(true)}
+          >
+            <Signature className="mr-1.5 h-3.5 w-3.5" />
+            Draw signature
+          </Button>
+        </div>
+
+        {!selectedElement ? (
+          <p className="text-sm text-muted-foreground">
+            Select an element on the canvas to edit its settings.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label>Element</Label>
+              <Input value={buildElementLabel(selectedElement)} disabled />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">X</span>
+                <Input
+                  type="number"
+                  value={selectedElement.x}
+                  onChange={(event) =>
+                    updateElement(selectedElement.id, (element) => ({
+                      ...element,
+                      x: Number(event.target.value || 0),
+                    }))
+                  }
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">Y</span>
+                <Input
+                  type="number"
+                  value={selectedElement.y}
+                  onChange={(event) =>
+                    updateElement(selectedElement.id, (element) => ({
+                      ...element,
+                      y: Number(event.target.value || 0),
+                    }))
+                  }
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">Width</span>
+                <Input
+                  type="number"
+                  value={selectedElement.width}
+                  onChange={(event) =>
+                    updateElement(selectedElement.id, (element) => ({
+                      ...element,
+                      width: Number(event.target.value || 1),
+                    }))
+                  }
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">Height</span>
+                <Input
+                  type="number"
+                  value={selectedElement.height}
+                  onChange={(event) =>
+                    updateElement(selectedElement.id, (element) => ({
+                      ...element,
+                      height: Number(event.target.value || 1),
+                    }))
+                  }
+                />
+              </label>
+            </div>
+
+            {(selectedElement.type === "text" || selectedElement.type === "dynamic_text") && (
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">Content / Token</span>
+                <Input
+                  value={
+                    selectedElement.type === "text"
+                      ? selectedElement.content ?? ""
+                      : selectedElement.token ?? ""
+                  }
+                  onChange={(event) =>
+                    updateElement(selectedElement.id, (element) =>
+                      element.type === "text"
+                        ? { ...element, content: event.target.value }
+                        : { ...element, token: event.target.value },
+                    )
+                  }
+                />
+              </label>
+            )}
+
+            {selectedElement.type === "qr" && (
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">QR token field</span>
+                <Input
+                  value={selectedElement.token ?? ""}
+                  onChange={(event) =>
+                    updateElement(selectedElement.id, (element) => ({
+                      ...element,
+                      token: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+            )}
+
+            {selectedElement.type === "image" && (
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">Asset key</span>
+                <Input
+                  value={selectedElement.assetKey ?? ""}
+                  onChange={(event) =>
+                    updateElement(selectedElement.id, (element) => ({
+                      ...element,
+                      assetKey: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+            )}
+
+            {selectedElement.type === "signature" && (
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">Signature slot</span>
+                <Select
+                  value={selectedElement.signatureSlotKey ?? ""}
+                  onValueChange={(value) =>
+                    updateElement(selectedElement.id, (element) => ({
+                      ...element,
+                      signatureSlotKey: value,
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select slot" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {editorLayout.signatureSlots.map((slot) => (
+                      <SelectItem key={slot.key} value={slot.key}>
+                        {slot.label} ({slot.key})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            )}
+
+            {(selectedElement.type === "text" || selectedElement.type === "dynamic_text") && (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Font size</span>
+                    <Input
+                      type="number"
+                      value={getStyleNumber(selectedElement.style, "fontSize", 32)}
+                      onChange={(event) =>
+                        updateElement(selectedElement.id, (element) => ({
+                          ...element,
+                          style: {
+                            ...(element.style ?? {}),
+                            fontSize: Number(event.target.value || 0),
+                          },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Font weight</span>
+                    <Input
+                      type="number"
+                      value={getStyleNumber(selectedElement.style, "fontWeight", 500)}
+                      onChange={(event) =>
+                        updateElement(selectedElement.id, (element) => ({
+                          ...element,
+                          style: {
+                            ...(element.style ?? {}),
+                            fontWeight: Number(event.target.value || 0),
+                          },
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">Text color</span>
+                  <Input
+                    type="color"
+                    value={getStyleString(selectedElement.style, "color", "#0f172a")}
+                    onChange={(event) =>
+                      updateElement(selectedElement.id, (element) => ({
+                        ...element,
+                        style: {
+                          ...(element.style ?? {}),
+                          color: event.target.value,
+                        },
+                      }))
+                    }
+                  />
+                </label>
+              </>
+            )}
+          </div>
+        )}
+
+        <Separator />
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label>Background</Label>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                setEditorLayout((previous) => ({
+                  ...previous,
+                  canvas: { ...previous.canvas, backgroundAssetKey: "" },
+                }))
+              }
+            >
+              Clear
+            </Button>
+          </div>
+          <Input
+            value={editorLayout.canvas.backgroundAssetKey ?? ""}
+            onChange={(event) =>
+              setEditorLayout((previous) => ({
+                ...previous,
+                canvas: {
+                  ...previous.canvas,
+                  backgroundAssetKey: event.target.value,
+                },
+              }))
+            }
+            placeholder="Storage key"
+          />
+          <Input
+            type="color"
+            value={editorLayout.canvas.backgroundColor ?? "#ffffff"}
+            onChange={(event) =>
+              setEditorLayout((previous) => ({
+                ...previous,
+                canvas: {
+                  ...previous.canvas,
+                  backgroundColor: event.target.value,
+                },
+              }))
+            }
+          />
+        </div>
+
+        <Separator />
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label>Signature Slots</Label>
+            <Button size="sm" variant="outline" onClick={addSignatureSlot}>
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              Slot
+            </Button>
+          </div>
+          <ScrollArea className="h-[min(26svh,240px)] rounded-md border p-2">
+            <div className="space-y-3">
+              {editorLayout.signatureSlots.map((slot) => (
+                <div key={slot.key} className="space-y-1 rounded border p-2">
+                  <Input
+                    value={slot.label}
+                    onChange={(event) =>
+                      updateSignatureSlot(slot.key, (current) => ({
+                        ...current,
+                        label: event.target.value,
+                      }))
+                    }
+                    placeholder="Label"
+                    className="h-8"
+                  />
+                  <Input
+                    value={slot.signerName ?? ""}
+                    onChange={(event) =>
+                      updateSignatureSlot(slot.key, (current) => ({
+                        ...current,
+                        signerName: event.target.value,
+                      }))
+                    }
+                    placeholder="Signer name"
+                    className="h-8"
+                  />
+                  <Input
+                    value={slot.signerTitle ?? ""}
+                    onChange={(event) =>
+                      updateSignatureSlot(slot.key, (current) => ({
+                        ...current,
+                        signerTitle: event.target.value,
+                      }))
+                    }
+                    placeholder="Signer title"
+                    className="h-8"
+                  />
+                  <Input
+                    value={slot.assetKey ?? ""}
+                    onChange={(event) =>
+                      updateSignatureSlot(slot.key, (current) => ({
+                        ...current,
+                        assetKey: event.target.value,
+                      }))
+                    }
+                    placeholder="Signature asset key"
+                    className="h-8"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={() => {
+                      setDrawingSlotKey(slot.key);
+                      setShowDrawSignatureDialog(true);
+                    }}
+                  >
+                    Draw for slot
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+        </div>
+      </CardContent>
+    </Card>
+  );
 
   return (
     <div className="space-y-6">
@@ -845,143 +1344,19 @@ export default function CertificatesPage() {
           </TabsList>
 
           <TabsContent value="studio" className="space-y-4">
-            <div className="grid gap-4 lg:grid-cols-[350px_minmax(0,1fr)_340px]">
-              <Card className="min-h-0">
-                <CardHeader>
-                  <CardTitle className="text-base">Template Library</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <ScrollArea className="h-[540px] pr-2">
-                    <div className="space-y-4">
-                      {groupedTemplates.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">
-                          No templates yet. Create your first certificate template.
-                        </p>
-                      ) : (
-                        groupedTemplates.map((group) => (
-                          <div key={group.typeKey} className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                                {group.typeLabel}
-                              </p>
-                              <Badge variant="outline" className="text-[10px]">
-                                {group.typeKey}
-                              </Badge>
-                            </div>
-                            <div className="space-y-2">
-                              {group.templates.map((template) => (
-                                <button
-                                  type="button"
-                                  key={template.id}
-                                  className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${
-                                    selectedTemplateId === template.id
-                                      ? "border-primary bg-primary/5"
-                                      : "border-border hover:border-primary/50"
-                                  }`}
-                                  onClick={() => setSelectedTemplateId(template.id)}
-                                >
-                                  <div className="flex items-start justify-between gap-2">
-                                    <div>
-                                      <p className="text-sm font-medium">{template.name}</p>
-                                      <p className="text-xs text-muted-foreground">
-                                        v{template.activeVersionNumber ?? "-"}
-                                      </p>
-                                    </div>
-                                    <div className="flex items-center gap-1">
-                                      {template.isDefault && (
-                                        <Badge className="text-[10px]">Default</Badge>
-                                      )}
-                                      {!template.isActive && (
-                                        <Badge variant="secondary" className="text-[10px]">
-                                          Archived
-                                        </Badge>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className="mt-2 flex flex-wrap items-center gap-1">
-                                    {!template.isDefault && template.isActive && (
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="outline"
-                                        className="h-6 text-[10px]"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          void toggleTemplateDefault(template);
-                                        }}
-                                      >
-                                        Set default
-                                      </Button>
-                                    )}
-                                    <Button
-                                      type="button"
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-6 text-[10px]"
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        void toggleTemplateArchive(template);
-                                      }}
-                                    >
-                                      {template.isActive ? "Archive" : "Restore"}
-                                    </Button>
-                                  </div>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </ScrollArea>
+            <div className="flex flex-wrap gap-2 xl:hidden">
+              <Button variant="outline" onClick={() => setShowTemplateLibrarySheet(true)}>
+                <PanelLeft className="mr-1.5 h-4 w-4" />
+                Template Library
+              </Button>
+              <Button variant="outline" onClick={() => setShowInspectorSheet(true)}>
+                <SlidersHorizontal className="mr-1.5 h-4 w-4" />
+                Inspector
+              </Button>
+            </div>
 
-                  <Separator />
-                  <div className="space-y-2">
-                    <Label className="text-xs uppercase text-muted-foreground">Versions</Label>
-                    <div className="space-y-2">
-                      <Select
-                        value={selectedVersionId ?? ""}
-                        onValueChange={(value) => setSelectedVersionId(value)}
-                        disabled={versions.length === 0}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select version" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {versions.map((version) => (
-                            <SelectItem key={version.id} value={version.id}>
-                              Version {version.versionNumber}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={saveAsNewVersion}
-                          disabled={!selectedTemplateId || isSavingVersion}
-                        >
-                          {isSavingVersion ? (
-                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Save className="mr-1.5 h-3.5 w-3.5" />
-                          )}
-                          Save version
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={!selectedTemplateId || !selectedVersionId}
-                          onClick={() => selectedVersionId && void activateVersion(selectedVersionId)}
-                        >
-                          Activate
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+            <div className="grid gap-4 xl:grid-cols-[350px_minmax(0,1fr)_340px]">
+              <div className="hidden xl:block">{renderTemplateLibraryPanel()}</div>
 
               <Card className="min-h-0">
                 <CardHeader className="pb-2">
@@ -1014,8 +1389,7 @@ export default function CertificatesPage() {
                 <CardContent className="space-y-3">
                   <div
                     ref={canvasWrapperRef}
-                    className="relative overflow-auto rounded-md border bg-muted/20"
-                    style={{ minHeight: 560 }}
+                    className="relative h-[clamp(320px,62svh,760px)] overflow-auto rounded-md border bg-muted/20"
                   >
                     <div
                       className="origin-top-left p-4"
@@ -1186,352 +1560,36 @@ export default function CertificatesPage() {
                 </CardContent>
               </Card>
 
-              <Card className="min-h-0">
-                <CardHeader>
-                  <CardTitle className="text-base">Inspector</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="flex-1"
-                      disabled={!selectedElementId}
-                      onClick={removeSelectedElement}
-                    >
-                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                      Remove
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="flex-1"
-                      onClick={() => setShowDrawSignatureDialog(true)}
-                    >
-                      <Signature className="mr-1.5 h-3.5 w-3.5" />
-                      Draw signature
-                    </Button>
-                  </div>
-
-                  {!selectedElement ? (
-                    <p className="text-sm text-muted-foreground">
-                      Select an element on the canvas to edit its settings.
-                    </p>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="space-y-1">
-                        <Label>Element</Label>
-                        <Input value={buildElementLabel(selectedElement)} disabled />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">X</span>
-                          <Input
-                            type="number"
-                            value={selectedElement.x}
-                            onChange={(event) =>
-                              updateElement(selectedElement.id, (element) => ({
-                                ...element,
-                                x: Number(event.target.value || 0),
-                              }))
-                            }
-                          />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">Y</span>
-                          <Input
-                            type="number"
-                            value={selectedElement.y}
-                            onChange={(event) =>
-                              updateElement(selectedElement.id, (element) => ({
-                                ...element,
-                                y: Number(event.target.value || 0),
-                              }))
-                            }
-                          />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">Width</span>
-                          <Input
-                            type="number"
-                            value={selectedElement.width}
-                            onChange={(event) =>
-                              updateElement(selectedElement.id, (element) => ({
-                                ...element,
-                                width: Number(event.target.value || 1),
-                              }))
-                            }
-                          />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">Height</span>
-                          <Input
-                            type="number"
-                            value={selectedElement.height}
-                            onChange={(event) =>
-                              updateElement(selectedElement.id, (element) => ({
-                                ...element,
-                                height: Number(event.target.value || 1),
-                              }))
-                            }
-                          />
-                        </label>
-                      </div>
-
-                      {(selectedElement.type === "text" || selectedElement.type === "dynamic_text") && (
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">Content / Token</span>
-                          <Input
-                            value={
-                              selectedElement.type === "text"
-                                ? selectedElement.content ?? ""
-                                : selectedElement.token ?? ""
-                            }
-                            onChange={(event) =>
-                              updateElement(selectedElement.id, (element) =>
-                                element.type === "text"
-                                  ? { ...element, content: event.target.value }
-                                  : { ...element, token: event.target.value },
-                              )
-                            }
-                          />
-                        </label>
-                      )}
-
-                      {selectedElement.type === "qr" && (
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">QR token field</span>
-                          <Input
-                            value={selectedElement.token ?? ""}
-                            onChange={(event) =>
-                              updateElement(selectedElement.id, (element) => ({
-                                ...element,
-                                token: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                      )}
-
-                      {selectedElement.type === "image" && (
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">Asset key</span>
-                          <Input
-                            value={selectedElement.assetKey ?? ""}
-                            onChange={(event) =>
-                              updateElement(selectedElement.id, (element) => ({
-                                ...element,
-                                assetKey: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                      )}
-
-                      {selectedElement.type === "signature" && (
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">Signature slot</span>
-                          <Select
-                            value={selectedElement.signatureSlotKey ?? ""}
-                            onValueChange={(value) =>
-                              updateElement(selectedElement.id, (element) => ({
-                                ...element,
-                                signatureSlotKey: value,
-                              }))
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Select slot" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {editorLayout.signatureSlots.map((slot) => (
-                                <SelectItem key={slot.key} value={slot.key}>
-                                  {slot.label} ({slot.key})
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </label>
-                      )}
-
-                      {(selectedElement.type === "text" || selectedElement.type === "dynamic_text") && (
-                        <>
-                          <div className="grid grid-cols-2 gap-2">
-                            <label className="space-y-1">
-                              <span className="text-xs text-muted-foreground">Font size</span>
-                              <Input
-                                type="number"
-                                value={getStyleNumber(selectedElement.style, "fontSize", 32)}
-                                onChange={(event) =>
-                                  updateElement(selectedElement.id, (element) => ({
-                                    ...element,
-                                    style: {
-                                      ...(element.style ?? {}),
-                                      fontSize: Number(event.target.value || 0),
-                                    },
-                                  }))
-                                }
-                              />
-                            </label>
-                            <label className="space-y-1">
-                              <span className="text-xs text-muted-foreground">Font weight</span>
-                              <Input
-                                type="number"
-                                value={getStyleNumber(selectedElement.style, "fontWeight", 500)}
-                                onChange={(event) =>
-                                  updateElement(selectedElement.id, (element) => ({
-                                    ...element,
-                                    style: {
-                                      ...(element.style ?? {}),
-                                      fontWeight: Number(event.target.value || 0),
-                                    },
-                                  }))
-                                }
-                              />
-                            </label>
-                          </div>
-                          <label className="space-y-1">
-                            <span className="text-xs text-muted-foreground">Text color</span>
-                            <Input
-                              type="color"
-                              value={getStyleString(selectedElement.style, "color", "#0f172a")}
-                              onChange={(event) =>
-                                updateElement(selectedElement.id, (element) => ({
-                                  ...element,
-                                  style: {
-                                    ...(element.style ?? {}),
-                                    color: event.target.value,
-                                  },
-                                }))
-                              }
-                            />
-                          </label>
-                        </>
-                      )}
-                    </div>
-                  )}
-
-                  <Separator />
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label>Background</Label>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          setEditorLayout((previous) => ({
-                            ...previous,
-                            canvas: { ...previous.canvas, backgroundAssetKey: "" },
-                          }))
-                        }
-                      >
-                        Clear
-                      </Button>
-                    </div>
-                    <Input
-                      value={editorLayout.canvas.backgroundAssetKey ?? ""}
-                      onChange={(event) =>
-                        setEditorLayout((previous) => ({
-                          ...previous,
-                          canvas: {
-                            ...previous.canvas,
-                            backgroundAssetKey: event.target.value,
-                          },
-                        }))
-                      }
-                      placeholder="Storage key"
-                    />
-                    <Input
-                      type="color"
-                      value={editorLayout.canvas.backgroundColor ?? "#ffffff"}
-                      onChange={(event) =>
-                        setEditorLayout((previous) => ({
-                          ...previous,
-                          canvas: {
-                            ...previous.canvas,
-                            backgroundColor: event.target.value,
-                          },
-                        }))
-                      }
-                    />
-                  </div>
-
-                  <Separator />
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label>Signature Slots</Label>
-                      <Button size="sm" variant="outline" onClick={addSignatureSlot}>
-                        <Plus className="mr-1 h-3.5 w-3.5" />
-                        Slot
-                      </Button>
-                    </div>
-                    <ScrollArea className="h-40 rounded-md border p-2">
-                      <div className="space-y-3">
-                        {editorLayout.signatureSlots.map((slot) => (
-                          <div key={slot.key} className="space-y-1 rounded border p-2">
-                            <Input
-                              value={slot.label}
-                              onChange={(event) =>
-                                updateSignatureSlot(slot.key, (current) => ({
-                                  ...current,
-                                  label: event.target.value,
-                                }))
-                              }
-                              placeholder="Label"
-                              className="h-8"
-                            />
-                            <Input
-                              value={slot.signerName ?? ""}
-                              onChange={(event) =>
-                                updateSignatureSlot(slot.key, (current) => ({
-                                  ...current,
-                                  signerName: event.target.value,
-                                }))
-                              }
-                              placeholder="Signer name"
-                              className="h-8"
-                            />
-                            <Input
-                              value={slot.signerTitle ?? ""}
-                              onChange={(event) =>
-                                updateSignatureSlot(slot.key, (current) => ({
-                                  ...current,
-                                  signerTitle: event.target.value,
-                                }))
-                              }
-                              placeholder="Signer title"
-                              className="h-8"
-                            />
-                            <Input
-                              value={slot.assetKey ?? ""}
-                              onChange={(event) =>
-                                updateSignatureSlot(slot.key, (current) => ({
-                                  ...current,
-                                  assetKey: event.target.value,
-                                }))
-                              }
-                              placeholder="Signature asset key"
-                              className="h-8"
-                            />
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 text-xs"
-                              onClick={() => {
-                                setDrawingSlotKey(slot.key);
-                                setShowDrawSignatureDialog(true);
-                              }}
-                            >
-                              Draw for slot
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    </ScrollArea>
-                  </div>
-                </CardContent>
-              </Card>
+              <div className="hidden xl:block">{renderInspectorPanel()}</div>
             </div>
+
+            <Sheet open={showTemplateLibrarySheet} onOpenChange={setShowTemplateLibrarySheet}>
+              <SheetContent side="left" className="w-[min(100vw,440px)] p-0 sm:max-w-none">
+                <SheetHeader>
+                  <SheetTitle>Template Library</SheetTitle>
+                  <SheetDescription>
+                    Pick templates, versions, and defaults without leaving the canvas.
+                  </SheetDescription>
+                </SheetHeader>
+                <div className="flex min-h-0 flex-1 overflow-hidden p-4 pt-0">
+                  {renderTemplateLibraryPanel("h-full w-full border-0 shadow-none")}
+                </div>
+              </SheetContent>
+            </Sheet>
+
+            <Sheet open={showInspectorSheet} onOpenChange={setShowInspectorSheet}>
+              <SheetContent side="right" className="w-[min(100vw,440px)] p-0 sm:max-w-none">
+                <SheetHeader>
+                  <SheetTitle>Inspector</SheetTitle>
+                  <SheetDescription>
+                    Edit selected element properties and signature slots.
+                  </SheetDescription>
+                </SheetHeader>
+                <div className="flex min-h-0 flex-1 overflow-hidden p-4 pt-0">
+                  {renderInspectorPanel("h-full w-full border-0 shadow-none")}
+                </div>
+              </SheetContent>
+            </Sheet>
           </TabsContent>
 
           <TabsContent value="assets" className="space-y-4">
@@ -1539,12 +1597,12 @@ export default function CertificatesPage() {
               <CardHeader className="pb-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <CardTitle className="text-base">Backgrounds, Signatures, Logos</CardTitle>
-                  <div className="flex items-center gap-2">
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
                     <Select
                       value={assetKindFilter}
                       onValueChange={(value) => setAssetKindFilter(value as AssetKind)}
                     >
-                      <SelectTrigger className="w-[170px]">
+                      <SelectTrigger className="w-full sm:w-[170px]">
                         <SelectValue placeholder="Asset kind" />
                       </SelectTrigger>
                       <SelectContent>
@@ -1555,7 +1613,7 @@ export default function CertificatesPage() {
                         <SelectItem value="image">Images</SelectItem>
                       </SelectContent>
                     </Select>
-                    <label className="inline-flex">
+                    <label className="inline-flex w-full sm:w-auto">
                       <input
                         type="file"
                         className="hidden"
@@ -1568,7 +1626,7 @@ export default function CertificatesPage() {
                         }}
                         disabled={isUploadingAsset}
                       />
-                      <Button asChild variant="outline" disabled={isUploadingAsset}>
+                      <Button asChild variant="outline" disabled={isUploadingAsset} className="w-full sm:w-auto">
                         <span>
                           {isUploadingAsset ? (
                             <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
@@ -1648,6 +1706,7 @@ export default function CertificatesPage() {
                   <CardTitle className="text-base">Manual Issuance</CardTitle>
                   <Button
                     variant="outline"
+                    className="w-full sm:w-auto"
                     onClick={issueSampleApplications}
                     disabled={!selectedTemplateId}
                   >
@@ -1665,7 +1724,7 @@ export default function CertificatesPage() {
                   <div className="rounded-md border p-3 text-sm">
                     <p className="font-medium">{selectedTemplate.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      Type {selectedTemplate.typeLabel} ({selectedTemplate.typeKey}) • Active
+                      Type {selectedTemplate.typeLabel} ({selectedTemplate.typeKey}) - Active
                       version {selectedTemplate.activeVersionNumber ?? "-"}
                     </p>
                   </div>
@@ -1688,7 +1747,7 @@ export default function CertificatesPage() {
                       Refresh
                     </Button>
                   </div>
-                  <ScrollArea className="h-56 rounded-md border">
+                  <ScrollArea className="h-[min(36svh,340px)] rounded-md border">
                     <div className="divide-y">
                       {issuedCertificates.length === 0 ? (
                         <p className="p-3 text-sm text-muted-foreground">
@@ -1718,7 +1777,7 @@ export default function CertificatesPage() {
                               </div>
                             </div>
                             <p className="text-xs text-muted-foreground">
-                              Application {item.applicationId} • {formatDateTime(item.issuedAt)}
+                              Application {item.applicationId} - {formatDateTime(item.issuedAt)}
                             </p>
                             <div className="flex flex-wrap gap-2">
                               <Button size="sm" variant="outline" asChild>
@@ -1752,7 +1811,7 @@ export default function CertificatesPage() {
 
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Render Jobs</p>
-                  <ScrollArea className="h-56 rounded-md border">
+                  <ScrollArea className="h-[min(36svh,340px)] rounded-md border">
                     <div className="divide-y">
                       {renderJobs.length === 0 ? (
                         <p className="p-3 text-sm text-muted-foreground">No render jobs.</p>
@@ -1893,3 +1952,4 @@ export default function CertificatesPage() {
     </div>
   );
 }
+
