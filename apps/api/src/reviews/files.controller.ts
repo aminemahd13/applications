@@ -154,7 +154,7 @@ export class FilesController {
     @Param('eventId') eventId: string,
     @Param('stepId') stepId: string,
     @Param('fieldId') fieldId: string,
-    @Query('applicationIds') rawApplicationIds?: string | string[],
+    @Query('applicationIds') rawApplicationIds: string | string[] | undefined,
     @Res() res: Response,
   ) {
     const applicationIds = this.parseApplicationIdsQuery(rawApplicationIds);
