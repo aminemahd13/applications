@@ -1,9 +1,14 @@
 import { apiClient } from "@/lib/api";
 import type {
-  CreateFieldFileExportJobRequestDto,
   FieldFileExportJobDownloadUrlResponse,
   FieldFileExportJobResponse,
 } from "@event-platform/shared";
+
+type CreateFieldFileExportJobInput = {
+  stepId: string;
+  fieldId: string;
+  applicationIds?: string[];
+};
 
 function unwrapData<T>(payload: unknown): T {
   const response = (payload ?? {}) as { data?: T };
@@ -12,7 +17,7 @@ function unwrapData<T>(payload: unknown): T {
 
 export async function createFieldFileExportJob(
   eventId: string,
-  input: CreateFieldFileExportJobRequestDto,
+  input: CreateFieldFileExportJobInput,
   csrfToken?: string,
 ): Promise<FieldFileExportJobResponse> {
   const response = await apiClient<unknown>(`/events/${eventId}/files/export-jobs`, {
