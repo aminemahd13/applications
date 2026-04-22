@@ -250,7 +250,7 @@ export default function CertificatePage() {
     [certificate?.template?.style],
   );
 
-  const tokenValues = useMemo(() => {
+  const tokenValues = useMemo<Record<string, string>>(() => {
     if (!certificate) return {};
     return {
       participantName: certificate.recipient.name,
@@ -606,4 +606,3 @@ export default function CertificatePage() {
     </div>
   );
 }
-
