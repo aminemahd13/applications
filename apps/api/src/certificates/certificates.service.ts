@@ -995,6 +995,7 @@ export class CertificatesService {
       templateVersionId?: string;
       applicationId: string;
       issuerName?: string;
+      reissueIfExists?: boolean;
       payloadOverrides?: Record<string, unknown>;
     },
   ): Promise<{ certificate: any; created: boolean }> {
@@ -1041,7 +1042,7 @@ export class CertificatesService {
       },
     });
 
-    if (existingActive) {
+    if (existingActive && !input.reissueIfExists) {
       return {
         certificate: this.mapIssuedCertificateRow(existingActive),
         created: false,
@@ -1097,6 +1098,17 @@ export class CertificatesService {
       input.issuerName?.trim() || this.getCredentialIssuerName();
 
     const created = await this.prisma.$transaction(async (tx) => {
+      if (existingActive && input.reissueIfExists) {
+        await (tx as any).issued_certificates.update({
+          where: { id: existingActive.id },
+          data: {
+            status: 'REVOKED',
+            revoked_at: issuedAt,
+            updated_at: issuedAt,
+          },
+        });
+      }
+
       const issued = await (tx as any).issued_certificates.create({
         data: {
           id: crypto.randomUUID(),
@@ -1165,6 +1177,7 @@ export class CertificatesService {
       templateVersionId: dto.templateVersionId,
       applicationId: dto.applicationId,
       issuerName: dto.issuerName,
+      reissueIfExists: dto.reissueIfExists,
       payloadOverrides: dto.payloadOverrides ?? {},
     });
 
@@ -1193,6 +1206,7 @@ export class CertificatesService {
           templateVersionId: dto.templateVersionId,
           applicationId,
           issuerName: dto.issuerName,
+          reissueIfExists: dto.reissueIfExists,
           payloadOverrides: dto.payloadOverrides ?? {},
         });
 

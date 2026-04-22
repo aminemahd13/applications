@@ -118,6 +118,7 @@ export function CertificateStudioWorkspace() {
 
   const [issuanceApplicationIds, setIssuanceApplicationIds] = useState("");
   const [issuanceIssuerName, setIssuanceIssuerName] = useState("");
+  const [issuanceReissueIfExists, setIssuanceReissueIfExists] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -733,6 +734,7 @@ export function CertificateStudioWorkspace() {
         templateVersionId: selectedVersionId ?? undefined,
         applicationIds: ids,
         issuerName: issuanceIssuerName.trim() || undefined,
+        reissueIfExists: issuanceReissueIfExists,
       },
       csrfToken ?? undefined,
     )
@@ -748,6 +750,7 @@ export function CertificateStudioWorkspace() {
     eventId,
     issuanceApplicationIds,
     issuanceIssuerName,
+    issuanceReissueIfExists,
     refreshIssuance,
     selectedTemplateId,
     selectedVersionId,
@@ -1029,6 +1032,8 @@ export function CertificateStudioWorkspace() {
                   onIssuanceApplicationIdsChange={setIssuanceApplicationIds}
                   issuanceIssuerName={issuanceIssuerName}
                   onIssuanceIssuerNameChange={setIssuanceIssuerName}
+                  issuanceReissueIfExists={issuanceReissueIfExists}
+                  onIssuanceReissueIfExistsChange={setIssuanceReissueIfExists}
                   onIssueCertificates={handleIssueCertificates}
                   isIssuing={isIssuing}
                   issuedCertificates={issuedCertificates}

@@ -275,6 +275,7 @@ export const IssueCertificateSchema = z.object({
   templateVersionId: z.string().uuid().optional(),
   applicationId: z.string().uuid(),
   issuerName: z.string().trim().min(1).max(200).optional(),
+  reissueIfExists: z.boolean().optional().default(false),
   payloadOverrides: z.record(z.string(), z.unknown()).optional().default({}),
 });
 
@@ -285,6 +286,7 @@ export const IssueCertificatesBulkSchema = z.object({
   templateVersionId: z.string().uuid().optional(),
   applicationIds: z.array(z.string().uuid()).min(1).max(1000),
   issuerName: z.string().trim().min(1).max(200).optional(),
+  reissueIfExists: z.boolean().optional().default(false),
   payloadOverrides: z.record(z.string(), z.unknown()).optional().default({}),
 });
 

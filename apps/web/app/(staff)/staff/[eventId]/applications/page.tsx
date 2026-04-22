@@ -438,6 +438,7 @@ export default function ApplicationsListPage() {
   const [certificateTemplates, setCertificateTemplates] = useState<CertificateTemplateOption[]>([]);
   const [isLoadingCertificateTemplates, setIsLoadingCertificateTemplates] = useState(false);
   const [selectedCertificateTemplateId, setSelectedCertificateTemplateId] = useState("");
+  const [reissueCertificatesIfExists, setReissueCertificatesIfExists] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isApplyingBulk, setIsApplyingBulk] = useState(false);
   const [isSelectingAllMatching, setIsSelectingAllMatching] = useState(false);
@@ -2372,6 +2373,7 @@ export default function ApplicationsListPage() {
   async function openIssueCertificatesDialog() {
     if (!canIssueCredentials || selectedApplicationIds.length === 0) return;
     await refreshCertificateTemplates();
+    setReissueCertificatesIfExists(false);
     setShowIssueCertificatesDialog(true);
   }
 
@@ -2411,6 +2413,7 @@ export default function ApplicationsListPage() {
             {
               templateId: selectedCertificateTemplateId,
               applicationIds: chunkApplicationIds,
+              reissueIfExists: reissueCertificatesIfExists,
             },
             csrfToken ?? undefined,
           ),
@@ -4178,6 +4181,19 @@ export default function ApplicationsListPage() {
                   {selectedCertificateTemplate.typeKey})
                 </p>
               )}
+            </div>
+            <div className="flex items-center justify-between rounded-md border p-3">
+              <div className="space-y-0.5">
+                <Label className="text-sm">Reissue if already issued</Label>
+                <p className="text-xs text-muted-foreground">
+                  Revoke active certificate and issue a fresh one.
+                </p>
+              </div>
+              <Switch
+                checked={reissueCertificatesIfExists}
+                onCheckedChange={setReissueCertificatesIfExists}
+                disabled={isIssuingCredentials}
+              />
             </div>
           </div>
           <DialogFooter>

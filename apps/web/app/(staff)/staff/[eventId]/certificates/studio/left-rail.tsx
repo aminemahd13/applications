@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type {
@@ -75,6 +76,8 @@ interface LeftRailProps {
   onIssuanceApplicationIdsChange: (value: string) => void;
   issuanceIssuerName: string;
   onIssuanceIssuerNameChange: (value: string) => void;
+  issuanceReissueIfExists: boolean;
+  onIssuanceReissueIfExistsChange: (value: boolean) => void;
   onIssueCertificates: () => void;
   isIssuing: boolean;
   issuedCertificates: IssuedCertificateSummary[];
@@ -128,6 +131,8 @@ export function LeftRail(props: LeftRailProps) {
     onIssuanceApplicationIdsChange,
     issuanceIssuerName,
     onIssuanceIssuerNameChange,
+    issuanceReissueIfExists,
+    onIssuanceReissueIfExistsChange,
     onIssueCertificates,
     isIssuing,
     issuedCertificates,
@@ -509,6 +514,20 @@ export function LeftRail(props: LeftRailProps) {
                       placeholder="Math&Maroc Event Platform"
                     />
                   </label>
+
+                  <div className="flex items-center justify-between rounded-md border p-2">
+                    <div className="space-y-0.5">
+                      <Label className="text-xs">Reissue if already issued</Label>
+                      <p className="text-[11px] text-muted-foreground">
+                        Revoke active certificate and issue a fresh one.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={issuanceReissueIfExists}
+                      onCheckedChange={onIssuanceReissueIfExistsChange}
+                      disabled={!canManage || isIssuing}
+                    />
+                  </div>
 
                   <label className="block space-y-1">
                     <span className="text-xs text-muted-foreground">Application IDs (comma/newline separated)</span>

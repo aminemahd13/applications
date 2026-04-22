@@ -542,6 +542,7 @@ export async function issueCertificatesBulk(
     templateVersionId?: string;
     applicationIds: string[];
     issuerName?: string;
+    reissueIfExists?: boolean;
     payloadOverrides?: Record<string, unknown>;
   },
   csrfToken?: string,
