@@ -8,7 +8,6 @@ import {
   Download,
   FileText,
   MapPin,
-  Printer,
   ShieldCheck,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
@@ -334,14 +333,6 @@ export default function CertificatePage() {
             <p className="truncate text-xs text-muted-foreground sm:text-sm">{certificate.event.title}</p>
           </div>
           <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
-            <Button
-              variant="outline"
-              className="flex-1 sm:flex-none"
-              onClick={() => window.print()}
-            >
-              <Printer className="mr-1.5 h-4 w-4" />
-              Print
-            </Button>
             <Button asChild className="flex-1 sm:flex-none">
               <a href={verificationHref} target="_blank" rel="noreferrer">
                 <ShieldCheck className="mr-1.5 h-4 w-4" />
