@@ -12,6 +12,9 @@ import {
   FileUploadResponse,
   FileDownloadUrlResponse,
   FileVerificationResponse,
+  CreateFieldFileExportJobRequestDto,
+  FieldFileExportJobDownloadUrlResponse,
+  FieldFileExportJobResponse,
   Permission,
 } from '@event-platform/shared';
 import { StorageService } from '../common/storage/storage.service';
@@ -58,7 +61,14 @@ interface ExportFieldFilesZipResult {
   buffer: Buffer;
 }
 
+interface ExportPermissionContext {
+  canReadNormal: boolean;
+  canReadSensitive: boolean;
+}
+
 const ZIP_EXPORT_STORAGE_FETCH_CONCURRENCY = 6;
+const FIELD_FILE_EXPORT_JOB_PRESIGNED_DOWNLOAD_TTL_SECONDS = 3600;
+const FIELD_FILE_EXPORT_JOB_DEFAULT_MAX_ATTEMPTS = 3;
 
 @Injectable()
 export class FilesService {
@@ -451,47 +461,222 @@ export class FilesService {
     return exportableFields;
   }
 
+  async createFieldFileExportJob(
+    eventId: string,
+    dto: CreateFieldFileExportJobRequestDto,
+  ): Promise<FieldFileExportJobResponse> {
+    const actorId = this.getActorIdOrThrow();
+    const permissionContext = this.resolveExportPermissionContextFromCurrentRequest();
+    const normalizedApplicationIds = this.normalizeExportApplicationIds(
+      dto.applicationIds,
+    );
+    await this.resolveExportFieldDefinition(eventId, dto.stepId, dto.fieldId);
+
+    const maxAttempts = Math.max(
+      Number(
+        process.env.FIELD_FILE_EXPORT_JOB_MAX_ATTEMPTS ??
+          FIELD_FILE_EXPORT_JOB_DEFAULT_MAX_ATTEMPTS,
+      ),
+      1,
+    );
+    const row = await (this.prisma as any).field_file_export_jobs.create({
+      data: {
+        id: crypto.randomUUID(),
+        event_id: eventId,
+        step_id: dto.stepId,
+        field_id: dto.fieldId,
+        requester_user_id: actorId,
+        application_ids: normalizedApplicationIds,
+        permission_snapshot: {
+          canReadNormal: permissionContext.canReadNormal,
+          canReadSensitive: permissionContext.canReadSensitive,
+        },
+        status: 'PENDING',
+        attempts: 0,
+        max_attempts: maxAttempts,
+        next_retry_at: new Date(),
+      },
+    });
+
+    return this.mapFieldFileExportJobRow(row);
+  }
+
+  async getFieldFileExportJob(
+    eventId: string,
+    jobId: string,
+  ): Promise<FieldFileExportJobResponse> {
+    const row = await this.getFieldFileExportJobForRequester(eventId, jobId);
+    return this.mapFieldFileExportJobRow(row);
+  }
+
+  async getFieldFileExportJobDownloadUrl(
+    eventId: string,
+    jobId: string,
+  ): Promise<FieldFileExportJobDownloadUrlResponse> {
+    const row = await this.getFieldFileExportJobForRequester(eventId, jobId);
+    if (
+      String(row.status ?? '').toUpperCase() !== 'DONE' ||
+      !row.output_storage_key ||
+      !row.output_filename
+    ) {
+      throw new BadRequestException('Export job is not ready for download');
+    }
+
+    const safeFilename = encodeURIComponent(String(row.output_filename).trim());
+    const contentDisposition = `attachment; filename*=UTF-8''${safeFilename}`;
+    const url = await this.storageService.getPresignedGetUrlWithDisposition(
+      row.output_storage_key,
+      contentDisposition,
+      FIELD_FILE_EXPORT_JOB_PRESIGNED_DOWNLOAD_TTL_SECONDS,
+    );
+
+    return {
+      url,
+      expiresAt: new Date(
+        Date.now() + FIELD_FILE_EXPORT_JOB_PRESIGNED_DOWNLOAD_TTL_SECONDS * 1000,
+      ),
+      filename: row.output_filename,
+    };
+  }
+
+  async processFieldFileExportJobsBatch(workerId: string, batchSize: number) {
+    const claimed = await this.prisma.$queryRawUnsafe<any[]>(
+      `
+      WITH candidates AS (
+        SELECT id
+        FROM "field_file_export_jobs"
+        WHERE "status" = 'PENDING'
+          AND "next_retry_at" <= NOW()
+          AND "attempts" < "max_attempts"
+        ORDER BY "created_at" ASC
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "field_file_export_jobs" AS jobs
+      SET "status" = 'PROCESSING',
+          "attempts" = jobs."attempts" + 1,
+          "locked_at" = NOW(),
+          "locked_by" = $2,
+          "updated_at" = NOW()
+      FROM candidates
+      WHERE jobs.id = candidates.id
+      RETURNING jobs.*
+      `,
+      Math.max(batchSize, 1),
+      workerId,
+    );
+
+    if (!claimed.length) {
+      return { claimed: 0, completed: 0, failed: 0 };
+    }
+
+    let completed = 0;
+    let failed = 0;
+
+    for (const job of claimed) {
+      try {
+        const applicationIds = this.parseFieldFileExportJobApplicationIds(
+          job.application_ids,
+        );
+        const permissionContext = this.parseFieldFileExportPermissionSnapshot(
+          job.permission_snapshot,
+        );
+        const zipExport = await this.buildEventFieldFilesZip(
+          job.event_id,
+          job.step_id,
+          job.field_id,
+          applicationIds,
+          permissionContext,
+        );
+        const outputStorageKey = this.buildFieldFileExportJobStorageKey(
+          job.event_id,
+          job.id,
+        );
+        await this.storageService.putObjectBuffer(
+          outputStorageKey,
+          zipExport.buffer,
+          'application/zip',
+        );
+
+        await (this.prisma as any).field_file_export_jobs.update({
+          where: { id: job.id },
+          data: {
+            status: 'DONE',
+            output_storage_key: outputStorageKey,
+            output_filename: zipExport.filename,
+            output_size_bytes: BigInt(zipExport.buffer.byteLength),
+            completed_at: new Date(),
+            error_message: null,
+            locked_at: null,
+            locked_by: null,
+            updated_at: new Date(),
+          },
+        });
+        completed += 1;
+      } catch (error) {
+        failed += 1;
+        const attempts = Number(job.attempts ?? 0);
+        const maxAttempts = Number(
+          job.max_attempts ?? FIELD_FILE_EXPORT_JOB_DEFAULT_MAX_ATTEMPTS,
+        );
+        const isExhausted = attempts >= maxAttempts;
+        const errorMessage =
+          error instanceof Error
+            ? error.message.slice(0, 500)
+            : 'Field file ZIP export failed';
+        const retryDelaySeconds = Math.min(2 ** Math.max(attempts, 1) * 30, 3600);
+        const nextRetryAt = new Date(Date.now() + retryDelaySeconds * 1000);
+
+        await (this.prisma as any).field_file_export_jobs.update({
+          where: { id: job.id },
+          data: {
+            status: isExhausted ? 'FAILED' : 'PENDING',
+            error_message: errorMessage,
+            next_retry_at: isExhausted ? job.next_retry_at : nextRetryAt,
+            locked_at: null,
+            locked_by: null,
+            updated_at: new Date(),
+            completed_at: isExhausted ? new Date() : null,
+          },
+        });
+      }
+    }
+
+    return {
+      claimed: claimed.length,
+      completed,
+      failed,
+    };
+  }
+
   async exportEventFieldFilesZip(
     eventId: string,
     stepId: string,
     fieldId: string,
     applicationIds?: string[],
   ): Promise<ExportFieldFilesZipResult> {
-    const permissions = (this.cls.get('permissions') ?? []) as string[];
-    const normalizedApplicationIds = Array.from(
-      new Set(
-        (applicationIds ?? [])
-          .map((value) => String(value ?? '').trim())
-          .filter((value) => value.length > 0),
-      ),
+    const permissionContext = this.resolveExportPermissionContextFromCurrentRequest();
+    return this.buildEventFieldFilesZip(
+      eventId,
+      stepId,
+      fieldId,
+      applicationIds,
+      permissionContext,
     );
+  }
 
-    const step = await this.prisma.workflow_steps.findFirst({
-      where: { id: stepId, event_id: eventId },
-      select: {
-        id: true,
-        title: true,
-        form_versions: {
-          select: { schema: true },
-        },
-      },
-    });
-    if (!step) throw new NotFoundException('Step not found');
-
-    const allFields = getFormFields(
-      step.form_versions?.schema as FormDefinition | undefined,
+  private async buildEventFieldFilesZip(
+    eventId: string,
+    stepId: string,
+    fieldId: string,
+    applicationIds: string[] | undefined,
+    permissionContext: ExportPermissionContext,
+  ): Promise<ExportFieldFilesZipResult> {
+    const normalizedApplicationIds = this.normalizeExportApplicationIds(
+      applicationIds,
     );
-    const field = allFields.find(
-      (candidate) => candidate.key === fieldId || candidate.id === fieldId,
-    );
-    if (!field) throw new BadRequestException('Field not found in form schema');
-    if (field.type !== 'file_upload') {
-      throw new BadRequestException('Field is not a file_upload field');
-    }
-
-    const fieldKey = field.key || field.id || fieldId;
-    const safeFieldKey = this.sanitizeFileNameSegment(fieldKey, 'field');
-    const allowMultiple = Number(field.ui?.maxFiles ?? 1) > 1;
+    const { fieldKey, safeFieldKey, allowMultiple } =
+      await this.resolveExportFieldDefinition(eventId, stepId, fieldId);
 
     const stepStates = await this.prisma.application_step_states.findMany({
       where: {
@@ -676,7 +861,10 @@ export class FilesService {
           throw new NotFoundException(`File not found for export: ${fileId}`);
         }
 
-        this.assertCanExportFileBySensitivity(file.sensitivity, permissions);
+        this.assertCanExportFileBySensitivityWithContext(
+          file.sensitivity,
+          permissionContext,
+        );
         const extension = this.resolveFileExtension(file.original_filename);
         const preferredEntryName = this.buildExportEntryFilename({
           applicantEmail: applicationEntry.applicantEmail,
@@ -936,6 +1124,169 @@ export class FilesService {
     return true;
   }
 
+  private getActorIdOrThrow(): string {
+    const actorId = this.cls.get('actorId');
+    if (typeof actorId !== 'string' || actorId.trim().length === 0) {
+      throw new ForbiddenException('Access denied');
+    }
+    return actorId;
+  }
+
+  private resolveExportPermissionContextFromCurrentRequest(): ExportPermissionContext {
+    const permissions = (this.cls.get('permissions') ?? []) as string[];
+    return this.buildExportPermissionContext(permissions);
+  }
+
+  private buildExportPermissionContext(
+    userPermissions: string[],
+  ): ExportPermissionContext {
+    const isAdmin = userPermissions.includes(Permission.ADMIN_EVENTS_MANAGE);
+    const canReadSensitive =
+      isAdmin || userPermissions.includes(Permission.EVENT_FILES_READ_SENSITIVE);
+    const canReadNormal =
+      canReadSensitive ||
+      userPermissions.includes(Permission.EVENT_FILES_READ_NORMAL);
+    return {
+      canReadNormal,
+      canReadSensitive,
+    };
+  }
+
+  private normalizeExportApplicationIds(
+    applicationIds: string[] | undefined,
+  ): string[] {
+    return Array.from(
+      new Set(
+        (applicationIds ?? [])
+          .map((value) => String(value ?? '').trim())
+          .filter((value) => value.length > 0),
+      ),
+    );
+  }
+
+  private async resolveExportFieldDefinition(
+    eventId: string,
+    stepId: string,
+    fieldId: string,
+  ): Promise<{
+    fieldKey: string;
+    safeFieldKey: string;
+    allowMultiple: boolean;
+  }> {
+    const step = await this.prisma.workflow_steps.findFirst({
+      where: { id: stepId, event_id: eventId },
+      select: {
+        id: true,
+        form_versions: {
+          select: { schema: true },
+        },
+      },
+    });
+    if (!step) throw new NotFoundException('Step not found');
+
+    const allFields = getFormFields(
+      step.form_versions?.schema as FormDefinition | undefined,
+    );
+    const field = allFields.find(
+      (candidate) => candidate.key === fieldId || candidate.id === fieldId,
+    );
+    if (!field) throw new BadRequestException('Field not found in form schema');
+    if (field.type !== 'file_upload') {
+      throw new BadRequestException('Field is not a file_upload field');
+    }
+
+    const fieldKey = field.key || field.id || fieldId;
+    const safeFieldKey = this.sanitizeFileNameSegment(fieldKey, 'field');
+    const allowMultiple = Number(field.ui?.maxFiles ?? 1) > 1;
+
+    return {
+      fieldKey,
+      safeFieldKey,
+      allowMultiple,
+    };
+  }
+
+  private parseFieldFileExportPermissionSnapshot(
+    snapshot: unknown,
+  ): ExportPermissionContext {
+    const source =
+      snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+        ? (snapshot as Record<string, unknown>)
+        : {};
+    const canReadSensitive = Boolean(source.canReadSensitive);
+    const canReadNormal = canReadSensitive || Boolean(source.canReadNormal);
+    return {
+      canReadNormal,
+      canReadSensitive,
+    };
+  }
+
+  private parseFieldFileExportJobApplicationIds(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const asStrings = value.map((entry) => String(entry ?? ''));
+    return this.normalizeExportApplicationIds(asStrings);
+  }
+
+  private buildFieldFileExportJobStorageKey(
+    eventId: string,
+    jobId: string,
+  ): string {
+    return `events/${eventId}/exports/field-files/${jobId}.zip`;
+  }
+
+  private async getFieldFileExportJobForRequester(
+    eventId: string,
+    jobId: string,
+  ): Promise<any> {
+    const actorId = this.getActorIdOrThrow();
+    const row = await (this.prisma as any).field_file_export_jobs.findFirst({
+      where: { id: jobId, event_id: eventId },
+    });
+    if (!row || row.requester_user_id !== actorId) {
+      throw new NotFoundException('File export job not found');
+    }
+    return row;
+  }
+
+  private mapFieldFileExportJobRow(row: any): FieldFileExportJobResponse {
+    return {
+      id: row.id,
+      eventId: row.event_id,
+      stepId: row.step_id,
+      fieldId: row.field_id,
+      status: String(row.status ?? 'PENDING').toUpperCase() as
+        | 'PENDING'
+        | 'PROCESSING'
+        | 'DONE'
+        | 'FAILED',
+      applicationIdsCount: this.parseFieldFileExportJobApplicationIds(
+        row.application_ids,
+      ).length,
+      attempts: Number(row.attempts ?? 0),
+      maxAttempts: Number(
+        row.max_attempts ?? FIELD_FILE_EXPORT_JOB_DEFAULT_MAX_ATTEMPTS,
+      ),
+      nextRetryAt: row.next_retry_at,
+      lockedAt: row.locked_at ?? null,
+      lockedBy: row.locked_by ?? null,
+      errorMessage: row.error_message ?? null,
+      outputFilename: row.output_filename ?? null,
+      outputSizeBytes: this.toSafeIntegerOrNull(row.output_size_bytes),
+      completedAt: row.completed_at ?? null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private toSafeIntegerOrNull(value: unknown): number | null {
+    if (value === null || value === undefined) return null;
+    const normalized = Number(value);
+    if (!Number.isFinite(normalized) || normalized < 0) {
+      return null;
+    }
+    return Math.floor(normalized);
+  }
+
   private async resolveUploadFieldContext(
     eventId: string,
     userId: string,
@@ -1131,12 +1482,16 @@ export class FilesService {
     sensitivity: string,
     userPermissions: string[],
   ): void {
-    const isAdmin = userPermissions.includes(Permission.ADMIN_EVENTS_MANAGE);
-    const canReadSensitive =
-      isAdmin || userPermissions.includes(Permission.EVENT_FILES_READ_SENSITIVE);
-    const canReadNormal =
-      canReadSensitive ||
-      userPermissions.includes(Permission.EVENT_FILES_READ_NORMAL);
+    const context = this.buildExportPermissionContext(userPermissions);
+    this.assertCanExportFileBySensitivityWithContext(sensitivity, context);
+  }
+
+  private assertCanExportFileBySensitivityWithContext(
+    sensitivity: string,
+    context: ExportPermissionContext,
+  ): void {
+    const canReadSensitive = context.canReadSensitive;
+    const canReadNormal = context.canReadNormal;
 
     const sensitivityValue = String(sensitivity || '').toLowerCase();
     if (sensitivityValue === 'sensitive') {

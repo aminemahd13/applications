@@ -161,6 +161,7 @@ describe('FilesService applicant upload guard', () => {
 describe('FilesService event-wide field ZIP export', () => {
   type ExportServiceOptions = {
     permissions?: string[];
+    actorId?: string;
     stepForExport?: {
       id: string;
       title: string;
@@ -192,6 +193,8 @@ describe('FilesService event-wide field ZIP export', () => {
       original_filename: string;
       sensitivity: string;
     }>;
+    fieldFileExportJobs?: Array<Record<string, any>>;
+    claimedFieldFileExportJobs?: Array<Record<string, any>>;
   };
 
   function createSchema(fields: unknown[] | null | undefined) {
@@ -266,8 +269,12 @@ describe('FilesService event-wide field ZIP export', () => {
           sensitivity: 'normal',
         },
       ];
+    const fieldFileExportJobs = options.fieldFileExportJobs ?? [];
 
     const prisma = {
+      $queryRawUnsafe: jest
+        .fn()
+        .mockResolvedValue(options.claimedFieldFileExportJobs ?? []),
       workflow_steps: {
         findMany: jest.fn().mockResolvedValue(
           workflowStepsForCatalog.map((step) => ({
@@ -330,6 +337,49 @@ describe('FilesService event-wide field ZIP export', () => {
           return fileRows.filter((row) => requestedIds.includes(row.id));
         }),
       },
+      field_file_export_jobs: {
+        create: jest.fn().mockImplementation(async ({ data }: any) => {
+          const row = {
+            ...data,
+            status: data.status ?? 'PENDING',
+            attempts: data.attempts ?? 0,
+            max_attempts: data.max_attempts ?? 3,
+            next_retry_at: data.next_retry_at ?? new Date(),
+            locked_at: data.locked_at ?? null,
+            locked_by: data.locked_by ?? null,
+            error_message: data.error_message ?? null,
+            output_storage_key: data.output_storage_key ?? null,
+            output_filename: data.output_filename ?? null,
+            output_size_bytes: data.output_size_bytes ?? null,
+            completed_at: data.completed_at ?? null,
+            created_at: data.created_at ?? new Date(),
+            updated_at: data.updated_at ?? new Date(),
+          };
+          fieldFileExportJobs.push(row);
+          return row;
+        }),
+        findFirst: jest.fn().mockImplementation(async ({ where }: any) => {
+          return (
+            fieldFileExportJobs.find(
+              (row) =>
+                row.id === where?.id &&
+                row.event_id === where?.event_id,
+            ) ?? null
+          );
+        }),
+        update: jest.fn().mockImplementation(async ({ where, data }: any) => {
+          const index = fieldFileExportJobs.findIndex((row) => row.id === where?.id);
+          if (index < 0) {
+            throw new Error('Field export job not found');
+          }
+          const merged = {
+            ...fieldFileExportJobs[index],
+            ...data,
+          };
+          fieldFileExportJobs[index] = merged;
+          return merged;
+        }),
+      },
     };
 
     const permissions = options.permissions ?? [
@@ -339,12 +389,17 @@ describe('FilesService event-wide field ZIP export', () => {
     const cls = {
       get: jest.fn((key: string) => {
         if (key === 'permissions') return permissions;
+        if (key === 'actorId') return options.actorId ?? 'user-1';
         return undefined;
       }),
     };
 
     const storageService = {
       getObjectBuffer: jest.fn(async (key: string) => Buffer.from(`buf:${key}`)),
+      putObjectBuffer: jest.fn(async () => undefined),
+      getPresignedGetUrlWithDisposition: jest
+        .fn()
+        .mockResolvedValue('https://storage.example.com/export.zip'),
     };
 
     const service = new FilesService(
@@ -703,5 +758,208 @@ describe('FilesService event-wide field ZIP export', () => {
     await expect(
       service.exportEventFieldFilesZip('event-1', 'step-1', 'resume'),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('creates field file export jobs with deduped application IDs and permission snapshot', async () => {
+    const { service, prisma } = createExportService({
+      permissions: [Permission.EVENT_FILES_READ_NORMAL],
+      actorId: 'requester-1',
+    });
+
+    await service.createFieldFileExportJob('event-1', {
+      stepId: 'step-1',
+      fieldId: 'resume',
+      applicationIds: ['app-1', 'app-1', 'app-2'],
+    } as any);
+
+    expect((prisma.field_file_export_jobs.create as jest.Mock).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          requester_user_id: 'requester-1',
+          application_ids: ['app-1', 'app-2'],
+          permission_snapshot: {
+            canReadNormal: true,
+            canReadSensitive: false,
+          },
+          status: 'PENDING',
+        }),
+      }),
+    );
+  });
+
+  it('restricts export job status access to requester only', async () => {
+    const { service } = createExportService({
+      actorId: 'requester-1',
+      fieldFileExportJobs: [
+        {
+          id: 'job-1',
+          event_id: 'event-1',
+          step_id: 'step-1',
+          field_id: 'resume',
+          requester_user_id: 'other-user',
+          application_ids: ['app-1'],
+          status: 'PENDING',
+          attempts: 0,
+          max_attempts: 3,
+          next_retry_at: new Date(),
+          locked_at: null,
+          locked_by: null,
+          error_message: null,
+          output_filename: null,
+          output_size_bytes: null,
+          completed_at: null,
+          created_at: new Date(),
+          updated_at: new Date(),
+        },
+      ],
+    });
+
+    await expect(
+      service.getFieldFileExportJob('event-1', 'job-1'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('returns a download URL for completed field file export jobs', async () => {
+    const { service, storageService } = createExportService({
+      actorId: 'requester-1',
+      fieldFileExportJobs: [
+        {
+          id: 'job-1',
+          event_id: 'event-1',
+          step_id: 'step-1',
+          field_id: 'resume',
+          requester_user_id: 'requester-1',
+          application_ids: ['app-1'],
+          status: 'DONE',
+          attempts: 1,
+          max_attempts: 3,
+          next_retry_at: new Date(),
+          locked_at: null,
+          locked_by: null,
+          error_message: null,
+          output_storage_key: 'events/event-1/exports/field-files/job-1.zip',
+          output_filename: 'event-1__step-1__resume.zip',
+          output_size_bytes: BigInt(1024),
+          completed_at: new Date(),
+          created_at: new Date(),
+          updated_at: new Date(),
+        },
+      ],
+    });
+
+    const response = await service.getFieldFileExportJobDownloadUrl(
+      'event-1',
+      'job-1',
+    );
+    expect(response).toEqual(
+      expect.objectContaining({
+        url: 'https://storage.example.com/export.zip',
+        filename: 'event-1__step-1__resume.zip',
+      }),
+    );
+    expect(
+      storageService.getPresignedGetUrlWithDisposition,
+    ).toHaveBeenCalledWith(
+      'events/event-1/exports/field-files/job-1.zip',
+      expect.stringContaining('attachment; filename*=UTF-8'),
+      expect.any(Number),
+    );
+  });
+
+  it('processes queued field file export jobs and marks them done', async () => {
+    const claimedJob = {
+      id: 'job-1',
+      event_id: 'event-1',
+      step_id: 'step-1',
+      field_id: 'resume',
+      requester_user_id: 'requester-1',
+      application_ids: ['app-1'],
+      permission_snapshot: {
+        canReadNormal: true,
+        canReadSensitive: true,
+      },
+      status: 'PROCESSING',
+      attempts: 1,
+      max_attempts: 3,
+      next_retry_at: new Date(),
+      locked_at: new Date(),
+      locked_by: 'worker-1',
+      error_message: null,
+      output_storage_key: null,
+      output_filename: null,
+      output_size_bytes: null,
+      completed_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    const { service, prisma, storageService } = createExportService({
+      actorId: 'requester-1',
+      fieldFileExportJobs: [{ ...claimedJob }],
+      claimedFieldFileExportJobs: [{ ...claimedJob }],
+    });
+
+    const result = await service.processFieldFileExportJobsBatch('worker-1', 1);
+
+    expect(result).toEqual({ claimed: 1, completed: 1, failed: 0 });
+    expect(storageService.putObjectBuffer).toHaveBeenCalledWith(
+      'events/event-1/exports/field-files/job-1.zip',
+      expect.any(Buffer),
+      'application/zip',
+    );
+    expect((prisma.field_file_export_jobs.update as jest.Mock).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        where: { id: 'job-1' },
+        data: expect.objectContaining({
+          status: 'DONE',
+          output_filename: 'event-1__step-1__resume.zip',
+          output_storage_key: 'events/event-1/exports/field-files/job-1.zip',
+        }),
+      }),
+    );
+  });
+
+  it('marks jobs failed when processing exhausts retries', async () => {
+    const claimedJob = {
+      id: 'job-2',
+      event_id: 'event-1',
+      step_id: 'step-1',
+      field_id: 'resume',
+      requester_user_id: 'requester-1',
+      application_ids: ['app-1'],
+      permission_snapshot: {
+        canReadNormal: false,
+        canReadSensitive: false,
+      },
+      status: 'PROCESSING',
+      attempts: 3,
+      max_attempts: 3,
+      next_retry_at: new Date(),
+      locked_at: new Date(),
+      locked_by: 'worker-1',
+      error_message: null,
+      output_storage_key: null,
+      output_filename: null,
+      output_size_bytes: null,
+      completed_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    const { service, prisma } = createExportService({
+      actorId: 'requester-1',
+      fieldFileExportJobs: [{ ...claimedJob }],
+      claimedFieldFileExportJobs: [{ ...claimedJob }],
+    });
+
+    const result = await service.processFieldFileExportJobsBatch('worker-1', 1);
+
+    expect(result).toEqual({ claimed: 1, completed: 0, failed: 1 });
+    expect((prisma.field_file_export_jobs.update as jest.Mock).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        where: { id: 'job-2' },
+        data: expect.objectContaining({
+          status: 'FAILED',
+        }),
+      }),
+    );
   });
 });

@@ -13,7 +13,11 @@ import type { Response } from 'express';
 import { FilesService } from './files.service';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
-import { Permission, FileSensitivity } from '@event-platform/shared';
+import {
+  CreateFieldFileExportJobRequestSchema,
+  Permission,
+  FileSensitivity,
+} from '@event-platform/shared';
 import { ClsService } from 'nestjs-cls';
 
 @Controller('events/:eventId')
@@ -138,6 +142,52 @@ export class FilesController {
   }> {
     const fields = await this.filesService.listExportableFileFields(eventId);
     return { data: fields };
+  }
+
+  @Post('files/export-jobs')
+  @RequirePermission(
+    Permission.EVENT_FILES_READ_NORMAL,
+    Permission.EVENT_FILES_READ_SENSITIVE,
+    Permission.ADMIN_EVENTS_MANAGE,
+  )
+  async createFieldFileExportJob(
+    @Param('eventId') eventId: string,
+    @Body() body: unknown,
+  ) {
+    const dto = CreateFieldFileExportJobRequestSchema.parse(body ?? {});
+    const data = await this.filesService.createFieldFileExportJob(eventId, dto);
+    return { data };
+  }
+
+  @Get('files/export-jobs/:jobId')
+  @RequirePermission(
+    Permission.EVENT_FILES_READ_NORMAL,
+    Permission.EVENT_FILES_READ_SENSITIVE,
+    Permission.ADMIN_EVENTS_MANAGE,
+  )
+  async getFieldFileExportJob(
+    @Param('eventId') eventId: string,
+    @Param('jobId') jobId: string,
+  ) {
+    const data = await this.filesService.getFieldFileExportJob(eventId, jobId);
+    return { data };
+  }
+
+  @Get('files/export-jobs/:jobId/download-url')
+  @RequirePermission(
+    Permission.EVENT_FILES_READ_NORMAL,
+    Permission.EVENT_FILES_READ_SENSITIVE,
+    Permission.ADMIN_EVENTS_MANAGE,
+  )
+  async getFieldFileExportJobDownloadUrl(
+    @Param('eventId') eventId: string,
+    @Param('jobId') jobId: string,
+  ) {
+    const data = await this.filesService.getFieldFileExportJobDownloadUrl(
+      eventId,
+      jobId,
+    );
+    return { data };
   }
 
   /**

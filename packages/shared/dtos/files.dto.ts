@@ -70,3 +70,68 @@ export interface FileVerificationResponse {
     setBy: string;
     setAt: Date;
 }
+
+function dedupeStringArray(values?: string[]): string[] | undefined {
+    if (!Array.isArray(values) || values.length === 0) return undefined;
+    return Array.from(new Set(values));
+}
+
+export const FieldFileExportJobStatusSchema = z.enum([
+    'PENDING',
+    'PROCESSING',
+    'DONE',
+    'FAILED',
+]);
+
+export type FieldFileExportJobStatus = z.infer<
+    typeof FieldFileExportJobStatusSchema
+>;
+
+export const CreateFieldFileExportJobRequestSchema = z
+    .object({
+        stepId: z.string().uuid(),
+        fieldId: z.string().trim().min(1).max(200),
+        applicationIds: z.array(z.string().uuid()).max(5000).optional(),
+    })
+    .transform((value) => ({
+        ...value,
+        applicationIds: dedupeStringArray(value.applicationIds),
+    }));
+
+export type CreateFieldFileExportJobRequestDto = z.infer<
+    typeof CreateFieldFileExportJobRequestSchema
+>;
+
+export const FieldFileExportJobResponseSchema = z.object({
+    id: z.string().uuid(),
+    eventId: z.string().uuid(),
+    stepId: z.string().uuid(),
+    fieldId: z.string(),
+    status: FieldFileExportJobStatusSchema,
+    applicationIdsCount: z.number().int().min(0),
+    attempts: z.number().int().min(0),
+    maxAttempts: z.number().int().min(1),
+    nextRetryAt: z.coerce.date(),
+    lockedAt: z.coerce.date().nullable(),
+    lockedBy: z.string().nullable(),
+    errorMessage: z.string().nullable(),
+    outputFilename: z.string().nullable(),
+    outputSizeBytes: z.coerce.number().int().min(0).nullable(),
+    completedAt: z.coerce.date().nullable(),
+    createdAt: z.coerce.date(),
+    updatedAt: z.coerce.date(),
+});
+
+export type FieldFileExportJobResponse = z.infer<
+    typeof FieldFileExportJobResponseSchema
+>;
+
+export const FieldFileExportJobDownloadUrlResponseSchema = z.object({
+    url: z.string().url(),
+    expiresAt: z.coerce.date(),
+    filename: z.string().trim().min(1),
+});
+
+export type FieldFileExportJobDownloadUrlResponse = z.infer<
+    typeof FieldFileExportJobDownloadUrlResponseSchema
+>;

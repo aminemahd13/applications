@@ -108,6 +108,11 @@ import {
   humanizeExportColumnKey,
   resolvePortalFromPathname,
 } from "@/lib/export-payloads";
+import {
+  createFieldFileExportJob,
+  getFieldFileExportJobDownloadUrl,
+  pollFieldFileExportJobUntilTerminal,
+} from "@/lib/field-file-export-jobs";
 import { toast } from "sonner";
 import { useAuth, usePermissions } from "@/lib/auth-context";
 import {
@@ -411,6 +416,9 @@ export default function ApplicationsListPage() {
   const [showFieldZipDialog, setShowFieldZipDialog] = useState(false);
   const [isLoadingFieldExportOptions, setIsLoadingFieldExportOptions] = useState(false);
   const [isExportingFieldZip, setIsExportingFieldZip] = useState(false);
+  const [fieldZipExportPhase, setFieldZipExportPhase] = useState<
+    "idle" | "queuing" | "processing" | "downloading"
+  >("idle");
   const [fieldZipExportScope, setFieldZipExportScope] = useState<
     "all" | "selected"
   >("all");
@@ -2125,6 +2133,7 @@ export default function ApplicationsListPage() {
     setFieldZipExportScope(
       selectedApplicationIds.length > 0 ? "selected" : "all",
     );
+    setFieldZipExportPhase("idle");
     setShowFieldZipDialog(true);
     if (fieldExportOptions.length === 0 && !isLoadingFieldExportOptions) {
       void loadFieldExportOptions();
@@ -2270,32 +2279,52 @@ export default function ApplicationsListPage() {
       return;
     }
 
-    const exportUrl = new URL(
-      `${PUBLIC_API_URL}/events/${eventId}/steps/${selectedFieldExportOption.stepId}/fields/${encodeURIComponent(selectedFieldExportOption.fieldKey)}/files/export`,
-      window.location.origin,
-    );
-    if (selectedIds.length > 0) {
-      exportUrl.searchParams.set("applicationIds", selectedIds.join(","));
-    }
-
     setIsExportingFieldZip(true);
+    setFieldZipExportPhase("queuing");
     try {
-      const response = await fetch(exportUrl.toString(), {
-        method: "GET",
-        credentials: "include",
-      });
-      if (!response.ok) throw new Error("Export failed");
-
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filenameFromContentDisposition(
-        response.headers.get("content-disposition"),
-        `${eventId}-${selectedFieldExportOption.stepId}-${selectedFieldExportOption.fieldKey}-files.zip`,
+      const queuedJob = await createFieldFileExportJob(
+        eventId,
+        {
+          stepId: selectedFieldExportOption.stepId,
+          fieldId: selectedFieldExportOption.fieldKey,
+          ...(selectedIds.length > 0 ? { applicationIds: selectedIds } : {}),
+        },
+        csrfToken ?? undefined,
       );
+
+      const terminalJob = await pollFieldFileExportJobUntilTerminal({
+        eventId,
+        jobId: queuedJob.id,
+        intervalMs: 2000,
+        timeoutMs: 15 * 60 * 1000,
+        onTick: (job) => {
+          const status = String(job.status ?? "").toUpperCase();
+          if (status === "PENDING") {
+            setFieldZipExportPhase("queuing");
+            return;
+          }
+          if (status === "PROCESSING") {
+            setFieldZipExportPhase("processing");
+            return;
+          }
+          if (status === "DONE") {
+            setFieldZipExportPhase("downloading");
+          }
+        },
+      });
+
+      if (String(terminalJob.status ?? "").toUpperCase() === "FAILED") {
+        throw new Error(terminalJob.errorMessage || "Could not export field files ZIP.");
+      }
+
+      setFieldZipExportPhase("downloading");
+      const download = await getFieldFileExportJobDownloadUrl(eventId, queuedJob.id);
+      const a = document.createElement("a");
+      a.href = download.url;
+      a.download =
+        download.filename ||
+        `${eventId}-${selectedFieldExportOption.stepId}-${selectedFieldExportOption.fieldKey}-files.zip`,
       a.click();
-      URL.revokeObjectURL(url);
       setShowFieldZipDialog(false);
       const scopeLabel =
         fieldZipExportScope === "selected"
@@ -2304,10 +2333,17 @@ export default function ApplicationsListPage() {
       toast.success(
         `Exported "${selectedFieldExportOption.fieldLabel}" files for ${scopeLabel}.`,
       );
-    } catch {
-      toast.error("Could not export field files ZIP.");
+    } catch (error) {
+      if (error instanceof ApiError && error.message.trim().length > 0) {
+        toast.error(error.message);
+      } else if (error instanceof Error && error.message.trim().length > 0) {
+        toast.error(error.message);
+      } else {
+        toast.error("Could not export field files ZIP.");
+      }
     } finally {
       setIsExportingFieldZip(false);
+      setFieldZipExportPhase("idle");
     }
   }
 
@@ -3045,7 +3081,13 @@ export default function ApplicationsListPage() {
             disabled={isExportingFieldZip}
           >
             <Download className="mr-1.5 h-3.5 w-3.5" />
-            {isExportingFieldZip ? "Exporting..." : "Export field ZIP"}
+            {isExportingFieldZip
+              ? fieldZipExportPhase === "queuing"
+                ? "Queuing..."
+                : fieldZipExportPhase === "processing"
+                  ? "Processing..."
+                  : "Preparing download..."
+              : "Export field ZIP"}
           </Button>
         )}
       </PageHeader>
@@ -3616,6 +3658,15 @@ export default function ApplicationsListPage() {
                   Files inside the ZIP use deterministic names including applicant
                   email, application ID, field key, and index when multi-file.
                 </p>
+                {isExportingFieldZip && (
+                  <p className="text-xs text-muted-foreground">
+                    {fieldZipExportPhase === "queuing"
+                      ? "Queuing export job..."
+                      : fieldZipExportPhase === "processing"
+                        ? "Generating ZIP in background..."
+                        : "Preparing secure download link..."}
+                  </p>
+                )}
               </>
             )}
           </div>
@@ -3625,6 +3676,7 @@ export default function ApplicationsListPage() {
               variant="outline"
               onClick={() => {
                 setShowFieldZipDialog(false);
+                setFieldZipExportPhase("idle");
               }}
             >
               Cancel
@@ -3640,7 +3692,13 @@ export default function ApplicationsListPage() {
                   selectedApplicationIds.length === 0)
               }
             >
-              {isExportingFieldZip ? "Exporting..." : "Export ZIP"}
+              {isExportingFieldZip
+                ? fieldZipExportPhase === "queuing"
+                  ? "Queuing..."
+                  : fieldZipExportPhase === "processing"
+                    ? "Processing..."
+                    : "Preparing download..."
+                : "Export ZIP"}
             </Button>
           </DialogFooter>
         </DialogContent>
