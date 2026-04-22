@@ -411,6 +411,9 @@ export default function ApplicationsListPage() {
   const [showFieldZipDialog, setShowFieldZipDialog] = useState(false);
   const [isLoadingFieldExportOptions, setIsLoadingFieldExportOptions] = useState(false);
   const [isExportingFieldZip, setIsExportingFieldZip] = useState(false);
+  const [fieldZipExportScope, setFieldZipExportScope] = useState<
+    "all" | "selected"
+  >("all");
   const [exportScope, setExportScope] = useState<"all" | "selected">("all");
   const [fieldExportOptions, setFieldExportOptions] = useState<
     ExportableFileFieldOption[]
@@ -909,8 +912,15 @@ export default function ApplicationsListPage() {
     setFieldExportOptions([]);
     setSelectedFieldExportStepId("");
     setSelectedFieldExportKey("");
+    setFieldZipExportScope("all");
     setShowFieldZipDialog(false);
   }, [eventId]);
+
+  useEffect(() => {
+    if (fieldZipExportScope === "selected" && selectedApplicationIds.length === 0) {
+      setFieldZipExportScope("all");
+    }
+  }, [fieldZipExportScope, selectedApplicationIds.length]);
 
   const filterSignature = useMemo(
     () =>
@@ -2111,6 +2121,9 @@ export default function ApplicationsListPage() {
       toast.error("You do not have permission to export files.");
       return;
     }
+    setFieldZipExportScope(
+      selectedApplicationIds.length > 0 ? "selected" : "all",
+    );
     setShowFieldZipDialog(true);
     if (fieldExportOptions.length === 0 && !isLoadingFieldExportOptions) {
       void loadFieldExportOptions();
@@ -2249,15 +2262,27 @@ export default function ApplicationsListPage() {
       return;
     }
 
+    const selectedIds =
+      fieldZipExportScope === "selected" ? selectedApplicationIds : [];
+    if (fieldZipExportScope === "selected" && selectedIds.length === 0) {
+      toast.error("Select at least one application to export selected files.");
+      return;
+    }
+
+    const exportUrl = new URL(
+      `${PUBLIC_API_URL}/events/${eventId}/steps/${selectedFieldExportOption.stepId}/fields/${encodeURIComponent(selectedFieldExportOption.fieldKey)}/files/export`,
+      window.location.origin,
+    );
+    if (selectedIds.length > 0) {
+      exportUrl.searchParams.set("applicationIds", selectedIds.join(","));
+    }
+
     setIsExportingFieldZip(true);
     try {
-      const response = await fetch(
-        `${PUBLIC_API_URL}/events/${eventId}/steps/${selectedFieldExportOption.stepId}/fields/${encodeURIComponent(selectedFieldExportOption.fieldKey)}/files/export`,
-        {
-          method: "GET",
-          credentials: "include",
-        },
-      );
+      const response = await fetch(exportUrl.toString(), {
+        method: "GET",
+        credentials: "include",
+      });
       if (!response.ok) throw new Error("Export failed");
 
       const blob = await response.blob();
@@ -2271,7 +2296,13 @@ export default function ApplicationsListPage() {
       a.click();
       URL.revokeObjectURL(url);
       setShowFieldZipDialog(false);
-      toast.success(`Exported "${selectedFieldExportOption.fieldLabel}" files.`);
+      const scopeLabel =
+        fieldZipExportScope === "selected"
+          ? `${selectedIds.length} selected application(s)`
+          : "all submitted applications";
+      toast.success(
+        `Exported "${selectedFieldExportOption.fieldLabel}" files for ${scopeLabel}.`,
+      );
     } catch {
       toast.error("Could not export field files ZIP.");
     } finally {
@@ -3505,6 +3536,34 @@ export default function ApplicationsListPage() {
             ) : (
               <>
                 <div className="space-y-2">
+                  <Label>Applications scope</Label>
+                  <Select
+                    value={fieldZipExportScope}
+                    onValueChange={(value) =>
+                      setFieldZipExportScope(value as "all" | "selected")
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select scope" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All submitted applications</SelectItem>
+                      <SelectItem
+                        value="selected"
+                        disabled={selectedApplicationIds.length === 0}
+                      >
+                        Selected applications ({selectedApplicationIds.length})
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {fieldZipExportScope === "selected"
+                      ? `Only currently selected applications will be exported (${selectedApplicationIds.length} selected).`
+                      : "All submitted applications in this event will be exported."}
+                  </p>
+                </div>
+
+                <div className="space-y-2">
                   <Label>Step</Label>
                   <Select
                     value={selectedFieldExportStepId}
@@ -3575,7 +3634,9 @@ export default function ApplicationsListPage() {
                 isLoadingFieldExportOptions ||
                 isExportingFieldZip ||
                 fieldExportOptions.length === 0 ||
-                !selectedFieldExportOption
+                !selectedFieldExportOption ||
+                (fieldZipExportScope === "selected" &&
+                  selectedApplicationIds.length === 0)
               }
             >
               {isExportingFieldZip ? "Exporting..." : "Export ZIP"}

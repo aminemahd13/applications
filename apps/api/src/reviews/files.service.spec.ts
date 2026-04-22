@@ -290,8 +290,19 @@ describe('FilesService event-wide field ZIP export', () => {
         ),
       },
       application_step_states: {
-        findMany: jest.fn().mockResolvedValue(
-          stepStates.map((stepState) => ({
+        findMany: jest.fn().mockImplementation(async (args?: any) => {
+          const requestedApplicationIds = Array.isArray(
+            args?.where?.application_id?.in,
+          )
+            ? (args.where.application_id.in as string[])
+            : null;
+          const effectiveStepStates = requestedApplicationIds
+            ? stepStates.filter((stepState) =>
+                requestedApplicationIds.includes(stepState.application_id),
+              )
+            : stepStates;
+
+          return effectiveStepStates.map((stepState) => ({
             application_id: stepState.application_id,
             latest_submission_version_id: stepState.latest_submission_version_id,
             applications: {
@@ -299,8 +310,8 @@ describe('FilesService event-wide field ZIP export', () => {
                 email: stepState.email,
               },
             },
-          })),
-        ),
+          }));
+        }),
       },
       step_submission_versions: {
         findMany: jest.fn().mockResolvedValue(submissions),
@@ -309,7 +320,15 @@ describe('FilesService event-wide field ZIP export', () => {
         findMany: jest.fn().mockResolvedValue(patchRows),
       },
       file_objects: {
-        findMany: jest.fn().mockResolvedValue(fileRows),
+        findMany: jest.fn().mockImplementation(async (args?: any) => {
+          const requestedIds = Array.isArray(args?.where?.id?.in)
+            ? (args.where.id.in as string[])
+            : null;
+          if (!requestedIds) {
+            return fileRows;
+          }
+          return fileRows.filter((row) => requestedIds.includes(row.id));
+        }),
       },
     };
 
@@ -497,6 +516,75 @@ describe('FilesService event-wide field ZIP export', () => {
       'alpha@example.com__app-1__resume__file_1.pdf',
       'beta@example.com__app-2__resume__file_1.png',
       'beta@example.com__app-2__resume__file_2.jpg',
+    ]);
+  });
+
+  it('exports only selected application IDs when provided', async () => {
+    const { service, prisma, storageService } = createExportService({
+      stepStates: [
+        {
+          application_id: 'app-1',
+          latest_submission_version_id: 'sub-1',
+          email: 'alpha@example.com',
+        },
+        {
+          application_id: 'app-2',
+          latest_submission_version_id: 'sub-2',
+          email: 'beta@example.com',
+        },
+      ],
+      submissions: [
+        {
+          id: 'sub-1',
+          application_id: 'app-1',
+          answers_snapshot: {
+            resume: [{ fileObjectId: 'file-1' }],
+          },
+        },
+        {
+          id: 'sub-2',
+          application_id: 'app-2',
+          answers_snapshot: {
+            resume: [{ fileObjectId: 'file-2' }],
+          },
+        },
+      ],
+      fileRows: [
+        {
+          id: 'file-1',
+          storage_key: 'key-1',
+          original_filename: 'resume.pdf',
+          sensitivity: 'normal',
+        },
+        {
+          id: 'file-2',
+          storage_key: 'key-2',
+          original_filename: 'photo.png',
+          sensitivity: 'normal',
+        },
+      ],
+    });
+
+    const result = await service.exportEventFieldFilesZip(
+      'event-1',
+      'step-1',
+      'resume',
+      ['app-2'],
+    );
+
+    expect((prisma.application_step_states.findMany as jest.Mock).mock.calls[0][0])
+      .toEqual(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            application_id: { in: ['app-2'] },
+          }),
+        }),
+      );
+    expect(storageService.getObjectBuffer).toHaveBeenCalledTimes(1);
+
+    const zip = await JSZip.loadAsync(result.buffer);
+    expect(Object.keys(zip.files)).toEqual([
+      'beta@example.com__app-2__resume__file_1.png',
     ]);
   });
 

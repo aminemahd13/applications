@@ -455,8 +455,16 @@ export class FilesService {
     eventId: string,
     stepId: string,
     fieldId: string,
+    applicationIds?: string[],
   ): Promise<ExportFieldFilesZipResult> {
     const permissions = (this.cls.get('permissions') ?? []) as string[];
+    const normalizedApplicationIds = Array.from(
+      new Set(
+        (applicationIds ?? [])
+          .map((value) => String(value ?? '').trim())
+          .filter((value) => value.length > 0),
+      ),
+    );
 
     const step = await this.prisma.workflow_steps.findFirst({
       where: { id: stepId, event_id: eventId },
@@ -490,6 +498,13 @@ export class FilesService {
         step_id: stepId,
         latest_submission_version_id: { not: null },
         applications: { event_id: eventId },
+        ...(normalizedApplicationIds.length > 0
+          ? {
+              application_id: {
+                in: normalizedApplicationIds,
+              },
+            }
+          : {}),
       },
       orderBy: { application_id: 'asc' },
       select: {
@@ -506,7 +521,9 @@ export class FilesService {
     });
     if (stepStates.length === 0) {
       throw new BadRequestException(
-        'No submitted answers found for this step',
+        normalizedApplicationIds.length > 0
+          ? 'No submitted answers found for the selected applications in this step'
+          : 'No submitted answers found for this step',
       );
     }
 
@@ -522,7 +539,9 @@ export class FilesService {
     );
     if (latestSubmissionVersionIds.length === 0) {
       throw new BadRequestException(
-        'No submitted answers found for this step',
+        normalizedApplicationIds.length > 0
+          ? 'No submitted answers found for the selected applications in this step'
+          : 'No submitted answers found for this step',
       );
     }
 

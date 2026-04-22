@@ -53,6 +53,7 @@ describe('FilesController', () => {
       'event-1',
       'step-1',
       'resume',
+      undefined,
       res,
     );
 
@@ -60,6 +61,7 @@ describe('FilesController', () => {
       'event-1',
       'step-1',
       'resume',
+      [],
     );
     expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/zip');
     expect(res.setHeader).toHaveBeenCalledWith(
@@ -67,5 +69,33 @@ describe('FilesController', () => {
       'attachment; filename="event-1__step-1__resume.zip"',
     );
     expect(res.send).toHaveBeenCalledWith(buffer);
+  });
+
+  it('parses applicationIds query and forwards selected IDs to service', async () => {
+    const { controller, filesService } = createController();
+    const buffer = Buffer.from('zip-bytes');
+    filesService.exportEventFieldFilesZip.mockResolvedValue({
+      filename: 'event-1__step-1__resume.zip',
+      buffer,
+    });
+    const res = {
+      setHeader: jest.fn(),
+      send: jest.fn(),
+    } as any;
+
+    await controller.exportEventFieldFilesZip(
+      'event-1',
+      'step-1',
+      'resume',
+      ' app-1,app-2 , app-1 ',
+      res,
+    );
+
+    expect(filesService.exportEventFieldFilesZip).toHaveBeenCalledWith(
+      'event-1',
+      'step-1',
+      'resume',
+      ['app-1', 'app-2'],
+    );
   });
 });

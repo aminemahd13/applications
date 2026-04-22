@@ -154,12 +154,15 @@ export class FilesController {
     @Param('eventId') eventId: string,
     @Param('stepId') stepId: string,
     @Param('fieldId') fieldId: string,
+    @Query('applicationIds') rawApplicationIds?: string | string[],
     @Res() res: Response,
   ) {
+    const applicationIds = this.parseApplicationIdsQuery(rawApplicationIds);
     const result = await this.filesService.exportEventFieldFilesZip(
       eventId,
       stepId,
       fieldId,
+      applicationIds,
     );
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader(
@@ -167,5 +170,24 @@ export class FilesController {
       `attachment; filename="${result.filename}"`,
     );
     res.send(result.buffer);
+  }
+
+  private parseApplicationIdsQuery(
+    rawApplicationIds: string | string[] | undefined,
+  ): string[] {
+    const values = Array.isArray(rawApplicationIds)
+      ? rawApplicationIds
+      : rawApplicationIds
+        ? [rawApplicationIds]
+        : [];
+
+    return Array.from(
+      new Set(
+        values
+          .flatMap((value) => String(value).split(','))
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0),
+      ),
+    );
   }
 }
