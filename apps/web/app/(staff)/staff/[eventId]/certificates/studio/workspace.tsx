@@ -848,7 +848,7 @@ export function CertificateStudioWorkspace() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Certificate Studio v2"
+        title="Certificate Studio"
         description="Unified pro workspace for templates, assets, draft autosave, publishing, and issuance."
       >
         <div className="flex items-center gap-2">
