@@ -38,6 +38,7 @@ import type {
   IssuedCertificateSummary,
 } from "@/lib/certificates";
 import { cn } from "@/lib/utils";
+import { sanitizeClientFacingUrl } from "@/lib/public-link-url";
 import type { AssetMode, LeftRailView } from "./utils";
 import { formatDateTime, resolveAssetUrl } from "./utils";
 
@@ -672,6 +673,13 @@ export function LeftRail(props: LeftRailProps) {
                   ) : (
                     issuedCertificates.slice(0, 10).map((item) => (
                       <div key={item.id} className="rounded-md border p-2 text-xs">
+                        {(() => {
+                          const certificateHref = sanitizeClientFacingUrl(item.certificateUrl) ?? item.certificateUrl;
+                          const verifyHref = sanitizeClientFacingUrl(item.verifiableCredentialUrl) ?? item.verifiableCredentialUrl;
+                          const pdfHref = sanitizeClientFacingUrl(item.pdfUrl);
+
+                          return (
+                            <>
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-medium">{item.certificateTypeLabel}</span>
                           <div className="flex items-center gap-1">
@@ -696,20 +704,20 @@ export function LeftRail(props: LeftRailProps) {
                         <p className="text-muted-foreground">{formatDateTime(item.issuedAt)}</p>
                         <div className="mt-2 grid grid-cols-2 gap-2">
                           <Button size="sm" variant="outline" className="h-7 text-[11px]" asChild>
-                            <a href={item.certificateUrl} target="_blank" rel="noreferrer">
+                            <a href={certificateHref} target="_blank" rel="noreferrer">
                               <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
                               Certificate
                             </a>
                           </Button>
                           <Button size="sm" variant="outline" className="h-7 text-[11px]" asChild>
-                            <a href={item.verifiableCredentialUrl} target="_blank" rel="noreferrer">
+                            <a href={verifyHref} target="_blank" rel="noreferrer">
                               <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
                               Verify
                             </a>
                           </Button>
-                          {item.pdfUrl && (
+                          {pdfHref && (
                             <Button size="sm" variant="outline" className="col-span-2 h-7 text-[11px]" asChild>
-                              <a href={item.pdfUrl} target="_blank" rel="noreferrer">
+                              <a href={pdfHref} target="_blank" rel="noreferrer">
                                 <FileText className="mr-1.5 h-3.5 w-3.5" />
                                 PDF
                               </a>
@@ -732,6 +740,9 @@ export function LeftRail(props: LeftRailProps) {
                             </Button>
                           )}
                         </div>
+                            </>
+                          );
+                        })()}
                       </div>
                     ))
                   )}

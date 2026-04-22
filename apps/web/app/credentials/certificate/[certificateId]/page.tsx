@@ -16,6 +16,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { CertificateTemplateElement } from "@/lib/certificates";
+import { sanitizeClientFacingUrl } from "@/lib/public-link-url";
 import { apiClient } from "@/lib/api";
 import {
   computeCanvasScale,
@@ -319,6 +320,10 @@ export default function CertificatePage() {
   }
 
   const hasRenderableLayout = Boolean(layout && layout.elements.length > 0);
+  const verificationHref =
+    sanitizeClientFacingUrl(certificate.verifiableCredentialUrl) ??
+    certificate.verifiableCredentialUrl;
+  const pdfHref = sanitizeClientFacingUrl(certificate.pdfUrl);
 
   return (
     <div className="min-h-screen bg-muted/15 print:bg-white">
@@ -338,14 +343,14 @@ export default function CertificatePage() {
               Print
             </Button>
             <Button asChild className="flex-1 sm:flex-none">
-              <a href={certificate.verifiableCredentialUrl} target="_blank" rel="noreferrer">
+              <a href={verificationHref} target="_blank" rel="noreferrer">
                 <ShieldCheck className="mr-1.5 h-4 w-4" />
                 Verify
               </a>
             </Button>
-            {certificate.pdfUrl && (
+            {pdfHref && (
               <Button variant="outline" asChild className="flex-1 sm:flex-none">
-                <a href={certificate.pdfUrl} target="_blank" rel="noreferrer">
+                <a href={pdfHref} target="_blank" rel="noreferrer">
                   <Download className="mr-1.5 h-4 w-4" />
                   Open PDF
                 </a>
@@ -573,7 +578,7 @@ export default function CertificatePage() {
             <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
               <p className="font-medium text-foreground">Verification link</p>
               <a
-                href={certificate.verifiableCredentialUrl}
+                href={verificationHref}
                 target="_blank"
                 rel="noreferrer"
                 className="mt-1 block break-all text-foreground underline"
@@ -582,9 +587,9 @@ export default function CertificatePage() {
               </a>
             </div>
 
-            {certificate.pdfUrl ? (
+            {pdfHref ? (
               <a
-                href={certificate.pdfUrl}
+                href={pdfHref}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 text-sm font-medium underline print:hidden"

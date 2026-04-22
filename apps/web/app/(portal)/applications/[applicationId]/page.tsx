@@ -29,6 +29,7 @@ import {
   PageSkeleton,
 } from "@/components/shared";
 import { apiClient } from "@/lib/api";
+import { sanitizeClientFacingUrl } from "@/lib/public-link-url";
 
 interface StepState {
   id: string;
@@ -449,26 +450,40 @@ export default function ApplicationWorkspacePage() {
                       Issued {new Date(certificate.issuedAt).toLocaleDateString("en-GB")}
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
+                      {(() => {
+                        const certificateHref =
+                          sanitizeClientFacingUrl(certificate.certificateUrl) ??
+                          certificate.certificateUrl;
+                        const verifyHref =
+                          sanitizeClientFacingUrl(certificate.verificationUrl) ??
+                          certificate.verificationUrl;
+                        const pdfHref = sanitizeClientFacingUrl(certificate.pdfUrl);
+
+                        return (
+                          <>
                       <Button size="sm" variant="outline" asChild>
-                        <a href={certificate.certificateUrl} target="_blank" rel="noreferrer">
+                        <a href={certificateHref} target="_blank" rel="noreferrer">
                           <Award className="mr-1.5 h-3.5 w-3.5" />
                           Certificate
                         </a>
                       </Button>
                       <Button size="sm" asChild>
-                        <a href={certificate.verificationUrl} target="_blank" rel="noreferrer">
+                        <a href={verifyHref} target="_blank" rel="noreferrer">
                           <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
                           Verify
                         </a>
                       </Button>
-                      {certificate.pdfUrl && (
+                      {pdfHref && (
                         <Button size="sm" variant="outline" asChild>
-                          <a href={certificate.pdfUrl} target="_blank" rel="noreferrer">
+                          <a href={pdfHref} target="_blank" rel="noreferrer">
                             <FileText className="mr-1.5 h-3.5 w-3.5" />
                             PDF
                           </a>
                         </Button>
                       )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 ))}
@@ -583,7 +598,10 @@ export default function ApplicationWorkspacePage() {
                     <span className="text-muted-foreground">Credential</span>
                     <Button variant="link" size="sm" className="h-auto p-0 text-xs" asChild>
                       <a
-                        href={primaryCertificate.certificateUrl}
+                        href={
+                          sanitizeClientFacingUrl(primaryCertificate.certificateUrl) ??
+                          primaryCertificate.certificateUrl
+                        }
                         target="_blank"
                         rel="noreferrer"
                       >
