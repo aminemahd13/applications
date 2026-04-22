@@ -361,8 +361,8 @@ export class CertificatesPublicController {
   @SkipThrottle()
   @Get('assets')
   async resolveCertificateAsset(
-    @Query('key') key?: string,
     @Res() res: Response,
+    @Query('key') key?: string,
   ) {
     const url = await this.certificatesService.resolveCertificateAssetUrl(key);
     return res.redirect(302, url);
