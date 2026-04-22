@@ -3796,7 +3796,10 @@ export class ApplicationsService {
         `/credentials/qr/${encodeURIComponent(row.qr_token)}`,
       );
       const pdfUrl = row.pdf_storage_key
-        ? joinAppUrl(appBaseUrl, `/uploads/${encodeURIComponent(row.pdf_storage_key)}`)
+        ? joinAppUrl(
+            appBaseUrl,
+            `/credentials/certificate/${row.certificate_id}/pdf`,
+          )
         : null;
       const revoked =
         Boolean(row.revoked_at) || String(row.status ?? '').toUpperCase() === 'REVOKED';

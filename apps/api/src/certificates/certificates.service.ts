@@ -32,6 +32,7 @@ import { createHmac } from 'node:crypto';
 import { joinAppUrl, resolveAppBaseUrl } from '../common/utils/export-csv.util';
 
 const CERTIFICATE_ASSET_PREFIX = /^events\/[^/]+\/certificates\/assets\/.+/;
+const CERTIFICATE_PDF_PREFIX = /^events\/[^/]+\/certificates\/pdf\/.+/;
 
 interface QrSigningConfig {
   activeKid: string;
@@ -253,6 +254,13 @@ export class CertificatesService {
     return joinAppUrl(
       this.getAppBaseUrl(),
       `/credentials/qr/${encodeURIComponent(token)}`,
+    );
+  }
+
+  private getCertificatePdfUrl(certificateId: string): string {
+    return joinAppUrl(
+      this.getAppBaseUrl(),
+      `/credentials/certificate/${certificateId}/pdf`,
     );
   }
 
@@ -523,10 +531,7 @@ export class CertificatesService {
     const links = this.getCredentialLinks(row.certificate_id, row.credential_id);
     const qrVerificationUrl = this.getQrVerificationUrl(row.qr_token);
     const pdfUrl = row.pdf_storage_key
-      ? joinAppUrl(
-          this.getAppBaseUrl(),
-          `/uploads/${encodeURIComponent(row.pdf_storage_key)}`,
-        )
+      ? this.getCertificatePdfUrl(row.certificate_id)
       : null;
 
     const templateSnapshot = this.toRecord(row.template_snapshot);
@@ -1843,10 +1848,7 @@ export class CertificatesService {
       );
 
     const pdfUrl = record.pdf_storage_key
-      ? joinAppUrl(
-          this.getAppBaseUrl(),
-          `/uploads/${encodeURIComponent(record.pdf_storage_key)}`,
-        )
+      ? this.getCertificatePdfUrl(record.certificate_id)
       : null;
 
     return {
@@ -2042,6 +2044,50 @@ export class CertificatesService {
       certificate.certificate_id,
       certificate.credential_id,
     ).verifiableCredentialUrl;
+  }
+
+  async resolveCertificatePdfUrl(certificateId: string): Promise<string> {
+    const record = await (this.prisma as any).issued_certificates.findUnique({
+      where: {
+        certificate_id: certificateId,
+      },
+      select: {
+        pdf_storage_key: true,
+      },
+    });
+
+    const storageKey = String(record?.pdf_storage_key ?? '')
+      .trim()
+      .replace(/^\/+/, '');
+    if (!storageKey || !CERTIFICATE_PDF_PREFIX.test(storageKey)) {
+      throw new NotFoundException('Certificate PDF not found');
+    }
+
+    return this.storageService.getPresignedGetUrl(storageKey, 3600);
+  }
+
+  async resolveCertificateAssetUrl(rawStorageKey?: string): Promise<string> {
+    const storageKey = String(rawStorageKey ?? '')
+      .trim()
+      .replace(/^\/+/, '');
+    if (!storageKey || !CERTIFICATE_ASSET_PREFIX.test(storageKey)) {
+      throw new NotFoundException('Asset not found');
+    }
+
+    const asset = await this.prisma.file_objects.findFirst({
+      where: {
+        storage_key: storageKey,
+        status: 'COMMITTED',
+      },
+      select: {
+        id: true,
+      },
+    });
+    if (!asset) {
+      throw new NotFoundException('Asset not found');
+    }
+
+    return this.storageService.getPresignedGetUrl(storageKey, 3600);
   }
 
   async listApplicationCertificates(

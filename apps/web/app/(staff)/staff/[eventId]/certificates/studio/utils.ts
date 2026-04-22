@@ -47,7 +47,7 @@ export function resolveAssetUrl(storageKey?: string | null): string {
   if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("data:")) {
     return raw;
   }
-  return `/uploads/${encodeURIComponent(raw)}`;
+  return `/credentials/assets?key=${encodeURIComponent(raw)}`;
 }
 
 export function formatDateTime(value: string | null | undefined): string {

@@ -343,4 +343,28 @@ export class CertificatesPublicController {
     const url = await this.certificatesService.resolveQrVerificationToken(token);
     return res.redirect(302, url);
   }
+
+  @SkipCsrf()
+  @SkipThrottle()
+  @Get('certificate/:certificateId/pdf')
+  async resolveCertificatePdf(
+    @Param('certificateId') certificateId: string,
+    @Res() res: Response,
+  ) {
+    const url = await this.certificatesService.resolveCertificatePdfUrl(
+      certificateId,
+    );
+    return res.redirect(302, url);
+  }
+
+  @SkipCsrf()
+  @SkipThrottle()
+  @Get('assets')
+  async resolveCertificateAsset(
+    @Query('key') key?: string,
+    @Res() res: Response,
+  ) {
+    const url = await this.certificatesService.resolveCertificateAssetUrl(key);
+    return res.redirect(302, url);
+  }
 }
