@@ -126,8 +126,13 @@ import {
   parsePastedEmails,
 } from "@/lib/pasted-emails";
 import {
+  createCertificatePdfExportJob,
+  getCertificatePdfExportJobDownloadUrl,
   issueCertificatesBulk,
   listCertificateTemplates,
+  listIssuedCertificates,
+  pollCertificatePdfExportJobUntilTerminal,
+  releaseCertificatesBulk,
   type CertificateTemplateSummary,
 } from "@/lib/certificates";
 
@@ -439,6 +444,9 @@ export default function ApplicationsListPage() {
   const [isLoadingCertificateTemplates, setIsLoadingCertificateTemplates] = useState(false);
   const [selectedCertificateTemplateId, setSelectedCertificateTemplateId] = useState("");
   const [reissueCertificatesIfExists, setReissueCertificatesIfExists] = useState(false);
+  const [downloadCertificatesAfterIssue, setDownloadCertificatesAfterIssue] = useState(false);
+  const [isDownloadingCertificates, setIsDownloadingCertificates] = useState(false);
+  const [isReleasingCertificates, setIsReleasingCertificates] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isApplyingBulk, setIsApplyingBulk] = useState(false);
   const [isSelectingAllMatching, setIsSelectingAllMatching] = useState(false);
@@ -2324,7 +2332,7 @@ export default function ApplicationsListPage() {
       a.href = download.url;
       a.download =
         download.filename ||
-        `${eventId}-${selectedFieldExportOption.stepId}-${selectedFieldExportOption.fieldKey}-files.zip`,
+        `${eventId}-${selectedFieldExportOption.stepId}-${selectedFieldExportOption.fieldKey}-files.zip`;
       a.click();
       setShowFieldZipDialog(false);
       const scopeLabel =
@@ -2345,6 +2353,154 @@ export default function ApplicationsListPage() {
     } finally {
       setIsExportingFieldZip(false);
       setFieldZipExportPhase("idle");
+    }
+  }
+
+  async function downloadCertificatesZipByIssuedIds(issuedCertificateIds: string[]) {
+    const ids = Array.from(
+      new Set(
+        issuedCertificateIds.filter(
+          (issuedCertificateId) =>
+            typeof issuedCertificateId === "string" && issuedCertificateId.length > 0,
+        ),
+      ),
+    );
+    if (ids.length === 0) {
+      toast.error("No issued certificates found to download.");
+      return;
+    }
+
+    setIsDownloadingCertificates(true);
+    try {
+      const queuedJob = await createCertificatePdfExportJob(
+        eventId,
+        { issuedCertificateIds: ids },
+        csrfToken ?? undefined,
+      );
+      const terminalJob = await pollCertificatePdfExportJobUntilTerminal({
+        eventId,
+        jobId: queuedJob.id,
+        intervalMs: 2000,
+        timeoutMs: 15 * 60 * 1000,
+      });
+
+      if (String(terminalJob.status ?? "").toUpperCase() === "FAILED") {
+        throw new Error(terminalJob.errorMessage || "Certificate PDF export failed.");
+      }
+
+      const download = await getCertificatePdfExportJobDownloadUrl(
+        eventId,
+        queuedJob.id,
+      );
+      const a = document.createElement("a");
+      a.href = download.url;
+      a.download = download.filename || `${eventId}-certificates.zip`;
+      a.click();
+      toast.success("Certificates ZIP downloaded.");
+    } catch (error) {
+      if (error instanceof ApiError && error.message.trim().length > 0) {
+        toast.error(error.message);
+      } else if (error instanceof Error && error.message.trim().length > 0) {
+        toast.error(error.message);
+      } else {
+        toast.error("Could not download certificates ZIP.");
+      }
+    } finally {
+      setIsDownloadingCertificates(false);
+    }
+  }
+
+  async function downloadSelectedCertificatesZip() {
+    if (selectedApplicationIds.length === 0 || isDownloadingCertificates) return;
+    setIsDownloadingCertificates(true);
+    try {
+      const issuedIdSet = new Set<string>();
+      const chunks = chunkApplicationIds(selectedApplicationIds, 50);
+      for (const chunkIds of chunks) {
+        await Promise.all(
+          chunkIds.map(async (applicationId) => {
+            const issued = await listIssuedCertificates(eventId, {
+              applicationId,
+              status: "ISSUED",
+              limit: 200,
+            });
+            for (const row of issued) {
+              if (row.status === "ISSUED") {
+                issuedIdSet.add(row.id);
+              }
+            }
+          }),
+        );
+      }
+      const ids = Array.from(issuedIdSet);
+      if (ids.length === 0) {
+        toast.error("No issued certificates found for selected applications.");
+        return;
+      }
+
+      const queuedJob = await createCertificatePdfExportJob(
+        eventId,
+        { issuedCertificateIds: ids },
+        csrfToken ?? undefined,
+      );
+      const terminalJob = await pollCertificatePdfExportJobUntilTerminal({
+        eventId,
+        jobId: queuedJob.id,
+        intervalMs: 2000,
+        timeoutMs: 15 * 60 * 1000,
+      });
+      if (String(terminalJob.status ?? "").toUpperCase() === "FAILED") {
+        throw new Error(terminalJob.errorMessage || "Certificate PDF export failed.");
+      }
+      const download = await getCertificatePdfExportJobDownloadUrl(
+        eventId,
+        queuedJob.id,
+      );
+      const a = document.createElement("a");
+      a.href = download.url;
+      a.download = download.filename || `${eventId}-certificates.zip`;
+      a.click();
+      toast.success("Certificates ZIP downloaded.");
+    } catch (error) {
+      if (error instanceof ApiError && error.message.trim().length > 0) {
+        toast.error(error.message);
+      } else if (error instanceof Error && error.message.trim().length > 0) {
+        toast.error(error.message);
+      } else {
+        toast.error("Could not download certificates ZIP.");
+      }
+    } finally {
+      setIsDownloadingCertificates(false);
+    }
+  }
+
+  async function releaseSelectedCertificates() {
+    if (!canIssueCredentials || selectedApplicationIds.length === 0 || isReleasingCertificates) {
+      return;
+    }
+    setIsReleasingCertificates(true);
+    try {
+      const summary = await releaseCertificatesBulk(
+        eventId,
+        { applicationIds: selectedApplicationIds },
+        csrfToken ?? undefined,
+      );
+      toast.success(
+        `Released ${summary.released} certificate(s). Already released: ${summary.alreadyReleased}.`,
+      );
+      if (summary.skippedNotCheckedIn > 0 || summary.skippedRevoked > 0) {
+        toast.info(
+          `Skipped not checked-in: ${summary.skippedNotCheckedIn}, revoked: ${summary.skippedRevoked}.`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.message.trim().length > 0) {
+        toast.error(error.message);
+      } else {
+        toast.error("Could not release certificates.");
+      }
+    } finally {
+      setIsReleasingCertificates(false);
     }
   }
 
@@ -2374,6 +2530,7 @@ export default function ApplicationsListPage() {
     if (!canIssueCredentials || selectedApplicationIds.length === 0) return;
     await refreshCertificateTemplates();
     setReissueCertificatesIfExists(false);
+    setDownloadCertificatesAfterIssue(false);
     setShowIssueCertificatesDialog(true);
   }
 
@@ -2398,12 +2555,14 @@ export default function ApplicationsListPage() {
           alreadyIssued?: number;
           notFound?: string[];
           failed?: Array<{ applicationId: string; reason: string }>;
+          certificates?: Array<{ id?: string }>;
         },
         {
           issued: number;
           alreadyIssued: number;
           notFound: string[];
           failed: Array<{ applicationId: string; reason: string }>;
+          issuedCertificateIds: string[];
         }
       >({
         applicationIds: selectedApplicationIds,
@@ -2422,6 +2581,7 @@ export default function ApplicationsListPage() {
           alreadyIssued: 0,
           notFound: [],
           failed: [],
+          issuedCertificateIds: [],
         }),
         aggregateChunkResult: (aggregate, chunkResult) => {
           const chunkSummary = chunkResult ?? {};
@@ -2432,6 +2592,14 @@ export default function ApplicationsListPage() {
           }
           if (Array.isArray(chunkSummary.failed)) {
             aggregate.failed.push(...chunkSummary.failed);
+          }
+          if (Array.isArray(chunkSummary.certificates)) {
+            for (const certificate of chunkSummary.certificates) {
+              const issuedCertificateId = String(certificate?.id ?? "").trim();
+              if (issuedCertificateId.length > 0) {
+                aggregate.issuedCertificateIds.push(issuedCertificateId);
+              }
+            }
           }
         },
       });
@@ -2475,6 +2643,10 @@ export default function ApplicationsListPage() {
         toast.info(`${failedCount} application(s) remain selected for retry.`);
       }
       toastBulkChunkErrors("Certificate issuance", summary.errorMessages);
+
+      if (downloadCertificatesAfterIssue) {
+        await downloadCertificatesZipByIssuedIds(summary.aggregate.issuedCertificateIds);
+      }
       setShowIssueCertificatesDialog(false);
     } catch {
       toast.error("Could not issue certificates.");
@@ -3843,6 +4015,28 @@ export default function ApplicationsListPage() {
               <Award className="mr-1.5 h-3.5 w-3.5" />
               {isIssuingCredentials ? "Issuing..." : "Issue certificates"}
             </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                void releaseSelectedCertificates();
+              }}
+              disabled={!canIssueCredentials || isReleasingCertificates}
+            >
+              <Award className="mr-1.5 h-3.5 w-3.5" />
+              {isReleasingCertificates ? "Releasing..." : "Release certificates"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                void downloadSelectedCertificatesZip();
+              }}
+              disabled={!canIssueCredentials || isDownloadingCertificates}
+            >
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+              {isDownloadingCertificates ? "Preparing ZIP..." : "Download certificates"}
+            </Button>
             {canPublishDecisions && (
               <Button
                 size="sm"
@@ -4193,6 +4387,19 @@ export default function ApplicationsListPage() {
                 checked={reissueCertificatesIfExists}
                 onCheckedChange={setReissueCertificatesIfExists}
                 disabled={isIssuingCredentials}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-md border p-3">
+              <div className="space-y-0.5">
+                <Label className="text-sm">Download PDFs after issue</Label>
+                <p className="text-xs text-muted-foreground">
+                  Wait for render jobs, then download one ZIP for issued certificates.
+                </p>
+              </div>
+              <Switch
+                checked={downloadCertificatesAfterIssue}
+                onCheckedChange={setDownloadCertificatesAfterIssue}
+                disabled={isIssuingCredentials || isDownloadingCertificates}
               />
             </div>
           </div>

@@ -29,20 +29,26 @@ import {
   DEFAULT_CERTIFICATE_LAYOUT,
   CERTIFICATE_DYNAMIC_TOKENS,
   activateCertificateTemplateVersion,
+  createCertificatePdfExportJob,
   createCertificateTemplate,
   deleteCertificateAsset,
   deleteCertificateTemplate,
   deleteCertificateTemplateVersion,
   duplicateCertificateTemplate,
+  getCertificatePdfExportJobDownloadUrl,
   getCertificateTemplateDraft,
+  issueCertificatesByTags,
   issueCertificatesBulk,
+  listCertificateIssuanceTags,
   searchCertificateIssuanceCandidates,
   listCertificateAssets,
   listCertificateRenderJobs,
   listCertificateTemplateVersions,
   listCertificateTemplates,
   listIssuedCertificates,
+  pollCertificatePdfExportJobUntilTerminal,
   publishCertificateTemplate,
+  releaseIssuedCertificate,
   revokeIssuedCertificate,
   retryCertificateRenderJob,
   updateCertificateTemplate,
@@ -135,18 +141,25 @@ export function CertificateStudioWorkspace() {
   const [issuanceSearchInput, setIssuanceSearchInput] = useState("");
   const [issuanceCandidates, setIssuanceCandidates] = useState<CertificateIssuanceCandidate[]>([]);
   const [issuanceSearchAttempted, setIssuanceSearchAttempted] = useState(false);
+  const [issuanceTagSearchInput, setIssuanceTagSearchInput] = useState("");
+  const [issuanceTags, setIssuanceTags] = useState<string[]>([]);
+  const [issuanceSelectedTags, setIssuanceSelectedTags] = useState<string[]>([]);
+  const [issuanceDownloadAfterIssue, setIssuanceDownloadAfterIssue] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isRefreshingIssuance, setIsRefreshingIssuance] = useState(false);
   const [isSearchingIssuanceCandidates, setIsSearchingIssuanceCandidates] = useState(false);
+  const [isLoadingIssuanceTags, setIsLoadingIssuanceTags] = useState(false);
   const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
   const [isBusyTemplateAction, setIsBusyTemplateAction] = useState(false);
   const [isBusyVersionAction, setIsBusyVersionAction] = useState(false);
   const [isUploadingAsset, setIsUploadingAsset] = useState(false);
   const [isIssuing, setIsIssuing] = useState(false);
+  const [isDownloadingIssuanceZip, setIsDownloadingIssuanceZip] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isRevokingIssuedCertificate, setIsRevokingIssuedCertificate] = useState(false);
+  const [releasingIssuedCertificateId, setReleasingIssuedCertificateId] = useState<string | null>(null);
   const [revokeDialogOpen, setRevokeDialogOpen] = useState(false);
   const [revokeReasonDraft, setRevokeReasonDraft] = useState("");
   const [revokeTargetCertificate, setRevokeTargetCertificate] = useState<IssuedCertificateSummary | null>(null);
@@ -221,6 +234,20 @@ export function CertificateStudioWorkspace() {
       return preferred?.id ?? null;
     });
   }, [assetKindFilter, eventId]);
+
+  const refreshIssuanceTags = useCallback(() => {
+    setIsLoadingIssuanceTags(true);
+    listCertificateIssuanceTags(eventId, {
+      search: issuanceTagSearchInput.trim() || undefined,
+      limit: 80,
+    })
+      .then((tags) => setIssuanceTags(tags))
+      .catch(() => {
+        setIssuanceTags([]);
+        toast.error("Failed to load tags.");
+      })
+      .finally(() => setIsLoadingIssuanceTags(false));
+  }, [eventId, issuanceTagSearchInput]);
 
   useEffect(() => {
     if (!canManage) return;
@@ -335,6 +362,14 @@ export function CertificateStudioWorkspace() {
     setIssuanceCandidates([]);
     setIssuanceSearchAttempted(false);
   }, [issuanceSearchInput]);
+
+  useEffect(() => {
+    if (!canManage || view !== "issuance") return;
+    const timer = setTimeout(() => {
+      refreshIssuanceTags();
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [canManage, refreshIssuanceTags, view]);
 
   useEffect(() => {
     if (!canManage || !selectedTemplateId || !isDraftReady) return;
@@ -761,6 +796,61 @@ export function CertificateStudioWorkspace() {
       .finally(() => setIsSearchingIssuanceCandidates(false));
   }, [eventId, issuanceSearchInput]);
 
+  const downloadIssuanceZipByIssuedIds = useCallback(
+    async (issuedCertificateIds: string[]) => {
+      const ids = Array.from(
+        new Set(
+          issuedCertificateIds.filter(
+            (issuedCertificateId) =>
+              typeof issuedCertificateId === "string" &&
+              issuedCertificateId.length > 0,
+          ),
+        ),
+      );
+      if (ids.length === 0) return;
+
+      setIsDownloadingIssuanceZip(true);
+      try {
+        const queuedJob = await createCertificatePdfExportJob(
+          eventId,
+          { issuedCertificateIds: ids },
+          csrfToken ?? undefined,
+        );
+        const terminalJob = await pollCertificatePdfExportJobUntilTerminal({
+          eventId,
+          jobId: queuedJob.id,
+          intervalMs: 2000,
+          timeoutMs: 15 * 60 * 1000,
+        });
+        if (String(terminalJob.status ?? "").toUpperCase() === "FAILED") {
+          throw new Error(
+            terminalJob.errorMessage || "Certificate PDF export failed.",
+          );
+        }
+        const download = await getCertificatePdfExportJobDownloadUrl(
+          eventId,
+          queuedJob.id,
+        );
+        const a = document.createElement("a");
+        a.href = download.url;
+        a.download = download.filename || `${eventId}-certificates.zip`;
+        a.click();
+        toast.success("Certificates ZIP downloaded.");
+      } catch (error) {
+        if (error instanceof ApiError && error.message.trim().length > 0) {
+          toast.error(error.message);
+        } else if (error instanceof Error && error.message.trim().length > 0) {
+          toast.error(error.message);
+        } else {
+          toast.error("Could not download certificates ZIP.");
+        }
+      } finally {
+        setIsDownloadingIssuanceZip(false);
+      }
+    },
+    [csrfToken, eventId],
+  );
+
   const handleIssueCertificates = useCallback(() => {
     if (!selectedTemplateId) {
       toast.error("Select a template first.");
@@ -788,14 +878,24 @@ export function CertificateStudioWorkspace() {
       .then((result) => {
         toast.success(`Issued ${result.issued} certificate(s).`);
         setIssuanceApplicationIds("");
-        return refreshIssuance();
+        return refreshIssuance().then(async () => {
+          if (issuanceDownloadAfterIssue) {
+            await downloadIssuanceZipByIssuedIds(
+              (result.certificates ?? [])
+                .map((certificate) => String(certificate.id ?? "").trim())
+                .filter((value) => value.length > 0),
+            );
+          }
+        });
       })
       .catch(() => toast.error("Failed to issue certificates."))
       .finally(() => setIsIssuing(false));
   }, [
     csrfToken,
+    downloadIssuanceZipByIssuedIds,
     eventId,
     issuanceApplicationIds,
+    issuanceDownloadAfterIssue,
     issuanceIssuerName,
     issuanceReissueIfExists,
     refreshIssuance,
@@ -834,20 +934,105 @@ export function CertificateStudioWorkspace() {
           } else {
             toast.error("Failed to issue certificate.");
           }
-          return refreshIssuance();
+          return refreshIssuance().then(async () => {
+            if (issuanceDownloadAfterIssue) {
+              await downloadIssuanceZipByIssuedIds(
+                (result.certificates ?? [])
+                  .map((certificate) => String(certificate.id ?? "").trim())
+                  .filter((value) => value.length > 0),
+              );
+            }
+          });
         })
         .catch(() => toast.error("Failed to issue certificate."))
         .finally(() => setIsIssuing(false));
     },
     [
       csrfToken,
+      downloadIssuanceZipByIssuedIds,
       eventId,
+      issuanceDownloadAfterIssue,
       issuanceIssuerName,
       issuanceReissueIfExists,
       refreshIssuance,
       selectedTemplateId,
       selectedVersionId,
     ],
+  );
+
+  const handleIssueCertificatesByTags = useCallback(() => {
+    if (!selectedTemplateId) {
+      toast.error("Select a template first.");
+      return;
+    }
+    if (issuanceSelectedTags.length === 0) {
+      toast.error("Select at least one tag.");
+      return;
+    }
+
+    setIsIssuing(true);
+    issueCertificatesByTags(
+      eventId,
+      {
+        templateId: selectedTemplateId,
+        templateVersionId: selectedVersionId ?? undefined,
+        tags: issuanceSelectedTags,
+        issuerName: issuanceIssuerName.trim() || undefined,
+        reissueIfExists: issuanceReissueIfExists,
+      },
+      csrfToken ?? undefined,
+    )
+      .then((result) => {
+        toast.success(`Issued ${result.issued} certificate(s).`);
+        return refreshIssuance().then(async () => {
+          if (issuanceDownloadAfterIssue) {
+            await downloadIssuanceZipByIssuedIds(
+              (result.certificates ?? [])
+                .map((certificate) => String(certificate.id ?? "").trim())
+                .filter((value) => value.length > 0),
+            );
+          }
+        });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof ApiError) {
+          toast.error(error.message);
+          return;
+        }
+        toast.error("Failed to issue certificates by tags.");
+      })
+      .finally(() => setIsIssuing(false));
+  }, [
+    csrfToken,
+    downloadIssuanceZipByIssuedIds,
+    eventId,
+    issuanceDownloadAfterIssue,
+    issuanceIssuerName,
+    issuanceReissueIfExists,
+    issuanceSelectedTags,
+    refreshIssuance,
+    selectedTemplateId,
+    selectedVersionId,
+  ]);
+
+  const handleReleaseIssuedCertificate = useCallback(
+    (certificate: IssuedCertificateSummary) => {
+      setReleasingIssuedCertificateId(certificate.id);
+      releaseIssuedCertificate(eventId, certificate.id, csrfToken ?? undefined)
+        .then(() => {
+          toast.success("Certificate released.");
+          return refreshIssuance();
+        })
+        .catch((error: unknown) => {
+          if (error instanceof ApiError) {
+            toast.error(error.message);
+            return;
+          }
+          toast.error("Failed to release certificate.");
+        })
+        .finally(() => setReleasingIssuedCertificateId(null));
+    },
+    [csrfToken, eventId, refreshIssuance],
   );
 
   const handleRetryRenderJob = useCallback(
@@ -1222,19 +1407,41 @@ export function CertificateStudioWorkspace() {
                   issuanceCandidates={issuanceCandidates}
                   issuanceSearchAttempted={issuanceSearchAttempted}
                   isSearchingIssuanceCandidates={isSearchingIssuanceCandidates}
+                  issuanceTagSearchInput={issuanceTagSearchInput}
+                  onIssuanceTagSearchInputChange={setIssuanceTagSearchInput}
+                  onRefreshIssuanceTags={refreshIssuanceTags}
+                  issuanceTags={issuanceTags}
+                  issuanceSelectedTags={issuanceSelectedTags}
+                  onToggleIssuanceTag={(tag) => {
+                    setIssuanceSelectedTags((previous) =>
+                      previous.includes(tag)
+                        ? previous.filter((item) => item !== tag)
+                        : [...previous, tag],
+                    );
+                  }}
+                  onIssueCertificatesByTags={handleIssueCertificatesByTags}
                   issuanceIssuerName={issuanceIssuerName}
                   onIssuanceIssuerNameChange={setIssuanceIssuerName}
                   issuanceReissueIfExists={issuanceReissueIfExists}
                   onIssuanceReissueIfExistsChange={setIssuanceReissueIfExists}
+                  issuanceDownloadAfterIssue={issuanceDownloadAfterIssue}
+                  onIssuanceDownloadAfterIssueChange={setIssuanceDownloadAfterIssue}
                   onIssueCertificates={handleIssueCertificates}
                   onIssueCandidate={handleIssueSingleCandidate}
                   isIssuing={isIssuing}
+                  isLoadingIssuanceTags={isLoadingIssuanceTags}
+                  isDownloadingIssuanceZip={isDownloadingIssuanceZip}
                   issuedCertificates={issuedCertificates}
                   renderJobs={renderJobs}
                   onRequestRevokeIssuedCertificate={handleRequestRevokeIssuedCertificate}
+                  onReleaseIssuedCertificate={handleReleaseIssuedCertificate}
                   revokingIssuedCertificateId={
                     isRevokingIssuedCertificate ? revokeTargetCertificate?.id ?? null : null
                   }
+                  releasingIssuedCertificateId={releasingIssuedCertificateId}
+                  onDownloadIssuedCertificates={(issuedCertificateIds) => {
+                    void downloadIssuanceZipByIssuedIds(issuedCertificateIds);
+                  }}
                   onRetryRenderJob={handleRetryRenderJob}
                   onRefreshIssuance={() => {
                     setIsRefreshingIssuance(true);

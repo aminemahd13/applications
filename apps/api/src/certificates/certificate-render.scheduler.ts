@@ -4,6 +4,8 @@ import { CertificatesService } from './certificates.service';
 
 const DEFAULT_BATCH_SIZE = 6;
 const DEFAULT_MAX_BATCHES_PER_RUN = 3;
+const DEFAULT_PDF_EXPORT_BATCH_SIZE = 3;
+const DEFAULT_PDF_EXPORT_MAX_BATCHES_PER_RUN = 2;
 
 @Injectable()
 export class CertificateRenderSchedulerService {
@@ -16,6 +18,20 @@ export class CertificateRenderSchedulerService {
     Number(
       process.env.CERTIFICATE_RENDER_MAX_BATCHES_PER_RUN ??
         DEFAULT_MAX_BATCHES_PER_RUN,
+    ),
+    1,
+  );
+  private readonly pdfExportBatchSize = Math.max(
+    Number(
+      process.env.CERTIFICATE_PDF_EXPORT_BATCH_SIZE ??
+        DEFAULT_PDF_EXPORT_BATCH_SIZE,
+    ),
+    1,
+  );
+  private readonly maxPdfExportBatchesPerRun = Math.max(
+    Number(
+      process.env.CERTIFICATE_PDF_EXPORT_MAX_BATCHES_PER_RUN ??
+        DEFAULT_PDF_EXPORT_MAX_BATCHES_PER_RUN,
     ),
     1,
   );
@@ -49,6 +65,29 @@ export class CertificateRenderSchedulerService {
       if (claimed > 0) {
         this.logger.log(
           `Certificate render batch complete: claimed=${claimed}, completed=${completed}, failed=${failed}`,
+        );
+      }
+
+      let pdfClaimed = 0;
+      let pdfCompleted = 0;
+      let pdfFailed = 0;
+      for (
+        let index = 0;
+        index < this.maxPdfExportBatchesPerRun;
+        index += 1
+      ) {
+        const result = await this.certificatesService.processCertificatePdfExportJobsBatch(
+          workerId,
+          this.pdfExportBatchSize,
+        );
+        pdfClaimed += result.claimed;
+        pdfCompleted += result.completed;
+        pdfFailed += result.failed;
+        if (result.claimed === 0) break;
+      }
+      if (pdfClaimed > 0) {
+        this.logger.log(
+          `Certificate PDF export batch complete: claimed=${pdfClaimed}, completed=${pdfCompleted}, failed=${pdfFailed}`,
         );
       }
     } catch (error) {

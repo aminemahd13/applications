@@ -238,6 +238,7 @@ model events {
   checkin_records        checkin_records[]
   certificate_templates  certificate_templates[]
   certificate_render_jobs certificate_render_jobs[]
+  certificate_pdf_export_jobs certificate_pdf_export_jobs[]
   issued_certificates    issued_certificates[]
   completion_credentials completion_credentials[]
   decision_templates     decision_templates[]
@@ -516,6 +517,7 @@ model users {
   event_role_assignments                                event_role_assignments[]
   field_verifications                                   field_verifications[]
   field_file_export_jobs_field_file_export_jobs_requester_user_idTousers field_file_export_jobs[] @relation("field_file_export_jobs_requester_user_idTousers")
+  certificate_pdf_export_jobs_certificate_pdf_export_jobs_requester_user_idTousers certificate_pdf_export_jobs[] @relation("certificate_pdf_export_jobs_requester_user_idTousers")
   file_objects                                          file_objects[]
   form_versions                                         form_versions[]
   message_recipients                                    message_recipients[]
@@ -599,6 +601,8 @@ model issued_certificates {
   issuer_name                  String
   status                       String                        @default("ISSUED")
   issued_at                    DateTime                      @db.Timestamptz(6)
+  released_at                  DateTime?                     @db.Timestamptz(6)
+  released_by                  String?                       @db.Uuid
   revoked_at                   DateTime?                     @db.Timestamptz(6)
   template_snapshot            Json                          @default("{}")
   payload_snapshot             Json                          @default("{}")
@@ -618,6 +622,7 @@ model issued_certificates {
   @@index([application_id, certificate_type_key], map: "issued_cert_app_type_idx")
   @@index([event_id, render_status], map: "issued_cert_event_render_idx")
   @@index([event_id, status], map: "issued_cert_event_status_idx")
+  @@index([event_id, released_at], map: "issued_cert_event_released_idx")
 }
 
 model certificate_render_jobs {
@@ -640,6 +645,31 @@ model certificate_render_jobs {
   @@index([status, next_retry_at], map: "cert_render_jobs_status_retry_idx")
   @@index([event_id, created_at(sort: Desc)], map: "cert_render_jobs_event_created_idx")
   @@index([issued_certificate_id], map: "cert_render_jobs_issued_idx")
+}
+
+model certificate_pdf_export_jobs {
+  id                    String              @id @db.Uuid
+  event_id              String              @db.Uuid
+  requester_user_id     String              @db.Uuid
+  issued_certificate_ids Json               @default("[]")
+  status                String              @default("PENDING")
+  attempts              Int                 @default(0)
+  max_attempts          Int                 @default(120)
+  next_retry_at         DateTime            @default(now()) @db.Timestamptz(6)
+  locked_at             DateTime?           @db.Timestamptz(6)
+  locked_by             String?
+  error_message         String?
+  output_storage_key    String?
+  output_filename       String?
+  output_size_bytes     BigInt?
+  completed_at          DateTime?           @db.Timestamptz(6)
+  created_at            DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime            @default(now()) @db.Timestamptz(6)
+  events                events              @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                 users               @relation("certificate_pdf_export_jobs_requester_user_idTousers", fields: [requester_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([status, next_retry_at], map: "cert_pdf_export_jobs_status_retry_idx")
+  @@index([event_id, requester_user_id, created_at(sort: Desc)], map: "cert_pdf_export_jobs_event_requester_created_idx")
 }
 
 model review_queue_saved_views {

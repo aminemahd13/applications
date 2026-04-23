@@ -254,19 +254,52 @@ export default function CertificatePage() {
 
   const tokenValues = useMemo<Record<string, string>>(() => {
     if (!certificate) return {};
-    return {
+
+    const toClientAbsoluteUrl = (rawValue: string | null | undefined): string => {
+      const normalized = sanitizeClientFacingUrl(rawValue) ?? String(rawValue ?? "").trim();
+      if (!normalized) return "";
+      if (normalized.startsWith("/")) {
+        if (typeof window === "undefined" || !window.location?.origin) {
+          return normalized;
+        }
+        return `${window.location.origin}${normalized}`;
+      }
+      return normalized;
+    };
+
+    const verificationUrl = toClientAbsoluteUrl(certificate.verifiableCredentialUrl);
+    const certificateUrl = toClientAbsoluteUrl(certificate.certificateUrl);
+    const qrVerificationUrl = toClientAbsoluteUrl(
+      certificate.qrVerificationUrl ?? certificate.verifiableCredentialUrl ?? certificate.certificateUrl,
+    );
+
+    const tokens: Record<string, string> = {
       participantName: certificate.recipient.name,
       eventTitle: certificate.event.title,
       issuedDate: formatDate(certificate.issuedAt),
       issuedAt: certificate.issuedAt,
       certificateId: certificate.certificateId,
       credentialId: certificate.credentialId,
-      verificationUrl: certificate.verifiableCredentialUrl,
-      certificateUrl: certificate.certificateUrl,
-      qrVerificationUrl:
-        certificate.qrVerificationUrl ?? certificate.verifiableCredentialUrl ?? certificate.certificateUrl,
       ...payloadTokens,
     };
+
+    tokens.verificationUrl = verificationUrl || tokens.verificationUrl || "";
+    tokens.verifiableCredentialUrl =
+      verificationUrl || tokens.verifiableCredentialUrl || tokens.verificationUrl;
+    tokens.certificateUrl = certificateUrl || tokens.certificateUrl || "";
+    tokens.qrVerificationUrl =
+      qrVerificationUrl ||
+      tokens.qrVerificationUrl ||
+      tokens.verificationUrl ||
+      tokens.verifiableCredentialUrl ||
+      tokens.certificateUrl;
+
+    if (!tokens.qrVerificationUrl) {
+      tokens.qrVerificationUrl =
+        tokens.verificationUrl || tokens.verifiableCredentialUrl || tokens.certificateUrl || "";
+    }
+
+    return tokens;
   }, [certificate, payloadTokens]);
 
   useEffect(() => {
@@ -296,6 +329,13 @@ export default function CertificatePage() {
     return () => observer.disconnect();
   }, [isPrintMode, layout]);
 
+  const hasRenderableLayout = Boolean(layout && layout.elements.length > 0);
+  const verificationHref =
+    sanitizeClientFacingUrl(certificate?.verifiableCredentialUrl) ??
+    certificate?.verifiableCredentialUrl ??
+    "";
+  const pdfHref = sanitizeClientFacingUrl(certificate?.pdfUrl);
+
   if (isLoading) {
     return (
       <div className="mx-auto max-w-5xl space-y-4 p-4 sm:p-6">
@@ -317,12 +357,6 @@ export default function CertificatePage() {
       </div>
     );
   }
-
-  const hasRenderableLayout = Boolean(layout && layout.elements.length > 0);
-  const verificationHref =
-    sanitizeClientFacingUrl(certificate.verifiableCredentialUrl) ??
-    certificate.verifiableCredentialUrl;
-  const pdfHref = sanitizeClientFacingUrl(certificate.pdfUrl);
 
   return (
     <div className="min-h-screen bg-muted/15 print:bg-white">
@@ -574,7 +608,7 @@ export default function CertificatePage() {
                 rel="noreferrer"
                 className="mt-1 block break-all text-foreground underline"
               >
-                {certificate.verifiableCredentialUrl}
+                {tokenValues.verificationUrl || verificationHref}
               </a>
             </div>
 
@@ -597,8 +631,8 @@ export default function CertificatePage() {
                 <Award className="h-4 w-4" />
                 Credential ID {certificate.credentialId}
               </span>
-              {certificate.qrVerificationUrl ? (
-                <span className="break-all text-xs sm:text-sm">{certificate.qrVerificationUrl}</span>
+              {tokenValues.qrVerificationUrl ? (
+                <span className="break-all text-xs sm:text-sm">{tokenValues.qrVerificationUrl}</span>
               ) : null}
             </div>
           </CardContent>

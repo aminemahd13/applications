@@ -270,6 +270,15 @@ export type CertificateTemplateResponse = z.infer<
   typeof CertificateTemplateResponseSchema
 >;
 
+function dedupeNonEmptyStrings(values?: string[]): string[] | undefined {
+  if (!Array.isArray(values) || values.length === 0) return undefined;
+  return Array.from(
+    new Set(
+      values.map((value) => String(value ?? '').trim()).filter((value) => value.length > 0),
+    ),
+  );
+}
+
 export const IssueCertificateSchema = z.object({
   templateId: z.string().uuid(),
   templateVersionId: z.string().uuid().optional(),
@@ -292,12 +301,57 @@ export const IssueCertificatesBulkSchema = z.object({
 
 export type IssueCertificatesBulkDto = z.infer<typeof IssueCertificatesBulkSchema>;
 
+export const IssueCertificatesByTagsSchema = z
+  .object({
+    templateId: z.string().uuid(),
+    templateVersionId: z.string().uuid().optional(),
+    tags: z.array(z.string().trim().min(1).max(120)).min(1).max(50),
+    issuerName: z.string().trim().min(1).max(200).optional(),
+    reissueIfExists: z.boolean().optional().default(false),
+    payloadOverrides: z.record(z.string(), z.unknown()).optional().default({}),
+  })
+  .transform((value) => ({
+    ...value,
+    tags: dedupeNonEmptyStrings(value.tags) ?? [],
+  }));
+
+export type IssueCertificatesByTagsDto = z.infer<
+  typeof IssueCertificatesByTagsSchema
+>;
+
+export const ListCertificateIssuanceTagsQuerySchema = z.object({
+  search: z.string().trim().max(120).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+export type ListCertificateIssuanceTagsQueryDto = z.infer<
+  typeof ListCertificateIssuanceTagsQuerySchema
+>;
+
 export const RevokeIssuedCertificateSchema = z.object({
   reason: z.string().trim().max(500).optional(),
 });
 
 export type RevokeIssuedCertificateDto = z.infer<
   typeof RevokeIssuedCertificateSchema
+>;
+
+export const ReleaseIssuedCertificateSchema = z.object({});
+
+export type ReleaseIssuedCertificateDto = z.infer<
+  typeof ReleaseIssuedCertificateSchema
+>;
+
+export const ReleaseCertificatesBulkSchema = z
+  .object({
+    applicationIds: z.array(z.string().uuid()).min(1).max(1000),
+  })
+  .transform((value) => ({
+    applicationIds: dedupeNonEmptyStrings(value.applicationIds) ?? [],
+  }));
+
+export type ReleaseCertificatesBulkDto = z.infer<
+  typeof ReleaseCertificatesBulkSchema
 >;
 
 export const CertificateRenderJobStatusSchema = z.enum([
@@ -332,6 +386,9 @@ export const IssuedCertificateResponseSchema = z.object({
   status: IssuedCertificateStatusSchema,
   issuerName: z.string(),
   issuedAt: z.coerce.date(),
+  releasedAt: z.coerce.date().nullable(),
+  releasedBy: z.string().uuid().nullable(),
+  isReleased: z.boolean(),
   revokedAt: z.coerce.date().nullable(),
   certificateUrl: z.string().url(),
   verifiableCredentialUrl: z.string().url(),
@@ -385,6 +442,61 @@ export const ListCertificateRenderJobsQuerySchema = z.object({
 
 export type ListCertificateRenderJobsQueryDto = z.infer<
   typeof ListCertificateRenderJobsQuerySchema
+>;
+
+export const CertificatePdfExportJobStatusSchema = z.enum([
+  'PENDING',
+  'PROCESSING',
+  'DONE',
+  'FAILED',
+]);
+
+export type CertificatePdfExportJobStatus = z.infer<
+  typeof CertificatePdfExportJobStatusSchema
+>;
+
+export const CreateCertificatePdfExportJobSchema = z
+  .object({
+    issuedCertificateIds: z.array(z.string().uuid()).min(1).max(5000),
+  })
+  .transform((value) => ({
+    issuedCertificateIds: dedupeNonEmptyStrings(value.issuedCertificateIds) ?? [],
+  }));
+
+export type CreateCertificatePdfExportJobDto = z.infer<
+  typeof CreateCertificatePdfExportJobSchema
+>;
+
+export const CertificatePdfExportJobResponseSchema = z.object({
+  id: z.string().uuid(),
+  eventId: z.string().uuid(),
+  status: CertificatePdfExportJobStatusSchema,
+  issuedCertificateIdsCount: z.number().int().min(0),
+  attempts: z.number().int().min(0),
+  maxAttempts: z.number().int().min(1),
+  nextRetryAt: z.coerce.date(),
+  lockedAt: z.coerce.date().nullable(),
+  lockedBy: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  outputFilename: z.string().nullable(),
+  outputSizeBytes: z.coerce.number().int().min(0).nullable(),
+  completedAt: z.coerce.date().nullable(),
+  createdAt: z.coerce.date(),
+  updatedAt: z.coerce.date(),
+});
+
+export type CertificatePdfExportJobResponse = z.infer<
+  typeof CertificatePdfExportJobResponseSchema
+>;
+
+export const CertificatePdfExportJobDownloadUrlResponseSchema = z.object({
+  url: z.string().url(),
+  expiresAt: z.coerce.date(),
+  filename: z.string().trim().min(1),
+});
+
+export type CertificatePdfExportJobDownloadUrlResponse = z.infer<
+  typeof CertificatePdfExportJobDownloadUrlResponseSchema
 >;
 
 export const CertificateAssetKindSchema = z.enum([

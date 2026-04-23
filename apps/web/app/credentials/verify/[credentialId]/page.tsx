@@ -6,6 +6,7 @@ import { BadgeCheck, Calendar, ShieldAlert, ShieldCheck, XCircle } from "lucide-
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { apiClient } from "@/lib/api";
+import { sanitizeClientFacingUrl } from "@/lib/public-link-url";
 
 interface VerificationPayload {
   valid: boolean;
@@ -111,6 +112,8 @@ export default function VerifyCredentialPage() {
   }
 
   const isValid = payload.valid && payload.status === "VALID";
+  const certificateHref =
+    sanitizeClientFacingUrl(payload.certificateUrl) ?? payload.certificateUrl;
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
@@ -167,7 +170,7 @@ export default function VerifyCredentialPage() {
           </div>
 
           <a
-            href={payload.certificateUrl}
+            href={certificateHref}
             className="inline-flex items-center gap-1 text-sm font-medium underline"
             target="_blank"
             rel="noreferrer"

@@ -5,6 +5,7 @@ function createServiceHarness() {
   const prisma = {
     issued_certificates: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
     },
     file_objects: {
       findFirst: jest.fn(),
@@ -70,7 +71,16 @@ describe('CertificatesService public resolvers', () => {
     const storageKey = 'events/event-1/certificates/pdf/certificate-1.pdf';
 
     prisma.issued_certificates.findUnique.mockResolvedValue({
+      status: 'ISSUED',
+      revoked_at: null,
+      released_at: new Date('2026-04-23T10:00:00.000Z'),
       pdf_storage_key: storageKey,
+      applications: {
+        attendance_records: {
+          status: 'CHECKED_IN',
+          checked_in_at: new Date('2026-04-23T10:00:00.000Z'),
+        },
+      },
     });
     storageService.getPresignedGetUrl.mockResolvedValue(
       'https://storage.example.com/signed-pdf',
@@ -82,8 +92,17 @@ describe('CertificatesService public resolvers', () => {
       where: {
         certificate_id: 'certificate-1',
       },
-      select: {
-        pdf_storage_key: true,
+      include: {
+        applications: {
+          select: {
+            attendance_records: {
+              select: {
+                status: true,
+                checked_in_at: true,
+              },
+            },
+          },
+        },
       },
     });
     expect(storageService.getPresignedGetUrl).toHaveBeenCalledWith(
@@ -107,12 +126,69 @@ describe('CertificatesService public resolvers', () => {
     const { service, prisma } = createServiceHarness();
 
     prisma.issued_certificates.findUnique.mockResolvedValue({
+      status: 'ISSUED',
+      revoked_at: null,
+      released_at: new Date('2026-04-23T10:00:00.000Z'),
       pdf_storage_key: null,
+      applications: {
+        attendance_records: {
+          status: 'CHECKED_IN',
+          checked_in_at: new Date('2026-04-23T10:00:00.000Z'),
+        },
+      },
     });
 
     await expect(
       service.resolveCertificatePdfUrl('certificate-no-pdf'),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('throws 404 for unreleased participant certificate PDF', async () => {
+    const { service, prisma } = createServiceHarness();
+
+    prisma.issued_certificates.findUnique.mockResolvedValue({
+      status: 'ISSUED',
+      revoked_at: null,
+      released_at: null,
+      pdf_storage_key: 'events/event-1/certificates/pdf/certificate-2.pdf',
+      applications: {
+        attendance_records: {
+          status: 'CHECKED_IN',
+          checked_in_at: new Date('2026-04-23T10:00:00.000Z'),
+        },
+      },
+    });
+
+    await expect(
+      service.resolveCertificatePdfUrl('certificate-2'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('resolves staff PDF URL regardless of release state', async () => {
+    const { service, prisma, storageService } = createServiceHarness();
+    const storageKey = 'events/event-1/certificates/pdf/certificate-staff.pdf';
+    prisma.issued_certificates.findFirst = jest.fn().mockResolvedValue({
+      pdf_storage_key: storageKey,
+    });
+    storageService.getPresignedGetUrl.mockResolvedValue(
+      'https://storage.example.com/staff-pdf',
+    );
+
+    const result = await service.resolveIssuedCertificatePdfUrlForStaff(
+      'event-1',
+      'issued-1',
+    );
+
+    expect(prisma.issued_certificates.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'issued-1',
+        event_id: 'event-1',
+      },
+      select: {
+        pdf_storage_key: true,
+      },
+    });
+    expect(result).toBe('https://storage.example.com/staff-pdf');
   });
 
   it('returns a signed URL for committed certificate assets', async () => {

@@ -155,6 +155,9 @@ export interface IssuedCertificateSummary {
   status: "ISSUED" | "REVOKED";
   issuerName: string;
   issuedAt: string;
+  releasedAt: string | null;
+  releasedBy: string | null;
+  isReleased: boolean;
   revokedAt: string | null;
   certificateUrl: string;
   verifiableCredentialUrl: string;
@@ -199,6 +202,30 @@ export interface CertificateIssuanceCandidate {
   decisionStatus: string;
   attendanceStatus: string;
   checkedInAt: string | null;
+}
+
+export interface CertificatePdfExportJobSummary {
+  id: string;
+  eventId: string;
+  status: "PENDING" | "PROCESSING" | "DONE" | "FAILED";
+  issuedCertificateIdsCount: number;
+  attempts: number;
+  maxAttempts: number;
+  nextRetryAt: string;
+  lockedAt: string | null;
+  lockedBy: string | null;
+  errorMessage: string | null;
+  outputFilename: string | null;
+  outputSizeBytes: number | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CertificatePdfExportJobDownloadUrlResponse {
+  url: string;
+  expiresAt: string;
+  filename: string;
 }
 
 function unwrapData<T>(value: unknown): T {
@@ -589,6 +616,36 @@ export async function issueCertificatesBulk(
   return unwrapData(response);
 }
 
+export async function issueCertificatesByTags(
+  eventId: string,
+  input: {
+    templateId: string;
+    templateVersionId?: string;
+    tags: string[];
+    issuerName?: string;
+    reissueIfExists?: boolean;
+    payloadOverrides?: Record<string, unknown>;
+  },
+  csrfToken?: string,
+): Promise<{
+  requested: number;
+  issued: number;
+  alreadyIssued: number;
+  notFound: string[];
+  failed: Array<{ applicationId: string; reason: string }>;
+  certificates: IssuedCertificateSummary[];
+}> {
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/issue-by-tags`,
+    {
+      method: "POST",
+      body: input,
+      csrfToken,
+    },
+  );
+  return unwrapData(response);
+}
+
 export async function searchCertificateIssuanceCandidates(
   eventId: string,
   input: { search: string; limit?: number },
@@ -605,6 +662,20 @@ export async function searchCertificateIssuanceCandidates(
     `/events/${eventId}/certificates/issuance-candidates${suffix}`,
   );
   return unwrapData<CertificateIssuanceCandidate[]>(response) ?? [];
+}
+
+export async function listCertificateIssuanceTags(
+  eventId: string,
+  options?: { search?: string; limit?: number },
+): Promise<string[]> {
+  const query = new URLSearchParams();
+  if (options?.search) query.set("search", options.search.trim());
+  if (options?.limit) query.set("limit", String(options.limit));
+  const suffix = query.toString() ? `?${query}` : "";
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/issuance-tags${suffix}`,
+  );
+  return unwrapData<string[]>(response) ?? [];
 }
 
 export async function listIssuedCertificates(
@@ -647,6 +718,45 @@ export async function revokeIssuedCertificate(
   return unwrapData<IssuedCertificateSummary>(response);
 }
 
+export async function releaseIssuedCertificate(
+  eventId: string,
+  issuedCertificateId: string,
+  csrfToken?: string,
+): Promise<IssuedCertificateSummary> {
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/${issuedCertificateId}/release`,
+    {
+      method: "POST",
+      body: {},
+      csrfToken,
+    },
+  );
+  return unwrapData<IssuedCertificateSummary>(response);
+}
+
+export async function releaseCertificatesBulk(
+  eventId: string,
+  input: { applicationIds: string[] },
+  csrfToken?: string,
+): Promise<{
+  requested: number;
+  considered: number;
+  released: number;
+  alreadyReleased: number;
+  skippedNotCheckedIn: number;
+  skippedRevoked: number;
+}> {
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/release-bulk`,
+    {
+      method: "POST",
+      body: input,
+      csrfToken,
+    },
+  );
+  return unwrapData(response);
+}
+
 export async function listCertificateRenderJobs(
   eventId: string,
   options?: { status?: "PENDING" | "PROCESSING" | "DONE" | "FAILED"; limit?: number },
@@ -674,6 +784,71 @@ export async function retryCertificateRenderJob(
     },
   );
   return unwrapData<CertificateRenderJobSummary>(response);
+}
+
+export async function createCertificatePdfExportJob(
+  eventId: string,
+  input: { issuedCertificateIds: string[] },
+  csrfToken?: string,
+): Promise<CertificatePdfExportJobSummary> {
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/pdf-export-jobs`,
+    {
+      method: "POST",
+      body: input,
+      csrfToken,
+    },
+  );
+  return unwrapData<CertificatePdfExportJobSummary>(response);
+}
+
+export async function getCertificatePdfExportJob(
+  eventId: string,
+  jobId: string,
+): Promise<CertificatePdfExportJobSummary> {
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/pdf-export-jobs/${jobId}`,
+  );
+  return unwrapData<CertificatePdfExportJobSummary>(response);
+}
+
+export async function getCertificatePdfExportJobDownloadUrl(
+  eventId: string,
+  jobId: string,
+): Promise<CertificatePdfExportJobDownloadUrlResponse> {
+  const response = await apiClient<unknown>(
+    `/events/${eventId}/certificates/pdf-export-jobs/${jobId}/download-url`,
+  );
+  return unwrapData<CertificatePdfExportJobDownloadUrlResponse>(response);
+}
+
+export async function pollCertificatePdfExportJobUntilTerminal(params: {
+  eventId: string;
+  jobId: string;
+  intervalMs?: number;
+  timeoutMs?: number;
+  onTick?: (job: CertificatePdfExportJobSummary) => void;
+}): Promise<CertificatePdfExportJobSummary> {
+  const intervalMs = Math.max(params.intervalMs ?? 2000, 0);
+  const timeoutMs = Math.max(params.timeoutMs ?? 15 * 60 * 1000, 1);
+  const startedAt = Date.now();
+
+  while (true) {
+    const job = await getCertificatePdfExportJob(params.eventId, params.jobId);
+    params.onTick?.(job);
+    const status = String(job.status ?? "").toUpperCase();
+    if (status === "DONE" || status === "FAILED") {
+      return job;
+    }
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error("Certificate PDF export timed out");
+    }
+    if (intervalMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    } else {
+      await Promise.resolve();
+    }
+  }
 }
 
 export async function listCertificateAssets(

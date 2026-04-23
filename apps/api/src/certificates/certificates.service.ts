@@ -10,17 +10,21 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
 import { StorageService } from '../common/storage/storage.service';
 import {
+  CreateCertificatePdfExportJobDto,
   CreateCertificateTemplateDto,
   CreateCertificateTemplateVersionDto,
   DuplicateCertificateTemplateDto,
   FileSensitivity,
   IssueCertificateDto,
+  IssueCertificatesByTagsDto,
   IssueCertificatesBulkDto,
+  ListCertificateIssuanceTagsQueryDto,
   ListCertificateRenderJobsQueryDto,
   ListCertificateTemplatesQueryDto,
   ListIssuedCertificatesQueryDto,
   PublishCertificateTemplateDto,
   RegisterCertificateAssetUploadDto,
+  ReleaseCertificatesBulkDto,
   RevokeIssuedCertificateDto,
   UpdateCertificateTemplateDraftDto,
   UpdateCertificateTemplateDto,
@@ -30,9 +34,13 @@ import * as crypto from 'crypto';
 import * as jwt from 'jsonwebtoken';
 import { createHmac } from 'node:crypto';
 import { joinAppUrl, resolveAppBaseUrl } from '../common/utils/export-csv.util';
+import JSZip from 'jszip';
 
 const CERTIFICATE_ASSET_PREFIX = /^events\/[^/]+\/certificates\/assets\/.+/;
 const CERTIFICATE_PDF_PREFIX = /^events\/[^/]+\/certificates\/pdf\/.+/;
+const CERTIFICATE_PDF_EXPORT_PREFIX =
+  /^events\/[^/]+\/certificates\/exports\/.+/;
+const CERTIFICATE_PDF_EXPORT_PRESIGNED_DOWNLOAD_TTL_SECONDS = 600;
 
 interface QrSigningConfig {
   activeKid: string;
@@ -262,6 +270,44 @@ export class CertificatesService {
       this.getAppBaseUrl(),
       `/credentials/certificate/${certificateId}/pdf`,
     );
+  }
+
+  private getStaffIssuedCertificatePdfUrl(
+    eventId: string,
+    issuedCertificateId: string,
+  ): string {
+    return joinAppUrl(
+      this.getAppBaseUrl(),
+      `/api/v1/events/${eventId}/certificates/${issuedCertificateId}/pdf`,
+    );
+  }
+
+  private isCheckedInAttendance(attendance: {
+    status?: string | null;
+    checked_in_at?: Date | null;
+  } | null | undefined): boolean {
+    return (
+      String(attendance?.status ?? '').toUpperCase() === 'CHECKED_IN' &&
+      Boolean(attendance?.checked_in_at)
+    );
+  }
+
+  private isParticipantVisibleIssuedCertificateRecord(record: {
+    status?: string | null;
+    revoked_at?: Date | null;
+    released_at?: Date | null;
+    applications?: {
+      attendance_records?: {
+        status?: string | null;
+        checked_in_at?: Date | null;
+      } | null;
+    } | null;
+  }): boolean {
+    const activeStatus = String(record.status ?? '').toUpperCase();
+    const isIssued = !record.revoked_at && activeStatus !== 'REVOKED';
+    if (!isIssued) return false;
+    if (!record.released_at) return false;
+    return this.isCheckedInAttendance(record.applications?.attendance_records);
   }
 
   private buildIssuedCertificateSignature(input: {
@@ -531,7 +577,7 @@ export class CertificatesService {
     const links = this.getCredentialLinks(row.certificate_id, row.credential_id);
     const qrVerificationUrl = this.getQrVerificationUrl(row.qr_token);
     const pdfUrl = row.pdf_storage_key
-      ? this.getCertificatePdfUrl(row.certificate_id)
+      ? this.getStaffIssuedCertificatePdfUrl(row.event_id, row.id)
       : null;
 
     const templateSnapshot = this.toRecord(row.template_snapshot);
@@ -563,6 +609,9 @@ export class CertificatesService {
           : 'ISSUED',
       issuerName: row.issuer_name,
       issuedAt: row.issued_at,
+      releasedAt: row.released_at ?? null,
+      releasedBy: row.released_by ?? null,
+      isReleased: Boolean(row.released_at),
       revokedAt: row.revoked_at ?? null,
       certificateUrl: links.certificateUrl,
       verifiableCredentialUrl: links.verifiableCredentialUrl,
@@ -1064,18 +1113,6 @@ export class CertificatesService {
       this.getEventForIssuance(eventId),
     ]);
 
-    if (template.type_key === 'participation') {
-      const status = String(application.attendance_records?.status ?? '').toUpperCase();
-      if (
-        status !== 'CHECKED_IN' ||
-        !application.attendance_records?.checked_in_at
-      ) {
-        throw new BadRequestException(
-          'Participation certificates require checked-in attendance',
-        );
-      }
-    }
-
     const existingActive = await (this.prisma as any).issued_certificates.findFirst({
       where: {
         application_id: application.id,
@@ -1176,6 +1213,8 @@ export class CertificatesService {
           issuer_name: issuerName,
           status: 'ISSUED',
           issued_at: issuedAt,
+          released_at: null,
+          released_by: null,
           template_snapshot: templateSnapshot,
           payload_snapshot: payloadSnapshot,
           render_status: 'PENDING',
@@ -1280,6 +1319,217 @@ export class CertificatesService {
               : 'Failed to issue certificate',
         });
       }
+    }
+
+    return summary;
+  }
+
+  async issueCertificatesByTags(eventId: string, dto: IssueCertificatesByTagsDto) {
+    const tags = Array.from(
+      new Set(
+        (dto.tags ?? [])
+          .map((tag) => String(tag ?? '').trim())
+          .filter((tag) => tag.length > 0),
+      ),
+    );
+
+    if (tags.length === 0) {
+      throw new BadRequestException('At least one tag is required');
+    }
+
+    const applications = await (this.prisma as any).applications.findMany({
+      where: {
+        event_id: eventId,
+        tags: { hasEvery: tags },
+      },
+      select: {
+        id: true,
+      },
+      orderBy: [{ updated_at: 'desc' }, { id: 'desc' }],
+      take: 5000,
+    });
+
+    const applicationIds = applications.map((application: { id: string }) => application.id);
+    if (applicationIds.length === 0) {
+      return {
+        requested: 0,
+        issued: 0,
+        alreadyIssued: 0,
+        notFound: [] as string[],
+        failed: [] as Array<{ applicationId: string; reason: string }>,
+        certificates: [] as any[],
+      };
+    }
+
+    return this.issueCertificatesBulk(eventId, {
+      templateId: dto.templateId,
+      templateVersionId: dto.templateVersionId,
+      applicationIds,
+      issuerName: dto.issuerName,
+      reissueIfExists: dto.reissueIfExists,
+      payloadOverrides: dto.payloadOverrides ?? {},
+    });
+  }
+
+  async listIssuanceTags(
+    eventId: string,
+    query: ListCertificateIssuanceTagsQueryDto,
+  ): Promise<string[]> {
+    const search = String(query.search ?? '').trim();
+    const limit = Math.min(Math.max(Number(query.limit ?? 50), 1), 200);
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ tag: string }>>(
+      `
+      SELECT DISTINCT tag
+      FROM (
+        SELECT TRIM(unnest(tags)) AS tag
+        FROM "applications"
+        WHERE "event_id" = $1
+      ) AS extracted
+      WHERE tag <> ''
+        AND ($2 = '' OR tag ILIKE '%' || $2 || '%')
+      ORDER BY tag ASC
+      LIMIT $3
+      `,
+      eventId,
+      search,
+      limit,
+    );
+
+    return rows
+      .map((row) => String(row.tag ?? '').trim())
+      .filter((tag) => tag.length > 0);
+  }
+
+  async releaseIssuedCertificate(eventId: string, issuedCertificateId: string) {
+    const actorId = this.getActorId();
+    const record = await (this.prisma as any).issued_certificates.findFirst({
+      where: {
+        id: issuedCertificateId,
+        event_id: eventId,
+      },
+      include: {
+        applications: {
+          select: {
+            attendance_records: {
+              select: {
+                status: true,
+                checked_in_at: true,
+              },
+            },
+          },
+        },
+        certificate_templates: {
+          select: { name: true },
+        },
+        certificate_template_versions: {
+          select: { version_number: true },
+        },
+      },
+    });
+
+    if (!record) {
+      throw new NotFoundException('Issued certificate not found');
+    }
+
+    if (!this.isCheckedInAttendance(record.applications?.attendance_records)) {
+      throw new BadRequestException(
+        'Certificates can only be released after attendee check-in',
+      );
+    }
+
+    if (record.released_at) {
+      return this.mapIssuedCertificateRow(record);
+    }
+
+    const now = new Date();
+    const updated = await (this.prisma as any).issued_certificates.update({
+      where: { id: record.id },
+      data: {
+        released_at: now,
+        released_by: actorId,
+        updated_at: now,
+      },
+      include: {
+        certificate_templates: {
+          select: { name: true },
+        },
+        certificate_template_versions: {
+          select: { version_number: true },
+        },
+      },
+    });
+
+    return this.mapIssuedCertificateRow(updated);
+  }
+
+  async releaseCertificatesBulk(eventId: string, dto: ReleaseCertificatesBulkDto) {
+    const applicationIds = Array.from(new Set(dto.applicationIds ?? []));
+    const summary = {
+      requested: applicationIds.length,
+      considered: 0,
+      released: 0,
+      alreadyReleased: 0,
+      skippedNotCheckedIn: 0,
+      skippedRevoked: 0,
+    };
+
+    if (applicationIds.length === 0) {
+      return summary;
+    }
+
+    const actorId = this.getActorId();
+    const now = new Date();
+    const rows = await (this.prisma as any).issued_certificates.findMany({
+      where: {
+        event_id: eventId,
+        application_id: { in: applicationIds },
+      },
+      include: {
+        applications: {
+          select: {
+            attendance_records: {
+              select: {
+                status: true,
+                checked_in_at: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: [{ issued_at: 'desc' }, { id: 'desc' }],
+    });
+
+    const toReleaseIds: string[] = [];
+    for (const row of rows) {
+      summary.considered += 1;
+      if (row.revoked_at || String(row.status ?? '').toUpperCase() === 'REVOKED') {
+        summary.skippedRevoked += 1;
+        continue;
+      }
+      if (row.released_at) {
+        summary.alreadyReleased += 1;
+        continue;
+      }
+      if (!this.isCheckedInAttendance(row.applications?.attendance_records)) {
+        summary.skippedNotCheckedIn += 1;
+        continue;
+      }
+      toReleaseIds.push(row.id);
+    }
+
+    if (toReleaseIds.length > 0) {
+      const updated = await (this.prisma as any).issued_certificates.updateMany({
+        where: {
+          id: { in: toReleaseIds },
+          released_at: null,
+        },
+        data: {
+          released_at: now,
+          released_by: actorId,
+          updated_at: now,
+        },
+      });
+      summary.released = Number(updated.count ?? 0);
     }
 
     return summary;
@@ -1428,6 +1678,355 @@ export class CertificatesService {
       id: updated.id,
       status: String(updated.status).toUpperCase(),
       nextRetryAt: updated.next_retry_at,
+    };
+  }
+
+  private parseCertificatePdfExportJobIssuedCertificateId(
+    value: unknown,
+  ): string | null {
+    const normalized = String(value ?? '').trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private parseCertificatePdfExportIssuedCertificateIds(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return Array.from(
+      new Set(
+        value
+          .map((item) => this.parseCertificatePdfExportJobIssuedCertificateId(item))
+          .filter((item): item is string => Boolean(item)),
+      ),
+    );
+  }
+
+  private mapCertificatePdfExportJobRow(row: any) {
+    const issuedCertificateIds = this.parseCertificatePdfExportIssuedCertificateIds(
+      row.issued_certificate_ids,
+    );
+    return {
+      id: row.id,
+      eventId: row.event_id,
+      status: String(row.status ?? 'PENDING').toUpperCase(),
+      issuedCertificateIdsCount: issuedCertificateIds.length,
+      attempts: Number(row.attempts ?? 0),
+      maxAttempts: Number(row.max_attempts ?? 120),
+      nextRetryAt: row.next_retry_at,
+      lockedAt: row.locked_at ?? null,
+      lockedBy: row.locked_by ?? null,
+      errorMessage: row.error_message ?? null,
+      outputFilename: row.output_filename ?? null,
+      outputSizeBytes:
+        row.output_size_bytes == null ? null : Number(row.output_size_bytes),
+      completedAt: row.completed_at ?? null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private async getCertificatePdfExportJobForRequester(
+    eventId: string,
+    jobId: string,
+  ) {
+    const actorId = this.getActorId();
+    const row = await (this.prisma as any).certificate_pdf_export_jobs.findFirst({
+      where: {
+        id: jobId,
+        event_id: eventId,
+        requester_user_id: actorId,
+      },
+    });
+    if (!row) {
+      throw new NotFoundException('Certificate PDF export job not found');
+    }
+    return row;
+  }
+
+  async createCertificatePdfExportJob(
+    eventId: string,
+    dto: CreateCertificatePdfExportJobDto,
+  ) {
+    const actorId = this.getActorId();
+    const issuedCertificateIds = Array.from(
+      new Set(
+        (dto.issuedCertificateIds ?? [])
+          .map((value) => this.parseCertificatePdfExportJobIssuedCertificateId(value))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    if (issuedCertificateIds.length === 0) {
+      throw new BadRequestException('At least one issued certificate is required');
+    }
+
+    const matches = await (this.prisma as any).issued_certificates.findMany({
+      where: {
+        event_id: eventId,
+        id: { in: issuedCertificateIds },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    const matchIds = new Set(
+      matches.map((row: { id: string }) => String(row.id)),
+    );
+    const missing = issuedCertificateIds.filter((id) => !matchIds.has(id));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Some issued certificates are not part of this event: ${missing.slice(0, 5).join(', ')}`,
+      );
+    }
+
+    const maxAttempts = Math.max(
+      Number(process.env.CERTIFICATE_PDF_EXPORT_MAX_ATTEMPTS ?? 240),
+      1,
+    );
+    const row = await (this.prisma as any).certificate_pdf_export_jobs.create({
+      data: {
+        id: crypto.randomUUID(),
+        event_id: eventId,
+        requester_user_id: actorId,
+        issued_certificate_ids: issuedCertificateIds,
+        status: 'PENDING',
+        attempts: 0,
+        max_attempts: maxAttempts,
+        next_retry_at: new Date(),
+        created_at: new Date(),
+        updated_at: new Date(),
+      },
+    });
+
+    return this.mapCertificatePdfExportJobRow(row);
+  }
+
+  async getCertificatePdfExportJob(eventId: string, jobId: string) {
+    const row = await this.getCertificatePdfExportJobForRequester(eventId, jobId);
+    return this.mapCertificatePdfExportJobRow(row);
+  }
+
+  async getCertificatePdfExportJobDownloadUrl(eventId: string, jobId: string) {
+    const row = await this.getCertificatePdfExportJobForRequester(eventId, jobId);
+    if (
+      String(row.status ?? '').toUpperCase() !== 'DONE' ||
+      !row.output_storage_key ||
+      !row.output_filename
+    ) {
+      throw new BadRequestException('Export job is not ready for download');
+    }
+
+    const safeFilename = encodeURIComponent(String(row.output_filename).trim());
+    const contentDisposition = `attachment; filename*=UTF-8''${safeFilename}`;
+    const url = await this.storageService.getPresignedGetUrlWithDisposition(
+      row.output_storage_key,
+      contentDisposition,
+      CERTIFICATE_PDF_EXPORT_PRESIGNED_DOWNLOAD_TTL_SECONDS,
+    );
+
+    return {
+      url,
+      expiresAt: new Date(
+        Date.now() + CERTIFICATE_PDF_EXPORT_PRESIGNED_DOWNLOAD_TTL_SECONDS * 1000,
+      ),
+      filename: row.output_filename,
+    };
+  }
+
+  private buildCertificatePdfExportStorageKey(eventId: string, jobId: string): string {
+    return `events/${eventId}/certificates/exports/${jobId}.zip`;
+  }
+
+  private buildCertificatePdfExportFilename(eventId: string, jobId: string): string {
+    const safeEventId = String(eventId ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    return `${safeEventId || 'event'}__certificates__${jobId}.zip`;
+  }
+
+  async processCertificatePdfExportJobsBatch(workerId: string, batchSize: number) {
+    const claimed = await this.prisma.$queryRawUnsafe<any[]>(
+      `
+      WITH candidates AS (
+        SELECT id
+        FROM "certificate_pdf_export_jobs"
+        WHERE "status" = 'PENDING'
+          AND "next_retry_at" <= NOW()
+          AND "attempts" < "max_attempts"
+        ORDER BY "created_at" ASC
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "certificate_pdf_export_jobs" AS jobs
+      SET "status" = 'PROCESSING',
+          "attempts" = jobs."attempts" + 1,
+          "locked_at" = NOW(),
+          "locked_by" = $2,
+          "updated_at" = NOW()
+      FROM candidates
+      WHERE jobs.id = candidates.id
+      RETURNING jobs.*
+      `,
+      Math.max(batchSize, 1),
+      workerId,
+    );
+
+    if (!claimed.length) {
+      return { claimed: 0, completed: 0, failed: 0 };
+    }
+
+    let completed = 0;
+    let failed = 0;
+
+    for (const job of claimed) {
+      try {
+        const issuedCertificateIds = this.parseCertificatePdfExportIssuedCertificateIds(
+          job.issued_certificate_ids,
+        );
+        if (issuedCertificateIds.length === 0) {
+          throw new BadRequestException(
+            'Export job has no issued certificates to process',
+          );
+        }
+
+        const issued = await (this.prisma as any).issued_certificates.findMany({
+          where: {
+            event_id: job.event_id,
+            id: { in: issuedCertificateIds },
+          },
+          select: {
+            id: true,
+            certificate_id: true,
+            pdf_storage_key: true,
+            render_status: true,
+            render_error: true,
+          },
+          orderBy: [{ issued_at: 'desc' }, { id: 'desc' }],
+        });
+
+        if (issued.length !== issuedCertificateIds.length) {
+          throw new NotFoundException('Some issued certificates were not found');
+        }
+
+        const firstFailed = issued.find(
+          (row: any) => String(row.render_status ?? 'PENDING').toUpperCase() === 'FAILED',
+        );
+        if (firstFailed) {
+          throw new BadRequestException(
+            firstFailed.render_error
+              ? `PDF render failed: ${firstFailed.render_error}`
+              : 'PDF render failed',
+          );
+        }
+
+        const notReady = issued.some((row: any) => {
+          const storageKey = String(row.pdf_storage_key ?? '')
+            .trim()
+            .replace(/^\/+/, '');
+          const renderStatus = String(row.render_status ?? 'PENDING').toUpperCase();
+          return !storageKey || !CERTIFICATE_PDF_PREFIX.test(storageKey) || renderStatus !== 'DONE';
+        });
+        if (notReady) {
+          const retryDelaySeconds = 5;
+          const nextRetryAt = new Date(Date.now() + retryDelaySeconds * 1000);
+          await (this.prisma as any).certificate_pdf_export_jobs.update({
+            where: { id: job.id },
+            data: {
+              status: 'PENDING',
+              next_retry_at: nextRetryAt,
+              locked_at: null,
+              locked_by: null,
+              error_message: null,
+              updated_at: new Date(),
+              completed_at: null,
+            },
+          });
+          continue;
+        }
+
+        const zip = new JSZip();
+        for (const row of issued) {
+          const pdfStorageKey = String(row.pdf_storage_key ?? '')
+            .trim()
+            .replace(/^\/+/, '');
+          const pdfBuffer = await this.storageService.getObjectBuffer(pdfStorageKey);
+          const safeCertificateId = String(row.certificate_id ?? 'certificate')
+            .trim()
+            .replace(/[^a-zA-Z0-9._-]+/g, '-')
+            .replace(/-+/g, '-')
+            .replace(/^-|-$/g, '');
+          zip.file(`${safeCertificateId || 'certificate'}.pdf`, pdfBuffer);
+        }
+        const zipBuffer = await zip.generateAsync({
+          type: 'nodebuffer',
+          compression: 'DEFLATE',
+          compressionOptions: { level: 6 },
+        });
+
+        const outputStorageKey = this.buildCertificatePdfExportStorageKey(
+          job.event_id,
+          job.id,
+        );
+        const outputFilename = this.buildCertificatePdfExportFilename(
+          job.event_id,
+          job.id,
+        );
+        await this.storageService.putObjectBuffer(
+          outputStorageKey,
+          zipBuffer,
+          'application/zip',
+        );
+
+        await (this.prisma as any).certificate_pdf_export_jobs.update({
+          where: { id: job.id },
+          data: {
+            status: 'DONE',
+            output_storage_key: outputStorageKey,
+            output_filename: outputFilename,
+            output_size_bytes: BigInt(zipBuffer.byteLength),
+            completed_at: new Date(),
+            error_message: null,
+            locked_at: null,
+            locked_by: null,
+            updated_at: new Date(),
+          },
+        });
+        completed += 1;
+      } catch (error) {
+        failed += 1;
+        const attempts = Number(job.attempts ?? 0);
+        const maxAttempts = Number(job.max_attempts ?? 120);
+        const errorMessage =
+          error instanceof Error
+            ? error.message.slice(0, 500)
+            : 'Certificate PDF export failed';
+        const unrecoverable =
+          errorMessage.toLowerCase().includes('render failed') ||
+          errorMessage.toLowerCase().includes('not found');
+        const isExhausted = unrecoverable || attempts >= maxAttempts;
+        const retryDelaySeconds = Math.min(2 ** Math.max(attempts, 1) * 5, 60);
+        const nextRetryAt = new Date(Date.now() + retryDelaySeconds * 1000);
+
+        await (this.prisma as any).certificate_pdf_export_jobs.update({
+          where: { id: job.id },
+          data: {
+            status: isExhausted ? 'FAILED' : 'PENDING',
+            error_message: errorMessage,
+            next_retry_at: isExhausted ? job.next_retry_at : nextRetryAt,
+            locked_at: null,
+            locked_by: null,
+            updated_at: new Date(),
+            completed_at: isExhausted ? new Date() : null,
+          },
+        });
+      }
+    }
+
+    return {
+      claimed: claimed.length,
+      completed,
+      failed,
     };
   }
 
@@ -1985,6 +2584,7 @@ export class CertificatesService {
             id: true,
             attendance_records: {
               select: {
+                status: true,
                 checked_in_at: true,
               },
             },
@@ -2005,10 +2605,18 @@ export class CertificatesService {
     });
 
     if (!record) return null;
+    if (!this.isParticipantVisibleIssuedCertificateRecord(record)) return null;
 
     const links = this.getCredentialLinks(record.certificate_id, record.credential_id);
     const qrVerificationUrl = this.getQrVerificationUrl(record.qr_token);
     const payload = this.toRecord(record.payload_snapshot);
+    const payloadWithCanonicalLinks = {
+      ...payload,
+      verificationUrl: links.verifiableCredentialUrl,
+      verifiableCredentialUrl: links.verifiableCredentialUrl,
+      certificateUrl: links.certificateUrl,
+      qrVerificationUrl,
+    };
     const templateSnapshot = this.toRecord(record.template_snapshot);
     const layout = templateSnapshot.layout ?? null;
     const participantName =
@@ -2061,7 +2669,7 @@ export class CertificatesService {
         algorithm: 'HMAC-SHA256',
         signature: record.credential_signature,
       },
-      payload,
+      payload: payloadWithCanonicalLinks,
       layout,
       template: {
         text: {
@@ -2103,6 +2711,7 @@ export class CertificatesService {
             id: true,
             attendance_records: {
               select: {
+                status: true,
                 checked_in_at: true,
               },
             },
@@ -2123,6 +2732,7 @@ export class CertificatesService {
     });
 
     if (!record) return null;
+    if (!this.isParticipantVisibleIssuedCertificateRecord(record)) return null;
 
     const payload = this.toRecord(record.payload_snapshot);
     const participantName =
@@ -2217,24 +2827,128 @@ export class CertificatesService {
     ).verifiableCredentialUrl;
   }
 
+  private normalizeCertificatePdfStorageKey(rawValue: unknown): string {
+    const storageKey = String(rawValue ?? '')
+      .trim()
+      .replace(/^\/+/, '');
+    if (!storageKey || !CERTIFICATE_PDF_PREFIX.test(storageKey)) {
+      throw new NotFoundException('Certificate PDF not found');
+    }
+    return storageKey;
+  }
+
   async resolveCertificatePdfUrl(certificateId: string): Promise<string> {
     const record = await (this.prisma as any).issued_certificates.findUnique({
       where: {
         certificate_id: certificateId,
+      },
+      include: {
+        applications: {
+          select: {
+            attendance_records: {
+              select: {
+                status: true,
+                checked_in_at: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!record || !this.isParticipantVisibleIssuedCertificateRecord(record)) {
+      throw new NotFoundException('Certificate PDF not found');
+    }
+
+    const storageKey = this.normalizeCertificatePdfStorageKey(
+      record.pdf_storage_key,
+    );
+
+    return this.storageService.getPresignedGetUrl(storageKey, 3600);
+  }
+
+  async getCertificatePdfFile(certificateId: string): Promise<{
+    buffer: Buffer;
+    fileName: string;
+  }> {
+    const record = await (this.prisma as any).issued_certificates.findUnique({
+      where: {
+        certificate_id: certificateId,
+      },
+      include: {
+        applications: {
+          select: {
+            attendance_records: {
+              select: {
+                status: true,
+                checked_in_at: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!record || !this.isParticipantVisibleIssuedCertificateRecord(record)) {
+      throw new NotFoundException('Certificate PDF not found');
+    }
+
+    const storageKey = this.normalizeCertificatePdfStorageKey(
+      record.pdf_storage_key,
+    );
+    const buffer = await this.storageService.getObjectBuffer(storageKey);
+    return {
+      buffer,
+      fileName: `${record.certificate_id}.pdf`,
+    };
+  }
+
+  async resolveIssuedCertificatePdfUrlForStaff(
+    eventId: string,
+    issuedCertificateId: string,
+  ): Promise<string> {
+    const record = await (this.prisma as any).issued_certificates.findFirst({
+      where: {
+        id: issuedCertificateId,
+        event_id: eventId,
       },
       select: {
         pdf_storage_key: true,
       },
     });
 
-    const storageKey = String(record?.pdf_storage_key ?? '')
-      .trim()
-      .replace(/^\/+/, '');
-    if (!storageKey || !CERTIFICATE_PDF_PREFIX.test(storageKey)) {
+    const storageKey = this.normalizeCertificatePdfStorageKey(
+      record?.pdf_storage_key,
+    );
+
+    return this.storageService.getPresignedGetUrl(storageKey, 3600);
+  }
+
+  async getIssuedCertificatePdfFileForStaff(
+    eventId: string,
+    issuedCertificateId: string,
+  ): Promise<{ buffer: Buffer; fileName: string }> {
+    const record = await (this.prisma as any).issued_certificates.findFirst({
+      where: {
+        id: issuedCertificateId,
+        event_id: eventId,
+      },
+      select: {
+        certificate_id: true,
+        pdf_storage_key: true,
+      },
+    });
+
+    if (!record) {
       throw new NotFoundException('Certificate PDF not found');
     }
 
-    return this.storageService.getPresignedGetUrl(storageKey, 3600);
+    const storageKey = this.normalizeCertificatePdfStorageKey(
+      record.pdf_storage_key,
+    );
+    const buffer = await this.storageService.getObjectBuffer(storageKey);
+    return {
+      buffer,
+      fileName: `${record.certificate_id}.pdf`,
+    };
   }
 
   async resolveCertificateAssetUrl(rawStorageKey?: string): Promise<string> {

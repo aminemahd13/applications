@@ -3,6 +3,7 @@ import {
   Archive,
   Ban,
   Copy,
+  Download,
   ExternalLink,
   FileText,
   Loader2,
@@ -86,17 +87,31 @@ interface LeftRailProps {
   issuanceCandidates: CertificateIssuanceCandidate[];
   issuanceSearchAttempted: boolean;
   isSearchingIssuanceCandidates: boolean;
+  issuanceTagSearchInput: string;
+  onIssuanceTagSearchInputChange: (value: string) => void;
+  onRefreshIssuanceTags: () => void;
+  issuanceTags: string[];
+  issuanceSelectedTags: string[];
+  onToggleIssuanceTag: (tag: string) => void;
+  onIssueCertificatesByTags: () => void;
   issuanceIssuerName: string;
   onIssuanceIssuerNameChange: (value: string) => void;
   issuanceReissueIfExists: boolean;
   onIssuanceReissueIfExistsChange: (value: boolean) => void;
+  issuanceDownloadAfterIssue: boolean;
+  onIssuanceDownloadAfterIssueChange: (value: boolean) => void;
   onIssueCertificates: () => void;
   onIssueCandidate: (applicationId: string) => void;
   isIssuing: boolean;
+  isLoadingIssuanceTags: boolean;
+  isDownloadingIssuanceZip: boolean;
   issuedCertificates: IssuedCertificateSummary[];
   renderJobs: CertificateRenderJobSummary[];
   onRequestRevokeIssuedCertificate: (certificate: IssuedCertificateSummary) => void;
+  onReleaseIssuedCertificate: (certificate: IssuedCertificateSummary) => void;
   revokingIssuedCertificateId: string | null;
+  releasingIssuedCertificateId: string | null;
+  onDownloadIssuedCertificates: (issuedCertificateIds: string[]) => void;
   onRetryRenderJob: (jobId: string) => void;
   onRefreshIssuance: () => void;
   isRefreshingIssuance: boolean;
@@ -153,17 +168,31 @@ export function LeftRail(props: LeftRailProps) {
     issuanceCandidates,
     issuanceSearchAttempted,
     isSearchingIssuanceCandidates,
+    issuanceTagSearchInput,
+    onIssuanceTagSearchInputChange,
+    onRefreshIssuanceTags,
+    issuanceTags,
+    issuanceSelectedTags,
+    onToggleIssuanceTag,
+    onIssueCertificatesByTags,
     issuanceIssuerName,
     onIssuanceIssuerNameChange,
     issuanceReissueIfExists,
     onIssuanceReissueIfExistsChange,
+    issuanceDownloadAfterIssue,
+    onIssuanceDownloadAfterIssueChange,
     onIssueCertificates,
     onIssueCandidate,
     isIssuing,
+    isLoadingIssuanceTags,
+    isDownloadingIssuanceZip,
     issuedCertificates,
     renderJobs,
     onRequestRevokeIssuedCertificate,
+    onReleaseIssuedCertificate,
     revokingIssuedCertificateId,
+    releasingIssuedCertificateId,
+    onDownloadIssuedCertificates,
     onRetryRenderJob,
     onRefreshIssuance,
     isRefreshingIssuance,
@@ -574,6 +603,20 @@ export function LeftRail(props: LeftRailProps) {
                     />
                   </div>
 
+                  <div className="flex items-center justify-between rounded-md border p-2">
+                    <div className="space-y-0.5">
+                      <Label className="text-xs">Download ZIP After Issue</Label>
+                      <p className="text-[11px] text-muted-foreground">
+                        Wait for PDF rendering, then download one ZIP.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={issuanceDownloadAfterIssue}
+                      onCheckedChange={onIssuanceDownloadAfterIssueChange}
+                      disabled={!canManage || isIssuing || isDownloadingIssuanceZip}
+                    />
+                  </div>
+
                   <div className="space-y-2 rounded-md border p-2">
                     <Label className="text-xs">Search by name or email</Label>
                     <div className="grid grid-cols-[1fr_auto] gap-2">
@@ -643,6 +686,75 @@ export function LeftRail(props: LeftRailProps) {
                     )}
                   </div>
 
+                  <div className="space-y-2 rounded-md border p-2">
+                    <Label className="text-xs">Issue by tags (match all)</Label>
+                    <div className="grid grid-cols-[1fr_auto] gap-2">
+                      <Input
+                        value={issuanceTagSearchInput}
+                        onChange={(event) =>
+                          onIssuanceTagSearchInputChange(event.target.value)
+                        }
+                        className="h-8"
+                        placeholder="Search tags"
+                        disabled={!canManage || isLoadingIssuanceTags}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={onRefreshIssuanceTags}
+                        disabled={!canManage || isLoadingIssuanceTags}
+                      >
+                        {isLoadingIssuanceTags ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Search className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                    {issuanceTags.length > 0 ? (
+                      <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
+                        {issuanceTags.map((tag) => (
+                          <button
+                            key={tag}
+                            type="button"
+                            className={cn(
+                              "w-full rounded-md border px-2 py-1 text-left text-xs",
+                              issuanceSelectedTags.includes(tag)
+                                ? "border-primary bg-primary/10"
+                                : "border-border bg-background",
+                            )}
+                            onClick={() => onToggleIssuanceTag(tag)}
+                          >
+                            {tag}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        No tags found.
+                      </p>
+                    )}
+                    <Button
+                      className="w-full"
+                      size="sm"
+                      variant="outline"
+                      onClick={onIssueCertificatesByTags}
+                      disabled={
+                        !canManage ||
+                        !selectedTemplate ||
+                        isIssuing ||
+                        issuanceSelectedTags.length === 0
+                      }
+                    >
+                      {isIssuing ? (
+                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="mr-1.5 h-4 w-4" />
+                      )}
+                      Issue selected tags
+                    </Button>
+                  </div>
+
                   <label className="block space-y-1">
                     <span className="text-xs text-muted-foreground">Application IDs (comma/newline separated)</span>
                     <Textarea
@@ -668,6 +780,28 @@ export function LeftRail(props: LeftRailProps) {
                   </span>
                 </AccordionTrigger>
                 <AccordionContent className="space-y-2 pb-3">
+                  {issuedCertificates.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full h-7 text-[11px]"
+                      onClick={() =>
+                        onDownloadIssuedCertificates(
+                          issuedCertificates
+                            .filter((item) => item.status === "ISSUED")
+                            .map((item) => item.id),
+                        )
+                      }
+                      disabled={isDownloadingIssuanceZip}
+                    >
+                      {isDownloadingIssuanceZip ? (
+                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Download className="mr-1.5 h-3.5 w-3.5" />
+                      )}
+                      Download ZIP
+                    </Button>
+                  )}
                   {issuedCertificates.length === 0 ? (
                     <p className="text-xs text-muted-foreground">No certificates issued yet.</p>
                   ) : (
@@ -685,6 +819,11 @@ export function LeftRail(props: LeftRailProps) {
                           <div className="flex items-center gap-1">
                             <Badge variant={item.status === "REVOKED" ? "destructive" : "outline"}>
                               {item.status}
+                            </Badge>
+                            <Badge
+                              variant={item.isReleased ? "secondary" : "outline"}
+                            >
+                              {item.isReleased ? "RELEASED" : "HIDDEN"}
                             </Badge>
                             <Badge
                               variant={
@@ -721,6 +860,22 @@ export function LeftRail(props: LeftRailProps) {
                                 <FileText className="mr-1.5 h-3.5 w-3.5" />
                                 PDF
                               </a>
+                            </Button>
+                          )}
+                          {item.status === "ISSUED" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="col-span-2 h-7 text-[11px]"
+                              onClick={() => onReleaseIssuedCertificate(item)}
+                              disabled={!canManage || releasingIssuedCertificateId === item.id || item.isReleased}
+                            >
+                              {releasingIssuedCertificateId === item.id ? (
+                                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                              )}
+                              {item.isReleased ? "Released" : "Release"}
                             </Button>
                           )}
                           {item.status === "ISSUED" && (

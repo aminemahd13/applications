@@ -1074,7 +1074,7 @@ export class ApplicationsService {
           },
         },
         attendance_records: {
-          select: { status: true },
+          select: { status: true, checked_in_at: true },
         },
         completion_credentials: {
           select: {
@@ -1093,6 +1093,7 @@ export class ApplicationsService {
             certificate_type_label: true,
             qr_token: true,
             issued_at: true,
+            released_at: true,
             revoked_at: true,
             status: true,
             render_status: true,
@@ -1470,7 +1471,7 @@ export class ApplicationsService {
             orderBy: { workflow_steps: { step_index: 'asc' } },
           },
           attendance_records: {
-            select: { status: true },
+            select: { status: true, checked_in_at: true },
           },
           completion_credentials: {
             select: {
@@ -1489,6 +1490,7 @@ export class ApplicationsService {
               certificate_type_label: true,
               qr_token: true,
               issued_at: true,
+              released_at: true,
               revoked_at: true,
               status: true,
               render_status: true,
@@ -1846,6 +1848,7 @@ export class ApplicationsService {
       maskDecisionIfUnpublished: true,
       hideInternalNotes: true,
       hideAssignedReviewer: true,
+      hideUnreleasedCertificates: true,
     });
   }
 
@@ -3313,6 +3316,7 @@ export class ApplicationsService {
       maskDecisionIfUnpublished?: boolean;
       hideInternalNotes?: boolean;
       hideAssignedReviewer?: boolean;
+      hideUnreleasedCertificates?: boolean;
     },
   ): ApplicationDetail {
     const summary = this.toSummary(app, {
@@ -3340,6 +3344,13 @@ export class ApplicationsService {
       ),
       certificates: this.toApplicationIssuedCertificates(
         app.issued_certificates ?? [],
+        {
+          hideUnreleased:
+            options?.hideUnreleasedCertificates === true,
+          isCheckedIn:
+            app.attendance_records?.status === 'CHECKED_IN' &&
+            Boolean(app.attendance_records?.checked_in_at),
+        },
       ),
       stepStates: stepStates.map((ss: any) => {
         const revisionDeadlineAt =
@@ -3774,16 +3785,32 @@ export class ApplicationsService {
       certificate_type_label: string;
       qr_token: string;
       issued_at: Date;
+      released_at?: Date | null;
       revoked_at: Date | null;
       status?: string | null;
       render_status?: string | null;
       pdf_storage_key?: string | null;
     }>,
+    options?: {
+      hideUnreleased?: boolean;
+      isCheckedIn?: boolean;
+    },
   ): ApplicationIssuedCertificate[] {
     if (!Array.isArray(rows) || rows.length === 0) return [];
 
+    const hideUnreleased = options?.hideUnreleased === true;
+    const isCheckedIn = options?.isCheckedIn === true;
     const appBaseUrl = this.getAppBaseUrl();
-    return rows.map((row) => {
+    return rows
+      .filter((row) => {
+        if (!hideUnreleased) return true;
+        const isRevoked =
+          Boolean(row.revoked_at) || String(row.status ?? '').toUpperCase() === 'REVOKED';
+        if (isRevoked) return false;
+        if (!isCheckedIn) return false;
+        return Boolean(row.released_at);
+      })
+      .map((row) => {
       const links = this.getCompletionCredentialLinks(
         row.certificate_id,
         row.credential_id,
@@ -3822,7 +3849,7 @@ export class ApplicationsService {
             ? renderStatus
             : 'PENDING',
       };
-    });
+      });
   }
 
   private toFilenameSafePart(value: string): string {

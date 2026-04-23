@@ -15,16 +15,21 @@ import type { Response } from 'express';
 import { SkipThrottle } from '@nestjs/throttler';
 import {
   ActivateCertificateTemplateVersionSchema,
+  CreateCertificatePdfExportJobSchema,
   CreateCertificateTemplateSchema,
   CreateCertificateTemplateVersionSchema,
   DuplicateCertificateTemplateSchema,
   IssueCertificateSchema,
+  IssueCertificatesByTagsSchema,
   IssueCertificatesBulkSchema,
+  ListCertificateIssuanceTagsQuerySchema,
   ListCertificateRenderJobsQuerySchema,
   ListCertificateTemplatesQuerySchema,
   ListIssuedCertificatesQuerySchema,
   PublishCertificateTemplateSchema,
   RegisterCertificateAssetUploadSchema,
+  ReleaseCertificatesBulkSchema,
+  ReleaseIssuedCertificateSchema,
   RevokeIssuedCertificateSchema,
   UpdateCertificateTemplateDraftSchema,
   UpdateCertificateTemplateSchema,
@@ -234,6 +239,20 @@ export class CertificatesController {
     return { data };
   }
 
+  @Post('events/:eventId/certificates/issue-by-tags')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async issueCertificatesByTags(
+    @Param('eventId') eventId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const dto = IssueCertificatesByTagsSchema.parse(body ?? {});
+    const data = await this.certificatesService.issueCertificatesByTags(
+      eventId,
+      dto,
+    );
+    return { data };
+  }
+
   @Get('events/:eventId/certificates/issuance-candidates')
   @RequirePermission(Permission.EVENT_UPDATE)
   async searchIssuanceCandidates(
@@ -252,6 +271,17 @@ export class CertificatesController {
     return { data };
   }
 
+  @Get('events/:eventId/certificates/issuance-tags')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async listIssuanceTags(
+    @Param('eventId') eventId: string,
+    @Query() query: Record<string, unknown>,
+  ) {
+    const dto = ListCertificateIssuanceTagsQuerySchema.parse(query ?? {});
+    const data = await this.certificatesService.listIssuanceTags(eventId, dto);
+    return { data };
+  }
+
   @Post('events/:eventId/certificates/:issuedCertificateId/revoke')
   @RequirePermission(Permission.EVENT_UPDATE)
   async revokeCertificate(
@@ -263,6 +293,35 @@ export class CertificatesController {
     const data = await this.certificatesService.revokeIssuedCertificate(
       eventId,
       issuedCertificateId,
+      dto,
+    );
+    return { data };
+  }
+
+  @Post('events/:eventId/certificates/:issuedCertificateId/release')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async releaseCertificate(
+    @Param('eventId') eventId: string,
+    @Param('issuedCertificateId') issuedCertificateId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    ReleaseIssuedCertificateSchema.parse(body ?? {});
+    const data = await this.certificatesService.releaseIssuedCertificate(
+      eventId,
+      issuedCertificateId,
+    );
+    return { data };
+  }
+
+  @Post('events/:eventId/certificates/release-bulk')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async releaseCertificatesBulk(
+    @Param('eventId') eventId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const dto = ReleaseCertificatesBulkSchema.parse(body ?? {});
+    const data = await this.certificatesService.releaseCertificatesBulk(
+      eventId,
       dto,
     );
     return { data };
@@ -293,6 +352,47 @@ export class CertificatesController {
     return { data };
   }
 
+  @Post('events/:eventId/certificates/pdf-export-jobs')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async createPdfExportJob(
+    @Param('eventId') eventId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const dto = CreateCertificatePdfExportJobSchema.parse(body ?? {});
+    const data = await this.certificatesService.createCertificatePdfExportJob(
+      eventId,
+      dto,
+    );
+    return { data };
+  }
+
+  @Get('events/:eventId/certificates/pdf-export-jobs/:jobId')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async getPdfExportJob(
+    @Param('eventId') eventId: string,
+    @Param('jobId') jobId: string,
+  ) {
+    const data = await this.certificatesService.getCertificatePdfExportJob(
+      eventId,
+      jobId,
+    );
+    return { data };
+  }
+
+  @Get('events/:eventId/certificates/pdf-export-jobs/:jobId/download-url')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async getPdfExportJobDownloadUrl(
+    @Param('eventId') eventId: string,
+    @Param('jobId') jobId: string,
+  ) {
+    const data =
+      await this.certificatesService.getCertificatePdfExportJobDownloadUrl(
+        eventId,
+        jobId,
+      );
+    return { data };
+  }
+
   @Post('events/:eventId/certificates/render-jobs/:jobId/retry')
   @RequirePermission(Permission.EVENT_UPDATE)
   async retryRenderJob(
@@ -301,6 +401,25 @@ export class CertificatesController {
   ) {
     const data = await this.certificatesService.retryRenderJob(eventId, jobId);
     return { data };
+  }
+
+  @Get('events/:eventId/certificates/:issuedCertificateId/pdf')
+  @RequirePermission(Permission.EVENT_UPDATE)
+  async resolveIssuedCertificatePdf(
+    @Param('eventId') eventId: string,
+    @Param('issuedCertificateId') issuedCertificateId: string,
+    @Res() res: Response,
+  ) {
+    const file = await this.certificatesService.getIssuedCertificatePdfFileForStaff(
+      eventId,
+      issuedCertificateId,
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${file.fileName.replace(/"/g, '')}"`,
+    );
+    return res.send(file.buffer);
   }
 
   @Post('admin/events/:eventId/certificates/assets/uploads')
@@ -384,10 +503,15 @@ export class CertificatesPublicController {
     @Param('certificateId') certificateId: string,
     @Res() res: Response,
   ) {
-    const url = await this.certificatesService.resolveCertificatePdfUrl(
+    const file = await this.certificatesService.getCertificatePdfFile(
       certificateId,
     );
-    return res.redirect(302, url);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${file.fileName.replace(/"/g, '')}"`,
+    );
+    return res.send(file.buffer);
   }
 
   @SkipCsrf()
