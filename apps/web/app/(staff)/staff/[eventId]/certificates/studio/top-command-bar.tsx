@@ -120,7 +120,7 @@ export function TopCommandBar(props: TopCommandBarProps) {
   } = props;
 
   return (
-    <div className="sticky top-4 z-20 rounded-xl border bg-card/95 p-3 shadow-sm backdrop-blur">
+    <div className="z-20 rounded-xl border bg-card/95 p-3 shadow-sm backdrop-blur">
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,1.2fr)_minmax(0,1fr)]">
         <ToolbarGroup label="Insert">
           <Button size="sm" variant="outline" onClick={() => onAddElement("text")} disabled={!canManage}>
