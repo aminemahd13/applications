@@ -602,6 +602,298 @@ describe('CertificatesService issued history and queue lifecycle', () => {
   });
 });
 
+describe('CertificatesService Latin-only issuance normalization', () => {
+  beforeEach(() => {
+    process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
+  });
+
+  afterEach(() => {
+    delete process.env.PUBLIC_APP_BASE_URL;
+  });
+
+  it('preserves Latin text, digits, whitespace, and URL punctuation', () => {
+    const { service } = createServiceHarness();
+
+    expect(
+      (service as any).sanitizeCertificateTextValue(
+        '  José \n  Álvarez -- Été 2026  ',
+      ),
+    ).toBe('José Álvarez -- Été 2026');
+    expect(
+      (service as any).sanitizeCertificateTextValue(
+        'https://example.com/?q=été&ok=1#done',
+      ),
+    ).toBe('https://example.com/?q=été&ok=1#done');
+  });
+
+  it('strips non-Latin characters without transliteration', () => {
+    const { service } = createServiceHarness();
+
+    expect(
+      (service as any).sanitizeCertificateTextValue(
+        'Amina أحمد Олег 😀 شهادة',
+      ),
+    ).toBe('Amina');
+  });
+
+  it('stores sanitized certificate payload and snapshot text on issuance', async () => {
+    const { service, prisma, tx } = createServiceHarness();
+    prisma.issued_certificates.findFirst.mockResolvedValue(null);
+    tx.issued_certificates.create.mockImplementation(async ({ data }: any) => ({
+      id: 'issued-new',
+      ...data,
+    }));
+    tx.certificate_render_jobs.create.mockResolvedValue({ id: 'job-1' });
+    tx.issued_certificates.findUnique.mockImplementation(async () => {
+      const created = tx.issued_certificates.create.mock.calls[0][0].data;
+      return {
+        id: 'issued-new',
+        event_id: 'event-1',
+        application_id: 'app-1',
+        template_id: 'template-1',
+        template_version_id: 'version-1',
+        certificate_type_key: 'participation',
+        certificate_type_label: created.certificate_type_label,
+        certificate_id: created.certificate_id,
+        credential_id: created.credential_id,
+        qr_token: created.qr_token,
+        issuer_name: created.issuer_name,
+        status: 'ISSUED',
+        issued_at: new Date('2026-04-23T12:00:00.000Z'),
+        released_at: null,
+        released_by: null,
+        revoked_at: null,
+        template_snapshot: created.template_snapshot,
+        payload_snapshot: created.payload_snapshot,
+        pdf_storage_key: null,
+        pdf_generated_at: null,
+        render_status: 'PENDING',
+        render_error: null,
+        certificate_templates: {
+          name: 'Participation',
+        },
+        certificate_template_versions: {
+          version_number: 1,
+        },
+      };
+    });
+
+    jest.spyOn(service as any, 'getTemplateForEvent').mockResolvedValue({
+      id: 'template-1',
+      name: 'Participation',
+      type_key: 'participation',
+      type_label: 'Certificat شهادة',
+      metadata: {},
+      is_active: true,
+      archived_at: null,
+    });
+    jest.spyOn(service as any, 'getTemplateVersion').mockResolvedValue({
+      id: 'version-1',
+      version_number: 1,
+      layout_json: {
+        layoutSchemaVersion: 2,
+        canvas: {
+          width: 900,
+          height: 600,
+          unit: 'px',
+          backgroundColor: '#ffffff',
+        },
+        elements: [
+          {
+            id: 'headline',
+            type: 'text',
+            x: 80,
+            y: 120,
+            width: 520,
+            height: 80,
+            content: 'مرحبا Certificate',
+            style: {
+              fontFamily: 'Geist',
+              fontSize: 36,
+            },
+          },
+        ],
+        signatureSlots: [
+          {
+            key: 'organizer_primary',
+            label: 'موقّع Organizer',
+            signerName: 'أحمد Organizer',
+            signerTitle: 'رئيس Chair',
+          },
+        ],
+        metadata: {},
+      },
+    });
+    jest.spyOn(service as any, 'getApplicationForIssuance').mockResolvedValue({
+      id: 'app-1',
+      users_applications_applicant_user_idTousers: {
+        email: 'zoe@example.com',
+        applicant_profiles: {
+          full_name: 'Applicant Name',
+          first_name: 'Applicant',
+          last_name: 'Name',
+        },
+      },
+    });
+    jest.spyOn(service as any, 'getEventForIssuance').mockResolvedValue({
+      id: 'event-1',
+      title: 'Événement أحمد',
+      slug: 'event',
+      venue_name: 'Salle 1',
+      venue_address: null,
+    });
+    jest
+      .spyOn(service as any, 'signQrToken')
+      .mockReturnValue({ token: 'qr-token-new', kid: 'kid-1' });
+    const signatureSpy = jest
+      .spyOn(service as any, 'buildIssuedCertificateSignature')
+      .mockReturnValue('signature');
+
+    const result = await (service as any).issueOneCertificate('event-1', {
+      templateId: 'template-1',
+      applicationId: 'app-1',
+      issuerName: 'Dr. Ångström أحمد',
+      payloadOverrides: {
+        participantName: 'Zoë أحمد',
+        issuerName: 'Override أحمد',
+        certificateTypeLabel: 'Override شهادة',
+        eventTitle: 'Custom Événement أحمد',
+        title: 'Bravo 🎉 شهادة',
+        subtitle: 'Line   one\nمرحبا',
+        note: 'Visit https://example.com/?q=été&ok=1 😀',
+      },
+    });
+
+    const createCall = tx.issued_certificates.create.mock.calls[0][0].data;
+    expect(createCall.certificate_type_label).toBe('Certificat');
+    expect(createCall.issuer_name).toBe('Dr. Ångström');
+    expect(createCall.payload_snapshot).toMatchObject({
+      participantName: 'Zoë',
+      issuerName: 'Dr. Ångström',
+      certificateTypeLabel: 'Certificat',
+      eventTitle: 'Custom Événement',
+      title: 'Bravo',
+      subtitle: 'Line one',
+      note: 'Visit https://example.com/?q=été&ok=1',
+    });
+    expect(createCall.template_snapshot.layout.elements[0].content).toBe(
+      'Certificate',
+    );
+    expect(createCall.template_snapshot.layout.signatureSlots[0]).toMatchObject({
+      label: 'Organizer',
+      signerName: 'Organizer',
+      signerTitle: 'Chair',
+    });
+    expect(signatureSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        participantName: 'Zoë',
+      }),
+    );
+    expect(result).toMatchObject({
+      created: true,
+      certificate: {
+        certificateTypeLabel: 'Certificat',
+        issuerName: 'Dr. Ångström',
+      },
+    });
+  });
+
+  it('falls back to Attendee when participant text sanitizes to empty', async () => {
+    const { service, prisma, tx } = createServiceHarness();
+    prisma.issued_certificates.findFirst.mockResolvedValue(null);
+    tx.issued_certificates.create.mockImplementation(async ({ data }: any) => ({
+      id: 'issued-empty',
+      ...data,
+    }));
+    tx.certificate_render_jobs.create.mockResolvedValue({ id: 'job-2' });
+    tx.issued_certificates.findUnique.mockImplementation(async () => {
+      const created = tx.issued_certificates.create.mock.calls[0][0].data;
+      return {
+        id: 'issued-empty',
+        event_id: 'event-1',
+        application_id: 'app-1',
+        template_id: 'template-1',
+        template_version_id: 'version-1',
+        certificate_type_key: 'participation',
+        certificate_type_label: created.certificate_type_label,
+        certificate_id: created.certificate_id,
+        credential_id: created.credential_id,
+        qr_token: created.qr_token,
+        issuer_name: created.issuer_name,
+        status: 'ISSUED',
+        issued_at: new Date('2026-04-23T12:00:00.000Z'),
+        released_at: null,
+        released_by: null,
+        revoked_at: null,
+        template_snapshot: created.template_snapshot,
+        payload_snapshot: created.payload_snapshot,
+        pdf_storage_key: null,
+        pdf_generated_at: null,
+        render_status: 'PENDING',
+        render_error: null,
+        certificate_templates: {
+          name: 'Participation',
+        },
+        certificate_template_versions: {
+          version_number: 1,
+        },
+      };
+    });
+
+    jest.spyOn(service as any, 'getTemplateForEvent').mockResolvedValue({
+      id: 'template-1',
+      name: 'Participation',
+      type_key: 'participation',
+      type_label: 'Participation',
+      metadata: {},
+      is_active: true,
+      archived_at: null,
+    });
+    jest.spyOn(service as any, 'getTemplateVersion').mockResolvedValue({
+      id: 'version-1',
+      version_number: 1,
+      layout_json: {},
+    });
+    jest.spyOn(service as any, 'getApplicationForIssuance').mockResolvedValue({
+      id: 'app-1',
+      users_applications_applicant_user_idTousers: {
+        email: 'applicant@example.com',
+        applicant_profiles: {
+          full_name: 'أحمد',
+          first_name: null,
+          last_name: null,
+        },
+      },
+    });
+    jest.spyOn(service as any, 'getEventForIssuance').mockResolvedValue({
+      id: 'event-1',
+      title: 'Event',
+      slug: 'event',
+      venue_name: null,
+      venue_address: null,
+    });
+    jest
+      .spyOn(service as any, 'signQrToken')
+      .mockReturnValue({ token: 'qr-token-empty', kid: 'kid-1' });
+    const signatureSpy = jest
+      .spyOn(service as any, 'buildIssuedCertificateSignature')
+      .mockReturnValue('signature');
+
+    await (service as any).issueOneCertificate('event-1', {
+      templateId: 'template-1',
+      applicationId: 'app-1',
+    });
+
+    const createCall = tx.issued_certificates.create.mock.calls[0][0].data;
+    expect(createCall.payload_snapshot.participantName).toBe('Attendee');
+    expect(signatureSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        participantName: 'Attendee',
+      }),
+    );
+  });
+});
+
 describe('CertificatesService PDF text font fallback', () => {
   const bundledFallbackFonts: Array<{
     storageKey: string;
@@ -616,13 +908,6 @@ describe('CertificatesService PDF text font fallback', () => {
       mimeType: 'font/ttf',
       buffer: Buffer.from('latin-font-data', 'utf8'),
       internalFamily: 'CertificateBundledLatinFallback',
-    },
-    {
-      storageKey: 'bundled:arabic',
-      format: 'ttf',
-      mimeType: 'font/ttf',
-      buffer: Buffer.from('arabic-font-data', 'utf8'),
-      internalFamily: 'CertificateBundledArabicFallback',
     },
   ];
 
@@ -642,10 +927,9 @@ describe('CertificatesService PDF text font fallback', () => {
 
     expect(svg).toContain('@font-face');
     expect(svg).toContain('CertificateBundledLatinFallback');
-    expect(svg).toContain('CertificateBundledArabicFallback');
     expect(svg).toContain('data:font/ttf;base64,');
     expect(svg).toContain(
-      'font-family="Geist, &quot;CertificateBundledLatinFallback&quot;, &quot;CertificateBundledArabicFallback&quot;, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
+      'font-family="Geist, &quot;CertificateBundledLatinFallback&quot;, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
     );
   });
 
@@ -664,7 +948,7 @@ describe('CertificatesService PDF text font fallback', () => {
     });
 
     expect(svg).toContain(
-      'font-family="&quot;Times New Roman&quot;, Georgia, &quot;CertificateBundledLatinFallback&quot;, &quot;CertificateBundledArabicFallback&quot;, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
+      'font-family="&quot;Times New Roman&quot;, Georgia, &quot;CertificateBundledLatinFallback&quot;, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
     );
   });
 
@@ -692,9 +976,8 @@ describe('CertificatesService PDF text font fallback', () => {
     expect(svg).toContain('@font-face');
     expect(svg).toContain('data:font/woff2;base64,');
     expect(svg).toContain('CertificateBundledLatinFallback');
-    expect(svg).toContain('CertificateBundledArabicFallback');
     expect(svg).toContain(
-      'font-family="&quot;CertificateUploadedFont_a1b2c3d4e5f6&quot;, Brand Sans, &quot;CertificateBundledLatinFallback&quot;, &quot;CertificateBundledArabicFallback&quot;, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
+      'font-family="&quot;CertificateUploadedFont_a1b2c3d4e5f6&quot;, Brand Sans, &quot;CertificateBundledLatinFallback&quot;, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
     );
   });
 
@@ -751,7 +1034,7 @@ describe('CertificatesService PDF text font fallback', () => {
         },
       },
       payload_snapshot: {
-        participantName: 'John أحمد',
+        participantName: 'John Ahmed',
       },
       applications: {
         id: 'app-1',
@@ -815,7 +1098,7 @@ describe('CertificatesService PDF text font fallback', () => {
             {
               key: 'organizer_primary',
               label: 'Primary Organizer',
-              signerName: 'Organizer أحمد',
+              signerName: 'Organizer Ahmed',
             },
           ],
           metadata: {},
@@ -832,7 +1115,7 @@ describe('CertificatesService PDF text font fallback', () => {
     });
 
     const signatureCall = svgSpy.mock.calls.find(
-      ([arg]) => arg?.text === 'Organizer أحمد',
+      ([arg]) => arg?.text === 'Organizer Ahmed',
     );
     expect(signatureCall).toBeDefined();
     expect(signatureCall?.[0]?.bundledFallbackFonts).toEqual(

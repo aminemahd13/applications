@@ -96,6 +96,19 @@ const CERTIFICATE_FONT_CSS_FORMAT_BY_FORMAT = {
   otf: 'opentype',
   woff2: 'woff2',
 } as const;
+const CERTIFICATE_ISSUED_PARTICIPANT_FALLBACK = 'Attendee';
+const CERTIFICATE_TEXT_LATIN_CHAR_RE = /\p{Script=Latin}/u;
+const CERTIFICATE_TEXT_DIGIT_CHAR_RE = /\p{Nd}/u;
+const CERTIFICATE_TEXT_MARK_CHAR_RE = /\p{Mark}/u;
+const CERTIFICATE_TEXT_WHITESPACE_CHAR_RE = /\s/u;
+const CERTIFICATE_TEXT_ALLOWED_UNICODE_PUNCTUATION = new Set([
+  '\u2018',
+  '\u2019',
+  '\u201c',
+  '\u201d',
+  '\u2013',
+  '\u2014',
+]);
 const CERTIFICATE_PDF_MAX_WIDTH_POINTS = 842;
 const CERTIFICATE_PDF_MAX_HEIGHT_POINTS = 595;
 const UUID_LIKE_PATTERN =
@@ -105,12 +118,6 @@ const CERTIFICATE_BUNDLED_PDF_FALLBACK_FONT_DEFINITIONS = [
     key: 'latin',
     fileName: 'NotoSans-Regular.ttf',
     internalFamily: 'CertificateBundledLatinFallback',
-    format: 'ttf',
-  },
-  {
-    key: 'arabic',
-    fileName: 'NotoSansArabic-Regular.ttf',
-    internalFamily: 'CertificateBundledArabicFallback',
     format: 'ttf',
   },
 ] as const;
@@ -556,7 +563,167 @@ export class CertificatesService {
     const first = profile?.first_name?.trim?.() ?? '';
     const last = profile?.last_name?.trim?.() ?? '';
     const full = profile?.full_name?.trim?.() ?? '';
-    return [first, last].filter(Boolean).join(' ') || full || 'Attendee';
+    return (
+      [first, last].filter(Boolean).join(' ') ||
+      full ||
+      CERTIFICATE_ISSUED_PARTICIPANT_FALLBACK
+    );
+  }
+
+  private isAllowedCertificateTextSymbol(char: string): boolean {
+    const codePoint = char.codePointAt(0) ?? 0;
+    const isAsciiSymbol =
+      (codePoint >= 0x21 && codePoint <= 0x2f) ||
+      (codePoint >= 0x3a && codePoint <= 0x40) ||
+      (codePoint >= 0x5b && codePoint <= 0x60) ||
+      (codePoint >= 0x7b && codePoint <= 0x7e);
+    return (
+      isAsciiSymbol ||
+      CERTIFICATE_TEXT_ALLOWED_UNICODE_PUNCTUATION.has(char)
+    );
+  }
+
+  private sanitizeCertificateTextValue(value: unknown): string {
+    const normalized = String(value ?? '').normalize('NFC');
+    let sanitized = '';
+    let allowCombiningMark = false;
+
+    for (const char of normalized) {
+      if (CERTIFICATE_TEXT_WHITESPACE_CHAR_RE.test(char)) {
+        sanitized += ' ';
+        allowCombiningMark = false;
+        continue;
+      }
+      if (CERTIFICATE_TEXT_LATIN_CHAR_RE.test(char)) {
+        sanitized += char;
+        allowCombiningMark = true;
+        continue;
+      }
+      if (
+        allowCombiningMark &&
+        CERTIFICATE_TEXT_MARK_CHAR_RE.test(char)
+      ) {
+        sanitized += char;
+        continue;
+      }
+      if (
+        CERTIFICATE_TEXT_DIGIT_CHAR_RE.test(char) ||
+        this.isAllowedCertificateTextSymbol(char)
+      ) {
+        sanitized += char;
+        allowCombiningMark = false;
+        continue;
+      }
+
+      allowCombiningMark = false;
+    }
+
+    return sanitized.replace(/\s+/g, ' ').trim();
+  }
+
+  private sanitizeRequiredCertificateText(
+    value: unknown,
+    fallback: string,
+  ): string {
+    const sanitizedValue = this.sanitizeCertificateTextValue(value);
+    if (sanitizedValue) {
+      return sanitizedValue;
+    }
+    const sanitizedFallback = this.sanitizeCertificateTextValue(fallback);
+    return sanitizedFallback || fallback;
+  }
+
+  private sanitizeIssuedCertificatePayloadSnapshot(
+    payload: Record<string, unknown>,
+    input: {
+      participantNameFallback?: string;
+      issuerNameFallback: string;
+      certificateTypeLabel?: string;
+    },
+  ): Record<string, unknown> {
+    const sanitized: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(payload)) {
+      sanitized[key] =
+        typeof value === 'string'
+          ? this.sanitizeCertificateTextValue(value)
+          : value;
+    }
+
+    sanitized.participantName = this.sanitizeRequiredCertificateText(
+      sanitized.participantName,
+      input.participantNameFallback ?? CERTIFICATE_ISSUED_PARTICIPANT_FALLBACK,
+    );
+    sanitized.issuerName = this.sanitizeRequiredCertificateText(
+      input.issuerNameFallback,
+      this.getCredentialIssuerName(),
+    );
+    if (input.certificateTypeLabel !== undefined) {
+      sanitized.certificateTypeLabel = this.sanitizeCertificateTextValue(
+        input.certificateTypeLabel,
+      );
+    }
+
+    return sanitized;
+  }
+
+  private sanitizeIssuedCertificateTemplateLayout(layout: unknown): unknown {
+    const layoutRecord = this.toRecord(layout);
+    if (!layoutRecord) {
+      return layout;
+    }
+
+    const sanitizedLayout: Record<string, unknown> = {
+      ...layoutRecord,
+    };
+
+    if (Array.isArray(layoutRecord.elements)) {
+      sanitizedLayout.elements = layoutRecord.elements.map((element) => {
+        const elementRecord = this.toRecord(element);
+        if (!elementRecord) {
+          return element;
+        }
+        if (String(elementRecord.type ?? '') !== 'text') {
+          return element;
+        }
+
+        return {
+          ...elementRecord,
+          content: this.sanitizeCertificateTextValue(elementRecord.content),
+        };
+      });
+    }
+
+    if (Array.isArray(layoutRecord.signatureSlots)) {
+      sanitizedLayout.signatureSlots = layoutRecord.signatureSlots.map((slot) => {
+        const slotRecord = this.toRecord(slot);
+        if (!slotRecord) {
+          return slot;
+        }
+
+        const sanitizedSlot: Record<string, unknown> = {
+          ...slotRecord,
+        };
+        if (typeof slotRecord.label === 'string') {
+          sanitizedSlot.label = this.sanitizeCertificateTextValue(
+            slotRecord.label,
+          );
+        }
+        if (typeof slotRecord.signerName === 'string') {
+          sanitizedSlot.signerName = this.sanitizeCertificateTextValue(
+            slotRecord.signerName,
+          );
+        }
+        if (typeof slotRecord.signerTitle === 'string') {
+          sanitizedSlot.signerTitle = this.sanitizeCertificateTextValue(
+            slotRecord.signerTitle,
+          );
+        }
+        return sanitizedSlot;
+      });
+    }
+
+    return sanitizedLayout;
   }
 
   private mapTemplateRow(
@@ -746,6 +913,7 @@ export class CertificatesService {
     issuedAt: Date;
     certificateId: string;
     credentialId: string;
+    issuerName: string;
     payloadOverrides?: Record<string, unknown>;
     qrVerificationUrl: string;
   }): Record<string, unknown> {
@@ -776,7 +944,7 @@ export class CertificatesService {
       verificationUrl: links.verifiableCredentialUrl,
       certificateUrl: links.certificateUrl,
       qrVerificationUrl: input.qrVerificationUrl,
-      issuerName: this.getCredentialIssuerName(),
+      issuerName: input.issuerName,
       eventLocation:
         input.event.venue_name?.trim() || input.event.venue_address?.trim() || '',
     };
@@ -1353,6 +1521,13 @@ export class CertificatesService {
     const issuedAt = new Date();
     const certificateId = crypto.randomUUID();
     const credentialId = crypto.randomUUID();
+    const issuerName = this.sanitizeRequiredCertificateText(
+      input.issuerName?.trim() || this.getCredentialIssuerName(),
+      this.getCredentialIssuerName(),
+    );
+    const certificateTypeLabel = this.sanitizeCertificateTextValue(
+      template.type_label,
+    );
 
     const signedQr = this.signQrToken({
       eventId,
@@ -1361,18 +1536,29 @@ export class CertificatesService {
     });
 
     const qrVerificationUrl = this.getQrVerificationUrl(signedQr.token);
-    const payloadSnapshot = this.buildPayloadSnapshot({
+    const rawPayloadSnapshot = this.buildPayloadSnapshot({
       application,
       event,
       template,
       issuedAt,
       certificateId,
       credentialId,
+      issuerName,
       payloadOverrides: input.payloadOverrides,
       qrVerificationUrl,
     });
 
-    const participantName = String(payloadSnapshot.participantName ?? 'Attendee');
+    const payloadSnapshot = this.sanitizeIssuedCertificatePayloadSnapshot(
+      rawPayloadSnapshot,
+      {
+        participantNameFallback: CERTIFICATE_ISSUED_PARTICIPANT_FALLBACK,
+        issuerNameFallback: issuerName,
+        certificateTypeLabel,
+      },
+    );
+    const participantName = String(
+      payloadSnapshot.participantName ?? CERTIFICATE_ISSUED_PARTICIPANT_FALLBACK,
+    );
 
     const signature = this.buildIssuedCertificateSignature({
       eventId,
@@ -1388,15 +1574,14 @@ export class CertificatesService {
       id: template.id,
       name: template.name,
       typeKey: template.type_key,
-      typeLabel: template.type_label,
+      typeLabel: certificateTypeLabel,
       versionId: templateVersion.id,
       versionNumber: templateVersion.version_number,
-      layout: templateVersion.layout_json,
+      layout: this.sanitizeIssuedCertificateTemplateLayout(
+        templateVersion.layout_json,
+      ),
       metadata: template.metadata ?? {},
     };
-
-    const issuerName =
-      input.issuerName?.trim() || this.getCredentialIssuerName();
     const deletedExistingPdfStorageKey =
       existingActive && input.reissueIfExists
         ? String(existingActive.pdf_storage_key ?? '').trim() || null
@@ -1417,7 +1602,7 @@ export class CertificatesService {
           template_id: template.id,
           template_version_id: templateVersion.id,
           certificate_type_key: template.type_key,
-          certificate_type_label: template.type_label,
+          certificate_type_label: certificateTypeLabel,
           certificate_id: certificateId,
           credential_id: credentialId,
           credential_signature: signature,
@@ -2848,11 +3033,11 @@ export class CertificatesService {
     let last = sliced[maxLines - 1] ?? '';
     while (
       last.length > 0 &&
-      this.estimateTextWidth(`${last}…`, fontSize, letterSpacing) > maxWidth
+      this.estimateTextWidth(`${last}...`, fontSize, letterSpacing) > maxWidth
     ) {
       last = last.slice(0, -1);
     }
-    sliced[maxLines - 1] = last ? `${last}…` : '…';
+    sliced[maxLines - 1] = last ? `${last}...` : '...';
     return sliced;
   }
 
@@ -3857,11 +4042,15 @@ export class CertificatesService {
 
   private buildPdfLines(record: IssuedCertificateForRender): string[] {
     const payload = this.toRecord(record.payload_snapshot);
+    const eventTitle =
+      typeof payload.eventTitle === 'string'
+        ? payload.eventTitle
+        : record.events.title;
     return [
       'Certificate',
       `Type: ${record.certificate_type_label}`,
       `Participant: ${String(payload.participantName ?? this.getDisplayName(record.applications.users_applications_applicant_user_idTousers?.applicant_profiles))}`,
-      `Event: ${record.events.title}`,
+      `Event: ${eventTitle}`,
       `Certificate ID: ${record.certificate_id}`,
       `Credential ID: ${record.credential_id}`,
       `Issued At: ${record.issued_at.toISOString()}`,
@@ -4090,6 +4279,16 @@ export class CertificatesService {
         record.applications.users_applications_applicant_user_idTousers
           ?.applicant_profiles,
       );
+    const eventTitle =
+      typeof payload.eventTitle === 'string'
+        ? payload.eventTitle
+        : record.events.title;
+    const eventLocation =
+      typeof payload.eventLocation === 'string'
+        ? payload.eventLocation || undefined
+        : record.events.venue_name?.trim() ||
+          record.events.venue_address?.trim() ||
+          undefined;
 
     const pdfUrl = record.pdf_storage_key
       ? this.getCertificatePdfUrl(record.certificate_id)
@@ -4117,15 +4316,12 @@ export class CertificatesService {
       renderError: record.render_error ?? null,
       event: {
         id: record.events.id,
-        title: record.events.title,
+        title: eventTitle,
         slug: record.events.slug,
         status: record.events.status,
         startAt: record.events.start_at,
         endAt: record.events.end_at,
-        location:
-          record.events.venue_name?.trim() ||
-          record.events.venue_address?.trim() ||
-          undefined,
+        location: eventLocation,
       },
       recipient: {
         name: participantName,
@@ -4206,6 +4402,10 @@ export class CertificatesService {
         record.applications.users_applications_applicant_user_idTousers
           ?.applicant_profiles,
       );
+    const eventTitle =
+      typeof payload.eventTitle === 'string'
+        ? payload.eventTitle
+        : record.events.title;
 
     const expectedSignature = this.buildIssuedCertificateSignature({
       eventId: record.event_id,
@@ -4238,7 +4438,7 @@ export class CertificatesService {
         applicationId: record.application_id,
         event: {
           id: record.events.id,
-          title: record.events.title,
+          title: eventTitle,
           slug: record.events.slug,
           status: record.events.status,
         },
