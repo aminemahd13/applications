@@ -49,7 +49,16 @@ const CERTIFICATE_PDF_EXPORT_PREFIX =
 const CERTIFICATE_PDF_EXPORT_PRESIGNED_DOWNLOAD_TTL_SECONDS = 600;
 const CERTIFICATE_RENDER_MAX_CANVAS_SIZE = 8000;
 const CERTIFICATE_RENDER_TEXT_PADDING = 6;
-const CERTIFICATE_RENDER_DEFAULT_FONT_FAMILY = 'Arial, Helvetica, sans-serif';
+const CERTIFICATE_RENDER_SAFE_FONT_FALLBACK_CHAIN = [
+  '"Segoe UI"',
+  'Arial',
+  'Helvetica',
+  '"DejaVu Sans"',
+  '"Noto Sans"',
+  'sans-serif',
+];
+const CERTIFICATE_RENDER_DEFAULT_FONT_FAMILY =
+  CERTIFICATE_RENDER_SAFE_FONT_FALLBACK_CHAIN.join(', ');
 const CERTIFICATE_PDF_MAX_WIDTH_POINTS = 842;
 const CERTIFICATE_PDF_MAX_HEIGHT_POINTS = 595;
 
@@ -143,7 +152,10 @@ export class CertificatesService {
   }
 
   private getAppBaseUrl(): string {
-    return resolveAppBaseUrl(process.env);
+    return resolveAppBaseUrl(process.env, {
+      strictPublic: true,
+      errorContext: 'certificate and credential links',
+    });
   }
 
   private getCredentialIssuerName(): string {
@@ -2406,6 +2418,76 @@ export class CertificatesService {
     };
   }
 
+  private parseFontFamilyStack(value: string): string[] {
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  }
+
+  private normalizeFontFamilyToken(value: string): string {
+    return value
+      .trim()
+      .replace(/^['"]+/, '')
+      .replace(/['"]+$/, '')
+      .trim()
+      .toLowerCase();
+  }
+
+  private dedupeFontFamilies(entries: string[]): string[] {
+    const seen = new Set<string>();
+    const output: string[] = [];
+    for (const entry of entries) {
+      const normalized = this.normalizeFontFamilyToken(entry);
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      output.push(entry.trim());
+    }
+    return output;
+  }
+
+  private resolvePdfFontFamily(rawValue: unknown): string {
+    const requested =
+      typeof rawValue === 'string' ? this.parseFontFamilyStack(rawValue) : [];
+    if (requested.length === 0) {
+      return CERTIFICATE_RENDER_DEFAULT_FONT_FAMILY;
+    }
+
+    const genericFamilies = new Set([
+      'serif',
+      'sans-serif',
+      'monospace',
+      'cursive',
+      'fantasy',
+      'system-ui',
+      'ui-serif',
+      'ui-sans-serif',
+      'ui-monospace',
+      'ui-rounded',
+      'emoji',
+      'math',
+      'fangsong',
+    ]);
+    const hasGenericFamily = requested.some((family) =>
+      genericFamilies.has(this.normalizeFontFamilyToken(family)),
+    );
+
+    if (requested.length === 1 && !hasGenericFamily) {
+      return this.dedupeFontFamilies([
+        requested[0],
+        ...CERTIFICATE_RENDER_SAFE_FONT_FALLBACK_CHAIN,
+      ]).join(', ');
+    }
+
+    if (!hasGenericFamily) {
+      requested.push('sans-serif');
+    }
+
+    return this.dedupeFontFamilies(requested).join(', ');
+  }
+
   private estimateTextWidth(
     value: string,
     fontSize: number,
@@ -2642,10 +2724,7 @@ export class CertificatesService {
     const width = Math.max(1, Math.round(input.width));
     const height = Math.max(1, Math.round(input.height));
     const style = input.style;
-    const fontFamilyRaw =
-      typeof style.fontFamily === 'string' && style.fontFamily.trim().length > 0
-        ? style.fontFamily.trim()
-        : CERTIFICATE_RENDER_DEFAULT_FONT_FAMILY;
+    const fontFamilyRaw = this.resolvePdfFontFamily(style.fontFamily);
     const fontFamily = this.escapeXml(fontFamilyRaw);
     const fontSize = Math.max(
       8,

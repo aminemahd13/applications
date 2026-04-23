@@ -3693,7 +3693,10 @@ export class ApplicationsService {
   }
 
   private getAppBaseUrl(): string {
-    return resolveAppBaseUrl(process.env);
+    return resolveAppBaseUrl(process.env, {
+      strictPublic: true,
+      errorContext: 'completion credential links',
+    });
   }
 
   private getCredentialIssuerName(): string {

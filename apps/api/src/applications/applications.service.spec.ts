@@ -13,6 +13,7 @@ describe('ApplicationsService completion credentials', () => {
   beforeEach(() => {
     process.env.JWT_SECRET = 'test-secret';
     process.env.APP_BASE_URL = 'http://localhost:3000';
+    process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
 
     mockPrisma = {
       applications: {
@@ -34,6 +35,9 @@ describe('ApplicationsService completion credentials', () => {
   });
 
   afterEach(() => {
+    delete process.env.CORS_ORIGINS;
+    delete process.env.CORS_ORIGIN;
+    delete process.env.PUBLIC_APP_BASE_URL;
     delete process.env.APP_BASE_URL;
     delete process.env.JWT_SECRET;
   });
@@ -63,9 +67,31 @@ describe('ApplicationsService completion credentials', () => {
     const credential = await service.issueCompletionCredential('event-1', 'app-1');
 
     expect(credential.status).toBe('ISSUED');
+    expect(credential.certificateUrl).toMatch(
+      /^https:\/\/participant\.example\.com\/credentials\/certificate\//,
+    );
+    expect(credential.verifiableCredentialUrl).toMatch(
+      /^https:\/\/participant\.example\.com\/credentials\/verify\//,
+    );
     expect(credential.certificateUrl).toContain('/credentials/certificate/');
     expect(credential.verifiableCredentialUrl).toContain('/credentials/verify/');
     expect(mockPrisma.completion_credentials.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws an actionable error when strict public app URL cannot be resolved', () => {
+    delete process.env.PUBLIC_APP_BASE_URL;
+    process.env.APP_BASE_URL = 'http://0.0.0.0:3000';
+    process.env.CORS_ORIGINS = 'http://localhost:3000,http://api:3000';
+    process.env.CORS_ORIGIN = 'http://127.0.0.1:3000';
+
+    expect(() =>
+      (service as any).getCompletionCredentialLinks('certificate-1', 'credential-1'),
+    ).toThrow(
+      'Set PUBLIC_APP_BASE_URL to the public HTTPS origin',
+    );
+
+    delete process.env.CORS_ORIGINS;
+    delete process.env.CORS_ORIGIN;
   });
 
   it('revokes an existing completion credential', async () => {
@@ -495,6 +521,17 @@ describe('ApplicationsService detail draft answer visibility', () => {
 });
 
 describe('ApplicationsService applicant visibility', () => {
+  beforeEach(() => {
+    process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
+  });
+
+  afterEach(() => {
+    delete process.env.PUBLIC_APP_BASE_URL;
+    delete process.env.APP_BASE_URL;
+    delete process.env.CORS_ORIGINS;
+    delete process.env.CORS_ORIGIN;
+  });
+
   it('only resolves my application for published events', async () => {
     const mockPrisma = {
       applications: {

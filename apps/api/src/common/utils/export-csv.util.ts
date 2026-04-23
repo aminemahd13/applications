@@ -5,7 +5,13 @@ interface BuildCsvOptions {
   includeBom?: boolean;
 }
 
+interface ResolveAppBaseUrlOptions {
+  strictPublic?: boolean;
+  errorContext?: string;
+}
+
 const CSV_FORMULA_PREFIX_PATTERN = /^[\s]*[=+\-@]/;
+const DEFAULT_APP_BASE_URL = 'http://localhost:3000';
 
 function normalizeCsvCellValue(value: unknown): string {
   const raw = value === null || value === undefined ? '' : String(value);
@@ -33,22 +39,45 @@ export function buildCsvContent(
   return includeBom ? `\ufeff${csv}` : csv;
 }
 
-export function resolveAppBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveAppBaseUrl(
+  env: NodeJS.ProcessEnv = process.env,
+  options?: ResolveAppBaseUrlOptions,
+): string {
+  const strictPublic = options?.strictPublic ?? false;
   const candidates = [
     env.PUBLIC_APP_BASE_URL,
     env.APP_BASE_URL,
-    env.CORS_ORIGIN,
+    ...splitEnvOrigins(env.CORS_ORIGINS),
+    ...splitEnvOrigins(env.CORS_ORIGIN),
   ];
 
   for (const rawCandidate of candidates) {
-    const normalized = normalizePublicAppBaseUrl(rawCandidate);
+    const normalized = normalizePublicAppBaseUrl(rawCandidate, strictPublic);
     if (normalized) return normalized;
   }
 
-  return 'http://localhost:3000';
+  if (strictPublic) {
+    const context = options?.errorContext?.trim();
+    const contextSuffix = context ? ` for ${context}` : '';
+    throw new Error(
+      `Unable to resolve a public application base URL${contextSuffix}. Set PUBLIC_APP_BASE_URL to the public HTTPS origin (for example, https://participant.mathmaroc.org).`,
+    );
+  }
+
+  return DEFAULT_APP_BASE_URL;
 }
 
-function normalizePublicAppBaseUrl(rawValue: string | undefined): string | null {
+function splitEnvOrigins(rawValue: string | undefined): string[] {
+  return String(rawValue ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function normalizePublicAppBaseUrl(
+  rawValue: string | undefined,
+  strictPublic: boolean,
+): string | null {
   const trimmed = String(rawValue ?? '').trim();
   if (!trimmed) return null;
   if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
@@ -57,6 +86,9 @@ function normalizePublicAppBaseUrl(rawValue: string | undefined): string | null 
 
   try {
     const parsed = new URL(trimmed);
+    if (strictPublic && parsed.protocol !== 'https:') {
+      return null;
+    }
     if (isPrivateOrLoopbackHost(parsed.hostname)) {
       return null;
     }

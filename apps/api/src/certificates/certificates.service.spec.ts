@@ -269,6 +269,93 @@ describe('CertificatesService public resolvers', () => {
   });
 });
 
+describe('CertificatesService public link generation', () => {
+  beforeEach(() => {
+    process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
+  });
+
+  afterEach(() => {
+    delete process.env.PUBLIC_APP_BASE_URL;
+    delete process.env.APP_BASE_URL;
+    delete process.env.CORS_ORIGINS;
+    delete process.env.CORS_ORIGIN;
+  });
+
+  it('generates credential, QR, and PDF links from canonical public host', () => {
+    const { service } = createServiceHarness();
+
+    const credentialLinks = (service as any).getCredentialLinks(
+      'certificate-1',
+      'credential-1',
+    );
+    const qrUrl = (service as any).getQrVerificationUrl('token-1');
+    const pdfUrl = (service as any).getCertificatePdfUrl('certificate-1');
+
+    expect(credentialLinks.certificateUrl).toBe(
+      'https://participant.example.com/credentials/certificate/certificate-1',
+    );
+    expect(credentialLinks.verifiableCredentialUrl).toBe(
+      'https://participant.example.com/credentials/verify/credential-1',
+    );
+    expect(qrUrl).toBe(
+      'https://participant.example.com/credentials/qr/token-1',
+    );
+    expect(pdfUrl).toBe(
+      'https://participant.example.com/credentials/certificate/certificate-1/pdf',
+    );
+  });
+
+  it('throws actionable error when strict public host cannot be resolved', () => {
+    const { service } = createServiceHarness();
+    delete process.env.PUBLIC_APP_BASE_URL;
+    process.env.APP_BASE_URL = 'http://0.0.0.0:3000';
+    process.env.CORS_ORIGINS = 'http://localhost:3000,http://api:3000';
+    process.env.CORS_ORIGIN = 'http://127.0.0.1:3000';
+
+    expect(() =>
+      (service as any).getCredentialLinks('certificate-1', 'credential-1'),
+    ).toThrow('Set PUBLIC_APP_BASE_URL to the public HTTPS origin');
+  });
+});
+
+describe('CertificatesService PDF text font fallback', () => {
+  it('appends safe fallback chain for single custom font family', () => {
+    const { service } = createServiceHarness();
+
+    const svg = (service as any).buildTextOverlaySvg({
+      width: 800,
+      height: 120,
+      text: 'Certificate',
+      style: { fontFamily: 'Geist' },
+      defaultAlign: 'left',
+      defaultColor: '#0f172a',
+      defaultFontSize: 32,
+    });
+
+    expect(svg).toContain(
+      'font-family="Geist, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
+    );
+  });
+
+  it('preserves explicit multi-font order and guarantees a generic fallback', () => {
+    const { service } = createServiceHarness();
+
+    const svg = (service as any).buildTextOverlaySvg({
+      width: 800,
+      height: 120,
+      text: 'Certificate',
+      style: { fontFamily: '"Times New Roman", Georgia' },
+      defaultAlign: 'left',
+      defaultColor: '#0f172a',
+      defaultFontSize: 32,
+    });
+
+    expect(svg).toContain(
+      'font-family="&quot;Times New Roman&quot;, Georgia, sans-serif"',
+    );
+  });
+});
+
 describe('CertificatesService deleteTemplateVersion', () => {
   it('blocks deleting the active published version', async () => {
     const { service, prisma } = createVersionLifecycleHarness();
