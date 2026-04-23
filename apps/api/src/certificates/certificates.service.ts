@@ -1393,12 +1393,12 @@ export class CertificatesService {
       FROM (
         SELECT TRIM(unnest(tags)) AS tag
         FROM "applications"
-        WHERE "event_id" = $1
+        WHERE "event_id" = $1::uuid
       ) AS extracted
       WHERE tag <> ''
         AND ($2 = '' OR tag ILIKE '%' || $2 || '%')
       ORDER BY tag ASC
-      LIMIT $3
+      LIMIT $3::int
       `,
       eventId,
       search,
