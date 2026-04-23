@@ -73,10 +73,10 @@ interface LeftRailProps {
   assets: CertificateAsset[];
   assetSearch: string;
   onAssetSearchChange: (value: string) => void;
-  assetKindFilter: "all" | "background" | "signature" | "logo" | "image";
-  onAssetKindFilterChange: (value: "all" | "background" | "signature" | "logo" | "image") => void;
+  assetKindFilter: "all" | "background" | "signature" | "logo" | "image" | "font";
+  onAssetKindFilterChange: (value: "all" | "background" | "signature" | "logo" | "image" | "font") => void;
   onApplyAsset: (asset: CertificateAsset) => void;
-  onUploadAsset: (file: File, kind: "background" | "signature" | "logo" | "image") => void;
+  onUploadAsset: (file: File, kind: "background" | "signature" | "logo" | "image" | "font") => void;
   onDeleteAsset: (asset: CertificateAsset) => void;
   isUploadingAsset: boolean;
   issuanceApplicationIds: string;
@@ -200,13 +200,16 @@ export function LeftRail(props: LeftRailProps) {
 
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) ?? null;
   const filteredAssets = useMemo(() => {
-    const q = assetSearch.trim().toLowerCase();
-    if (!q) return assets;
     return assets.filter((asset) => {
+      if (assetKindFilter !== "all" && asset.kind !== assetKindFilter) {
+        return false;
+      }
+      const q = assetSearch.trim().toLowerCase();
+      if (!q) return true;
       const haystack = `${asset.originalFilename} ${asset.storageKey} ${asset.kind}`.toLowerCase();
       return haystack.includes(q);
     });
-  }, [assetSearch, assets]);
+  }, [assetKindFilter, assetSearch, assets]);
 
   return (
     <aside className="flex min-h-[72vh] min-w-[320px] max-w-[360px] flex-col overflow-hidden rounded-xl border bg-card/60">
@@ -412,7 +415,7 @@ export function LeftRail(props: LeftRailProps) {
                   Asset controls
                 </AccordionTrigger>
                 <AccordionContent className="space-y-2 pb-3">
-                  <div className="mt-1 grid grid-cols-3 gap-1 rounded-md bg-muted p-1">
+                  <div className="mt-1 grid grid-cols-4 gap-1 rounded-md bg-muted p-1">
                     <button
                       type="button"
                       className={cn(
@@ -443,6 +446,16 @@ export function LeftRail(props: LeftRailProps) {
                     >
                       Signature
                     </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded px-2 py-1 text-xs",
+                        assetMode === "font" ? "bg-background shadow-sm" : "text-muted-foreground",
+                      )}
+                      onClick={() => onAssetModeChange("font")}
+                    >
+                      Font
+                    </button>
                   </div>
                   <div className="grid grid-cols-[1fr_auto] gap-2">
                     <Select value={assetKindFilter} onValueChange={(value) => onAssetKindFilterChange(value as LeftRailProps["assetKindFilter"])}>
@@ -455,17 +468,31 @@ export function LeftRail(props: LeftRailProps) {
                         <SelectItem value="signature">Signature</SelectItem>
                         <SelectItem value="logo">Logo</SelectItem>
                         <SelectItem value="image">Image</SelectItem>
+                        <SelectItem value="font">Font</SelectItem>
                       </SelectContent>
                     </Select>
                     <label>
                       <input
                         type="file"
+                        accept={
+                          assetKindFilter === "font" || (assetKindFilter === "all" && assetMode === "font")
+                            ? ".ttf,.otf,.woff2,font/ttf,font/otf,font/woff2"
+                            : "image/*"
+                        }
                         className="hidden"
                         onChange={(event) => {
                           const file = event.target.files?.[0];
                           if (!file) return;
                           const fallbackKind =
-                            assetKindFilter === "all" ? (assetMode === "background" ? "background" : assetMode === "signature" ? "signature" : "image") : assetKindFilter;
+                            assetKindFilter === "all"
+                              ? assetMode === "background"
+                                ? "background"
+                                : assetMode === "signature"
+                                  ? "signature"
+                                  : assetMode === "font"
+                                    ? "font"
+                                    : "image"
+                              : assetKindFilter;
                           onUploadAsset(file, fallbackKind);
                           event.currentTarget.value = "";
                         }}
@@ -516,7 +543,7 @@ export function LeftRail(props: LeftRailProps) {
                             />
                           ) : (
                             <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-                              {asset.mimeType}
+                              {asset.kind === "font" ? "Font Asset" : asset.mimeType}
                             </div>
                           )}
                         </div>

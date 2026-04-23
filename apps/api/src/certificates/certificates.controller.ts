@@ -458,7 +458,8 @@ export class CertificatesController {
       kind === 'background' ||
       kind === 'signature' ||
       kind === 'logo' ||
-      kind === 'image'
+      kind === 'image' ||
+      kind === 'font'
         ? kind
         : 'all';
     const limit = Number(rawLimit ?? 120);

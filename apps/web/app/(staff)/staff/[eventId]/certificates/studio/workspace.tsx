@@ -103,6 +103,12 @@ function layoutHash(layout: CertificateLayout): string {
   return JSON.stringify(layout);
 }
 
+function deriveFontFamilyFromAsset(asset: CertificateAsset): string {
+  const baseName = asset.originalFilename.replace(/\.[a-z0-9]+$/i, "");
+  const normalized = baseName.replace(/[_-]+/g, " ").trim();
+  return normalized.length > 0 ? normalized : "Uploaded Font";
+}
+
 export function CertificateStudioWorkspace() {
   const params = useParams();
   const eventId = params.eventId as string;
@@ -128,7 +134,7 @@ export function CertificateStudioWorkspace() {
 
   const [view, setView] = useState<LeftRailView>("templates");
   const [assetMode, setAssetMode] = useState<AssetMode>("background");
-  const [assetKindFilter, setAssetKindFilter] = useState<"all" | "background" | "signature" | "logo" | "image">("all");
+  const [assetKindFilter, setAssetKindFilter] = useState<"all" | "background" | "signature" | "logo" | "image" | "font">("all");
   const [assetSearch, setAssetSearch] = useState("");
 
   const [templateNameDraft, setTemplateNameDraft] = useState("Participation Certificate");
@@ -215,7 +221,7 @@ export function CertificateStudioWorkspace() {
   const refreshWorkspace = useCallback(async () => {
     const [templateRows, assetRows, issuedRows, jobRows] = await Promise.all([
       listCertificateTemplates(eventId),
-      listCertificateAssets(eventId, assetKindFilter),
+      listCertificateAssets(eventId, "all"),
       listIssuedCertificates(eventId, { limit: 100 }),
       listCertificateRenderJobs(eventId, { limit: 100 }),
     ]);
@@ -233,7 +239,7 @@ export function CertificateStudioWorkspace() {
         templateRows.find((template) => template.isDefault && template.isActive) ?? templateRows[0] ?? null;
       return preferred?.id ?? null;
     });
-  }, [assetKindFilter, eventId]);
+  }, [eventId]);
 
   const refreshIssuanceTags = useCallback(() => {
     setIsLoadingIssuanceTags(true);
@@ -340,7 +346,7 @@ export function CertificateStudioWorkspace() {
     if (!canManage || isLoading) return;
     let cancelled = false;
 
-    listCertificateAssets(eventId, assetKindFilter)
+    listCertificateAssets(eventId, "all")
       .then((rows) => {
         if (!cancelled) {
           setAssets(rows);
@@ -355,7 +361,7 @@ export function CertificateStudioWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [assetKindFilter, canManage, eventId, isLoading]);
+  }, [canManage, eventId, isLoading]);
 
   useEffect(() => {
     if (issuanceSearchInput.trim()) return;
@@ -712,6 +718,37 @@ export function CertificateStudioWorkspace() {
 
   const handleApplyAsset = useCallback(
     (asset: CertificateAsset) => {
+      if (assetMode === "font") {
+        if (asset.kind !== "font") {
+          toast.error("Select a font asset.");
+          return;
+        }
+
+        if (selectedElement?.type !== "text" && selectedElement?.type !== "dynamic_text") {
+          toast.error("Select a text element to apply a font.");
+          return;
+        }
+
+        const currentStyle = (selectedElement.style ?? {}) as Record<string, unknown>;
+        const currentFamily = String(currentStyle.fontFamily ?? "").trim();
+        const nextFontFamily = currentFamily || deriveFontFamilyFromAsset(asset);
+        const nextStyle = {
+          ...currentStyle,
+          fontAssetKey: asset.storageKey,
+          fontFamily: nextFontFamily,
+        };
+
+        handleCommitPatches([
+          {
+            id: selectedElement.id,
+            patch: {
+              style: nextStyle,
+            } as Partial<CertificateTemplateElement>,
+          },
+        ]);
+        return;
+      }
+
       if (assetMode === "background") {
         handleUpdateCanvas({ backgroundAssetKey: asset.storageKey });
         return;
@@ -751,7 +788,7 @@ export function CertificateStudioWorkspace() {
   );
 
   const handleUploadAsset = useCallback(
-    (file: File, kind: "background" | "signature" | "logo" | "image") => {
+    (file: File, kind: "background" | "signature" | "logo" | "image" | "font") => {
       setIsUploadingAsset(true);
       uploadCertificateAsset(eventId, file, kind, csrfToken ?? undefined)
         .then((asset) => {
@@ -1457,6 +1494,7 @@ export function CertificateStudioWorkspace() {
             <EditorCanvas
               canManage={canManage}
               layout={layout}
+              assets={assets}
               previewData={previewData}
               selectedIds={selectedIds}
               zoomPercent={zoomPercent}
@@ -1478,6 +1516,7 @@ export function CertificateStudioWorkspace() {
                 onUpdatePrimaryTextContent={handleUpdateTextContent}
                 onUpdatePrimaryToken={handleUpdatePrimaryToken}
                 tokenOptions={Array.from(CERTIFICATE_DYNAMIC_TOKENS)}
+                assets={assets}
                 onUpdateCanvas={handleUpdateCanvas}
                 onSetAssetMode={setAssetMode}
                 onDeleteSelection={handleDeleteSelection}

@@ -1,4 +1,4 @@
-import { resolveAppBaseUrl } from './export-csv.util';
+import { resolveAppBaseUrl, resolvePublicAppBaseUrl } from './export-csv.util';
 
 describe('resolveAppBaseUrl', () => {
   it('prefers PUBLIC_APP_BASE_URL when valid', () => {
@@ -88,5 +88,50 @@ describe('resolveAppBaseUrl', () => {
     ).toThrow(
       'Unable to resolve a public application base URL for credential links. Set PUBLIC_APP_BASE_URL to the public HTTPS origin',
     );
+  });
+});
+
+describe('resolvePublicAppBaseUrl', () => {
+  it('accepts a valid PUBLIC_APP_BASE_URL', () => {
+    const value = resolvePublicAppBaseUrl({
+      PUBLIC_APP_BASE_URL: 'https://participant.example.com/',
+      APP_BASE_URL: 'http://0.0.0.0:3000',
+      CORS_ORIGINS: 'https://fallback.example.com',
+    } as NodeJS.ProcessEnv);
+
+    expect(value).toBe('https://participant.example.com');
+  });
+
+  it('rejects missing PUBLIC_APP_BASE_URL even when other hosts are present', () => {
+    expect(() =>
+      resolvePublicAppBaseUrl(
+        {
+          APP_BASE_URL: 'https://apply.example.com',
+          CORS_ORIGINS: 'https://participant.example.com',
+        } as NodeJS.ProcessEnv,
+        { errorContext: 'credential links' },
+      ),
+    ).toThrow(
+      'Unable to resolve a public application base URL for credential links. Set PUBLIC_APP_BASE_URL to the public HTTPS origin',
+    );
+  });
+
+  it('rejects loopback/private/internal PUBLIC_APP_BASE_URL values', () => {
+    const candidates = [
+      'http://0.0.0.0:3000',
+      'https://localhost:3000',
+      'https://127.0.0.1:3000',
+      'https://10.0.0.15:3000',
+      'https://api:3000',
+    ];
+
+    for (const candidate of candidates) {
+      expect(() =>
+        resolvePublicAppBaseUrl(
+          { PUBLIC_APP_BASE_URL: candidate } as NodeJS.ProcessEnv,
+          { errorContext: 'certificate links' },
+        ),
+      ).toThrow('Set PUBLIC_APP_BASE_URL to the public HTTPS origin');
+    }
   });
 });

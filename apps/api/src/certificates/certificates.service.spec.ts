@@ -9,13 +9,22 @@ function createServiceHarness() {
     },
     file_objects: {
       findFirst: jest.fn(),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      findMany: jest.fn(),
     },
   };
   const storageService = {
     getPresignedGetUrl: jest.fn(),
+    getHeadObject: jest.fn(),
+    getObjectBuffer: jest.fn(),
+    computeSha256: jest.fn(),
+    deleteObject: jest.fn(),
   };
   const cls = {
-    get: jest.fn(),
+    get: jest.fn((key: string) => (key === 'actorId' ? 'actor-1' : undefined)),
   };
 
   const service = new CertificatesService(
@@ -290,6 +299,10 @@ describe('CertificatesService public link generation', () => {
     );
     const qrUrl = (service as any).getQrVerificationUrl('token-1');
     const pdfUrl = (service as any).getCertificatePdfUrl('certificate-1');
+    const staffPdfUrl = (service as any).getStaffIssuedCertificatePdfUrl(
+      'event-1',
+      'issued-1',
+    );
 
     expect(credentialLinks.certificateUrl).toBe(
       'https://participant.example.com/credentials/certificate/certificate-1',
@@ -303,6 +316,9 @@ describe('CertificatesService public link generation', () => {
     expect(pdfUrl).toBe(
       'https://participant.example.com/credentials/certificate/certificate-1/pdf',
     );
+    expect(staffPdfUrl).toBe(
+      'https://participant.example.com/api/v1/events/event-1/certificates/issued-1/pdf',
+    );
   });
 
   it('throws actionable error when strict public host cannot be resolved', () => {
@@ -311,6 +327,17 @@ describe('CertificatesService public link generation', () => {
     process.env.APP_BASE_URL = 'http://0.0.0.0:3000';
     process.env.CORS_ORIGINS = 'http://localhost:3000,http://api:3000';
     process.env.CORS_ORIGIN = 'http://127.0.0.1:3000';
+
+    expect(() =>
+      (service as any).getCredentialLinks('certificate-1', 'credential-1'),
+    ).toThrow('Set PUBLIC_APP_BASE_URL to the public HTTPS origin');
+  });
+
+  it('requires PUBLIC_APP_BASE_URL even if APP_BASE_URL is otherwise public', () => {
+    const { service } = createServiceHarness();
+    delete process.env.PUBLIC_APP_BASE_URL;
+    process.env.APP_BASE_URL = 'https://apply.example.com';
+    process.env.CORS_ORIGINS = 'https://participant.example.com';
 
     expect(() =>
       (service as any).getCredentialLinks('certificate-1', 'credential-1'),
@@ -353,6 +380,134 @@ describe('CertificatesService PDF text font fallback', () => {
     expect(svg).toContain(
       'font-family="&quot;Times New Roman&quot;, Georgia, sans-serif"',
     );
+  });
+
+  it('embeds uploaded font face and keeps fallback chain when font asset is bound', () => {
+    const { service } = createServiceHarness();
+
+    const svg = (service as any).buildTextOverlaySvg({
+      width: 800,
+      height: 120,
+      text: 'Certificate',
+      style: { fontFamily: 'Brand Sans', fontAssetKey: 'events/event-1/certificates/assets/font/brand.woff2' },
+      embeddedFont: {
+        storageKey: 'events/event-1/certificates/assets/font/brand.woff2',
+        format: 'woff2',
+        mimeType: 'font/woff2',
+        buffer: Buffer.from('wOF2fontdata', 'utf8'),
+        internalFamily: 'CertificateUploadedFont_a1b2c3d4e5f6',
+      },
+      defaultAlign: 'left',
+      defaultColor: '#0f172a',
+      defaultFontSize: 32,
+    });
+
+    expect(svg).toContain('@font-face');
+    expect(svg).toContain('data:font/woff2;base64,');
+    expect(svg).toContain(
+      'font-family="&quot;CertificateUploadedFont_a1b2c3d4e5f6&quot;, Brand Sans, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
+    );
+  });
+});
+
+describe('CertificatesService font asset upload validation', () => {
+  it('accepts WOFF2 uploads when MIME and signature match', async () => {
+    const { service, prisma, storageService } = createServiceHarness();
+    prisma.file_objects.findUnique.mockResolvedValue({
+      id: 'file-1',
+      event_id: 'event-1',
+      created_by: 'actor-1',
+      status: 'STAGED',
+      storage_key: 'events/event-1/certificates/assets/font/sample.woff2',
+      mime_type: 'font/woff2',
+    });
+    storageService.getHeadObject.mockResolvedValue({
+      ContentLength: 128,
+      ContentType: 'font/woff2',
+    });
+    storageService.getObjectBuffer.mockResolvedValue(
+      Buffer.from('wOF2demo', 'utf8'),
+    );
+    storageService.computeSha256.mockResolvedValue('sha-256');
+    prisma.file_objects.update.mockResolvedValue({
+      id: 'file-1',
+      storage_key: 'events/event-1/certificates/assets/font/sample.woff2',
+      status: 'COMMITTED',
+    });
+
+    const result = await service.commitAssetUpload('event-1', 'file-1');
+
+    expect(result.status).toBe('COMMITTED');
+    expect(storageService.getObjectBuffer).toHaveBeenCalledWith(
+      'events/event-1/certificates/assets/font/sample.woff2',
+    );
+    expect(prisma.file_objects.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'file-1' },
+        data: expect.objectContaining({
+          status: 'COMMITTED',
+          sha256: 'sha-256',
+        }),
+      }),
+    );
+  });
+
+  it('rejects font uploads when MIME does not match detected signature', async () => {
+    const { service, prisma, storageService } = createServiceHarness();
+    prisma.file_objects.findUnique.mockResolvedValue({
+      id: 'file-2',
+      event_id: 'event-1',
+      created_by: 'actor-1',
+      status: 'STAGED',
+      storage_key: 'events/event-1/certificates/assets/font/sample.ttf',
+      mime_type: 'font/woff2',
+    });
+    storageService.getHeadObject.mockResolvedValue({
+      ContentLength: 256,
+      ContentType: 'font/woff2',
+    });
+    storageService.getObjectBuffer.mockResolvedValue(
+      Buffer.from([0x00, 0x01, 0x00, 0x00, 0x12]),
+    );
+
+    await expect(
+      service.commitAssetUpload('event-1', 'file-2'),
+    ).rejects.toThrow('Font MIME type mismatch');
+    expect(storageService.deleteObject).toHaveBeenCalledWith(
+      'events/event-1/certificates/assets/font/sample.ttf',
+    );
+    expect(prisma.file_objects.delete).toHaveBeenCalledWith({
+      where: { id: 'file-2' },
+    });
+  });
+
+  it('rejects unsupported font signatures', async () => {
+    const { service, prisma, storageService } = createServiceHarness();
+    prisma.file_objects.findUnique.mockResolvedValue({
+      id: 'file-3',
+      event_id: 'event-1',
+      created_by: 'actor-1',
+      status: 'STAGED',
+      storage_key: 'events/event-1/certificates/assets/font/sample.woff2',
+      mime_type: 'font/woff2',
+    });
+    storageService.getHeadObject.mockResolvedValue({
+      ContentLength: 180,
+      ContentType: 'font/woff2',
+    });
+    storageService.getObjectBuffer.mockResolvedValue(
+      Buffer.from('NOTAFONTFILE', 'utf8'),
+    );
+
+    await expect(
+      service.commitAssetUpload('event-1', 'file-3'),
+    ).rejects.toThrow('Unsupported font format');
+    expect(storageService.deleteObject).toHaveBeenCalledWith(
+      'events/event-1/certificates/assets/font/sample.woff2',
+    );
+    expect(prisma.file_objects.delete).toHaveBeenCalledWith({
+      where: { id: 'file-3' },
+    });
   });
 });
 

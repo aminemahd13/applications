@@ -22,6 +22,7 @@ export interface CertificateElementBase {
 
 export interface CertificateTextStyle {
   fontFamily?: string;
+  fontAssetKey?: string;
   fontSize?: number;
   fontWeight?: number;
   lineHeight?: number;
@@ -192,7 +193,7 @@ export interface CertificateAsset {
   mimeType: string;
   sizeBytes: number;
   createdAt: string;
-  kind: "background" | "signature" | "logo" | "image";
+  kind: "background" | "signature" | "logo" | "image" | "font";
 }
 
 export interface CertificateIssuanceCandidate {
@@ -851,9 +852,34 @@ export async function pollCertificatePdfExportJobUntilTerminal(params: {
   }
 }
 
+function resolveUploadMimeType(
+  file: File,
+  kind: "background" | "signature" | "logo" | "image" | "font",
+): string {
+  const rawType = String(file.type ?? "").trim().toLowerCase();
+  if (rawType && rawType !== "application/octet-stream") {
+    return rawType;
+  }
+
+  const fileName = String(file.name ?? "").toLowerCase();
+  if (kind === "font") {
+    if (fileName.endsWith(".ttf")) return "font/ttf";
+    if (fileName.endsWith(".otf")) return "font/otf";
+    if (fileName.endsWith(".woff2")) return "font/woff2";
+  }
+
+  if (fileName.endsWith(".png")) return "image/png";
+  if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) return "image/jpeg";
+  if (fileName.endsWith(".webp")) return "image/webp";
+  if (fileName.endsWith(".gif")) return "image/gif";
+  if (fileName.endsWith(".svg")) return "image/svg+xml";
+
+  return rawType || "application/octet-stream";
+}
+
 export async function listCertificateAssets(
   eventId: string,
-  kind: "all" | "background" | "signature" | "logo" | "image" = "all",
+  kind: "all" | "background" | "signature" | "logo" | "image" | "font" = "all",
 ): Promise<CertificateAsset[]> {
   const response = await apiClient<unknown>(
     `/admin/events/${eventId}/certificates/assets?kind=${kind}`,
@@ -864,16 +890,18 @@ export async function listCertificateAssets(
 export async function uploadCertificateAsset(
   eventId: string,
   file: File,
-  kind: "background" | "signature" | "logo" | "image",
+  kind: "background" | "signature" | "logo" | "image" | "font",
   csrfToken?: string,
 ): Promise<CertificateAsset> {
+  const normalizedMimeType = resolveUploadMimeType(file, kind);
+
   const upload = await apiClient<unknown>(
     `/admin/events/${eventId}/certificates/assets/uploads`,
     {
       method: "POST",
       body: {
         originalFilename: file.name,
-        mimeType: file.type || "application/octet-stream",
+        mimeType: normalizedMimeType,
         sizeBytes: file.size,
         kind,
       },
@@ -889,7 +917,7 @@ export async function uploadCertificateAsset(
   const putRes = await fetch(uploadData.uploadUrl, {
     method: "PUT",
     headers: {
-      "Content-Type": file.type || "application/octet-stream",
+      "Content-Type": normalizedMimeType,
     },
     body: file,
   });
@@ -910,7 +938,7 @@ export async function uploadCertificateAsset(
     id: uploadData.id,
     storageKey: uploadData.storageKey,
     originalFilename: file.name,
-    mimeType: file.type || "application/octet-stream",
+    mimeType: normalizedMimeType,
     sizeBytes: file.size,
     createdAt: new Date().toISOString(),
     kind,

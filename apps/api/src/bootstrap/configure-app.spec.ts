@@ -50,6 +50,7 @@ describe('validateProductionEnv', () => {
     process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/db';
     process.env.REDIS_URL = 'redis://localhost:6379';
     process.env.APP_BASE_URL = 'https://example.com';
+    process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
     process.env.MINIO_ENDPOINT = 'minio';
 
     const exitSpy = jest.spyOn(process, 'exit');
@@ -58,5 +59,26 @@ describe('validateProductionEnv', () => {
 
     expect(() => validateProductionEnv()).not.toThrow();
     expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails when PUBLIC_APP_BASE_URL is not a valid public https origin', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'x'.repeat(32);
+    process.env.SESSION_SECRET = 'y'.repeat(32);
+    process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/db';
+    process.env.REDIS_URL = 'redis://localhost:6379';
+    process.env.APP_BASE_URL = 'https://example.com';
+    process.env.PUBLIC_APP_BASE_URL = 'http://0.0.0.0:3000';
+    process.env.MINIO_ENDPOINT = 'minio';
+
+    const exitError = new Error('process.exit called');
+    const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {
+      throw exitError;
+    }) as never);
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    expect(() => validateProductionEnv()).toThrow(exitError);
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });

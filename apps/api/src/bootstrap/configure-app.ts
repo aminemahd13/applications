@@ -4,6 +4,7 @@ import { ZodExceptionFilter } from '../common/filters/zod-exception.filter';
 import { ThrottlingExceptionFilter } from '../common/filters/throttling-exception.filter';
 import type { NextFunction, Request, Response } from 'express';
 import session, { Session, SessionData, Store } from 'express-session';
+import { resolvePublicAppBaseUrl } from '../common/utils/export-csv.util';
 
 type RedisStoreConstructor = new (options: {
   client: Redis;
@@ -71,6 +72,14 @@ export function validateProductionEnv() {
     if (!process.env[key]) {
       errors.push(`${key} is required in production`);
     }
+  }
+
+  try {
+    resolvePublicAppBaseUrl(process.env, {
+      errorContext: 'production credential links',
+    });
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
   }
 
   // Optional but recommended with warnings

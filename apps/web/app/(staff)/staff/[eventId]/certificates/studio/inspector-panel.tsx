@@ -11,12 +11,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { CertificateLayout, CertificateTemplateElement } from "@/lib/certificates";
+import type {
+  CertificateAsset,
+  CertificateLayout,
+  CertificateTemplateElement,
+} from "@/lib/certificates";
 import type { AssetMode } from "./utils";
 
 interface InspectorPanelProps {
   canManage: boolean;
   layout: CertificateLayout;
+  assets: CertificateAsset[];
   selectedElement: CertificateTemplateElement | null;
   selectedCount: number;
   onPatchSelection: (patch: Partial<CertificateTemplateElement>) => void;
@@ -55,6 +60,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
   const {
     canManage,
     layout,
+    assets,
     selectedElement,
     selectedCount,
     onPatchSelection,
@@ -77,6 +83,10 @@ export function InspectorPanel(props: InspectorPanelProps) {
   const availableSlotKeys = useMemo(
     () => layout.signatureSlots.map((slot) => slot.key),
     [layout.signatureSlots],
+  );
+  const fontAssets = useMemo(
+    () => assets.filter((asset) => asset.kind === "font"),
+    [assets],
   );
 
   const selectedToken =
@@ -122,7 +132,11 @@ export function InspectorPanel(props: InspectorPanelProps) {
               variant="outline"
               className="w-full"
               onClick={() => {
-                onSetAssetMode("image");
+                if (selectedElement?.type === "text" || selectedElement?.type === "dynamic_text") {
+                  onSetAssetMode("font");
+                  return;
+                }
+                onSetAssetMode(selectedElement?.type === "signature" ? "signature" : "image");
               }}
               disabled={!canManage || !selectedElement}
             >
@@ -268,6 +282,89 @@ export function InspectorPanel(props: InspectorPanelProps) {
                           placeholder="tokenName"
                         />
                       </label>
+                    )}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Font source</span>
+                    <Select
+                      value={String(style.fontAssetKey ?? "").trim() ? "uploaded" : "system"}
+                      disabled={!canManage}
+                      onValueChange={(value) => {
+                        if (value === "uploaded") {
+                          const firstFont = fontAssets[0];
+                          if (!firstFont) {
+                            onSetAssetMode("font");
+                            return;
+                          }
+                          onPatchSelectionStyle({
+                            fontAssetKey: firstFont.storageKey,
+                            fontFamily:
+                              readString(style.fontFamily, "").trim() ||
+                              firstFont.originalFilename.replace(/\.[a-z0-9]+$/i, "").replace(/[_-]+/g, " ").trim() ||
+                              "Uploaded Font",
+                          });
+                          return;
+                        }
+                        onPatchSelectionStyle({ fontAssetKey: undefined });
+                      }}
+                    >
+                      <SelectTrigger className="h-8">
+                        <SelectValue placeholder="Font source" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="system">System</SelectItem>
+                        <SelectItem value="uploaded">Uploaded</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Font family</span>
+                    <Input
+                      value={readString(style.fontFamily, "Geist")}
+                      disabled={!canManage}
+                      className="h-8"
+                      onChange={(event) => onPatchSelectionStyle({ fontFamily: event.target.value })}
+                    />
+                  </label>
+                </div>
+
+                {String(style.fontAssetKey ?? "").trim().length > 0 && (
+                  <div className="space-y-2 rounded-md border border-dashed p-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs text-muted-foreground">Uploaded font</Label>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onSetAssetMode("font")}
+                        disabled={!canManage}
+                      >
+                        Open assets
+                      </Button>
+                    </div>
+                    {fontAssets.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        No uploaded fonts found. Upload a TTF, OTF, or WOFF2 asset first.
+                      </p>
+                    ) : (
+                      <Select
+                        value={String(style.fontAssetKey ?? "").trim()}
+                        disabled={!canManage}
+                        onValueChange={(value) => onPatchSelectionStyle({ fontAssetKey: value })}
+                      >
+                        <SelectTrigger className="h-8">
+                          <SelectValue placeholder="Select uploaded font" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {fontAssets.map((asset) => (
+                            <SelectItem key={asset.id} value={asset.storageKey}>
+                              {asset.originalFilename}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     )}
                   </div>
                 )}

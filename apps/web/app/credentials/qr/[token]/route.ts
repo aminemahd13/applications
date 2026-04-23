@@ -11,10 +11,12 @@ export async function GET(
   context: RouteContext,
 ): Promise<Response> {
   const { token } = await context.params;
-  const target = new URL(
-    `/api/v1/credentials/qr/${encodeURIComponent(token)}`,
-    req.url,
-  );
-  target.search = req.nextUrl.search;
-  return NextResponse.redirect(target);
+  const path = `/api/v1/credentials/qr/${encodeURIComponent(token)}`;
+  const location = req.nextUrl.search ? `${path}${req.nextUrl.search}` : path;
+  return new NextResponse(null, {
+    status: 307,
+    headers: {
+      Location: location,
+    },
+  });
 }

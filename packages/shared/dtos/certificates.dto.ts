@@ -28,6 +28,7 @@ const CertificateElementBaseSchema = z.object({
 
 export const CertificateTextStyleSchema = z.object({
   fontFamily: z.string().trim().min(1).max(120).optional(),
+  fontAssetKey: z.string().trim().min(1).max(500).optional(),
   fontSize: z.number().min(8).max(400).optional(),
   fontWeight: z.number().int().min(100).max(900).optional(),
   lineHeight: z.number().min(0.8).max(3).optional(),
@@ -504,6 +505,7 @@ export const CertificateAssetKindSchema = z.enum([
   'signature',
   'logo',
   'image',
+  'font',
 ]);
 
 export type CertificateAssetKind = z.infer<typeof CertificateAssetKindSchema>;

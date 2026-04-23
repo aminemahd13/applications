@@ -55,6 +55,7 @@ import {
   buildCsvContent,
   joinAppUrl,
   resolveAppBaseUrl,
+  resolvePublicAppBaseUrl,
 } from '../common/utils/export-csv.util';
 
 type ApplicationsListRecord = {
@@ -3693,8 +3694,22 @@ export class ApplicationsService {
   }
 
   private getAppBaseUrl(): string {
-    return resolveAppBaseUrl(process.env, {
-      strictPublic: true,
+    const appBaseUrl = String(process.env.APP_BASE_URL ?? '').trim();
+    if (appBaseUrl.length > 0) {
+      try {
+        return new URL(appBaseUrl).toString().replace(/\/+$/, '');
+      } catch {
+        // fall through
+      }
+    }
+
+    const envWithoutPublic = { ...process.env };
+    delete envWithoutPublic.PUBLIC_APP_BASE_URL;
+    return resolveAppBaseUrl(envWithoutPublic);
+  }
+
+  private getCredentialBaseUrl(): string {
+    return resolvePublicAppBaseUrl(process.env, {
       errorContext: 'completion credential links',
     });
   }
@@ -3715,7 +3730,7 @@ export class ApplicationsService {
     certificateId: string,
     credentialId: string,
   ): { certificateUrl: string; verifiableCredentialUrl: string } {
-    const appBaseUrl = this.getAppBaseUrl();
+    const appBaseUrl = this.getCredentialBaseUrl();
     return {
       certificateUrl: joinAppUrl(
         appBaseUrl,
@@ -3804,7 +3819,7 @@ export class ApplicationsService {
 
     const hideUnreleased = options?.hideUnreleased === true;
     const isCheckedIn = options?.isCheckedIn === true;
-    const appBaseUrl = this.getAppBaseUrl();
+    const appBaseUrl = this.getCredentialBaseUrl();
     return rows
       .filter((row) => {
         if (!hideUnreleased) return true;

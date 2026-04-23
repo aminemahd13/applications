@@ -37,7 +37,7 @@ import { Prisma } from '@event-platform/db';
 import * as crypto from 'crypto';
 import * as jwt from 'jsonwebtoken';
 import { createHmac } from 'node:crypto';
-import { joinAppUrl, resolveAppBaseUrl } from '../common/utils/export-csv.util';
+import { joinAppUrl, resolvePublicAppBaseUrl } from '../common/utils/export-csv.util';
 import JSZip from 'jszip';
 import QRCode from 'qrcode';
 import sharp from 'sharp';
@@ -59,8 +59,44 @@ const CERTIFICATE_RENDER_SAFE_FONT_FALLBACK_CHAIN = [
 ];
 const CERTIFICATE_RENDER_DEFAULT_FONT_FAMILY =
   CERTIFICATE_RENDER_SAFE_FONT_FALLBACK_CHAIN.join(', ');
+const CERTIFICATE_FONT_MIME_BY_FORMAT = {
+  ttf: ['font/ttf', 'application/x-font-ttf', 'application/font-sfnt'],
+  otf: [
+    'font/otf',
+    'font/opentype',
+    'application/x-font-opentype',
+    'application/font-sfnt',
+  ],
+  woff2: ['font/woff2', 'application/font-woff2'],
+} as const satisfies Record<string, readonly string[]>;
+const CERTIFICATE_FONT_DATA_MIME_BY_FORMAT = {
+  ttf: 'font/ttf',
+  otf: 'font/otf',
+  woff2: 'font/woff2',
+} as const;
+const CERTIFICATE_FONT_CSS_FORMAT_BY_FORMAT = {
+  ttf: 'truetype',
+  otf: 'opentype',
+  woff2: 'woff2',
+} as const;
 const CERTIFICATE_PDF_MAX_WIDTH_POINTS = 842;
 const CERTIFICATE_PDF_MAX_HEIGHT_POINTS = 595;
+
+type CertificateAssetKind =
+  | 'background'
+  | 'signature'
+  | 'logo'
+  | 'image'
+  | 'font';
+type CertificateFontFormat = keyof typeof CERTIFICATE_FONT_MIME_BY_FORMAT;
+
+interface LoadedCertificateFontAsset {
+  storageKey: string;
+  format: CertificateFontFormat;
+  mimeType: string;
+  buffer: Buffer;
+  internalFamily: string;
+}
 
 interface QrSigningConfig {
   activeKid: string;
@@ -152,8 +188,7 @@ export class CertificatesService {
   }
 
   private getAppBaseUrl(): string {
-    return resolveAppBaseUrl(process.env, {
-      strictPublic: true,
+    return resolvePublicAppBaseUrl(process.env, {
       errorContext: 'certificate and credential links',
     });
   }
@@ -2122,6 +2157,10 @@ export class CertificatesService {
     if (!CERTIFICATE_ASSET_PREFIX.test(file.storage_key)) {
       throw new BadRequestException('Asset storage key is invalid');
     }
+    const assetKind = this.detectCertificateAssetKind(file.storage_key);
+    if (!assetKind) {
+      throw new BadRequestException('Asset kind is invalid');
+    }
 
     if (file.status === 'COMMITTED') {
       return {
@@ -2171,6 +2210,33 @@ export class CertificatesService {
       throw new BadRequestException('File type not allowed.');
     }
 
+    if (assetKind === 'font') {
+      const fileBuffer = await this.storageService.getObjectBuffer(file.storage_key);
+      const detectedFormat = this.detectFontFormatFromBuffer(fileBuffer);
+      if (!detectedFormat) {
+        await this.cleanupFailedUpload(file.storage_key, file.id);
+        throw new BadRequestException(
+          'Unsupported font format. Upload TTF, OTF, or WOFF2 files only.',
+        );
+      }
+
+      const validExpectedMime = this.isAllowedFontMimeForFormat(
+        expectedMime,
+        detectedFormat,
+      );
+      const validActualMime = this.isAllowedFontMimeForFormat(
+        actualMime,
+        detectedFormat,
+      );
+
+      if (!validExpectedMime || !validActualMime) {
+        await this.cleanupFailedUpload(file.storage_key, file.id);
+        throw new BadRequestException(
+          `Font MIME type mismatch. Detected ${detectedFormat.toUpperCase()} signature but received ${actualMime}.`,
+        );
+      }
+    }
+
     const sha256 = await this.storageService.computeSha256(file.storage_key);
 
     const committed = await this.prisma.file_objects.update({
@@ -2192,7 +2258,7 @@ export class CertificatesService {
 
   async listAssets(
     eventId: string,
-    kind: 'all' | 'background' | 'signature' | 'logo' | 'image',
+    kind: 'all' | 'background' | 'signature' | 'logo' | 'image' | 'font',
     limit: number,
   ) {
     const where: any = {
@@ -2683,6 +2749,76 @@ export class CertificatesService {
     return fallbackMime;
   }
 
+  private detectCertificateAssetKind(
+    storageKey: string,
+  ): CertificateAssetKind | null {
+    const normalized = String(storageKey ?? '')
+      .trim()
+      .replace(/^\/+/, '');
+    const match = normalized.match(
+      /^events\/[^/]+\/certificates\/assets\/([^/]+)\//,
+    );
+    if (!match) return null;
+    const kind = String(match[1] ?? '').trim().toLowerCase();
+    if (
+      kind === 'background' ||
+      kind === 'signature' ||
+      kind === 'logo' ||
+      kind === 'image' ||
+      kind === 'font'
+    ) {
+      return kind;
+    }
+    return null;
+  }
+
+  private detectFontFormatFromBuffer(
+    buffer: Buffer,
+  ): CertificateFontFormat | null {
+    if (buffer.byteLength < 4) return null;
+    const magic = buffer.subarray(0, 4);
+    if (
+      magic[0] === 0x00 &&
+      magic[1] === 0x01 &&
+      magic[2] === 0x00 &&
+      magic[3] === 0x00
+    ) {
+      return 'ttf';
+    }
+    if (magic.toString('ascii') === 'OTTO') {
+      return 'otf';
+    }
+    if (magic.toString('ascii') === 'wOF2') {
+      return 'woff2';
+    }
+    return null;
+  }
+
+  private detectFontFormatFromMimeType(
+    mimeType: string,
+  ): CertificateFontFormat | null {
+    const normalized = this.normalizeMimeType(mimeType);
+    const entries = Object.entries(CERTIFICATE_FONT_MIME_BY_FORMAT) as Array<
+      [CertificateFontFormat, readonly string[]]
+    >;
+    for (const [format, allowedMimeTypes] of entries) {
+      if (allowedMimeTypes.includes(normalized)) {
+        return format;
+      }
+    }
+    return null;
+  }
+
+  private isAllowedFontMimeForFormat(
+    mimeType: string,
+    format: CertificateFontFormat,
+  ): boolean {
+    const normalized = this.normalizeMimeType(mimeType);
+    const allowedMimeTypes =
+      CERTIFICATE_FONT_MIME_BY_FORMAT[format] as readonly string[];
+    return allowedMimeTypes.includes(normalized);
+  }
+
   private async loadRenderableCertificateAsset(
     storageKey: string,
   ): Promise<Buffer | null> {
@@ -2712,11 +2848,106 @@ export class CertificatesService {
     }
   }
 
+  private normalizeCertificateFontAssetKey(rawValue: unknown): string | null {
+    const normalized = String(rawValue ?? '')
+      .trim()
+      .replace(/^\/+/, '');
+    if (!normalized || !CERTIFICATE_ASSET_PREFIX.test(normalized)) {
+      return null;
+    }
+    if (this.detectCertificateAssetKind(normalized) !== 'font') {
+      return null;
+    }
+    return normalized;
+  }
+
+  private buildUploadedFontFamilyName(storageKey: string): string {
+    const hash = crypto
+      .createHash('sha1')
+      .update(storageKey)
+      .digest('hex')
+      .slice(0, 12);
+    return `CertificateUploadedFont_${hash}`;
+  }
+
+  private escapeCssString(value: string): string {
+    return String(value ?? '')
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'");
+  }
+
+  private buildEmbeddedFontFaceCss(font: LoadedCertificateFontAsset): string {
+    const dataMimeType = CERTIFICATE_FONT_DATA_MIME_BY_FORMAT[font.format];
+    const cssFormat = CERTIFICATE_FONT_CSS_FORMAT_BY_FORMAT[font.format];
+    const familyName = this.escapeCssString(font.internalFamily);
+    const base64 = font.buffer.toString('base64');
+    return `@font-face { font-family: '${familyName}'; src: url("data:${dataMimeType};base64,${base64}") format('${cssFormat}'); font-style: normal; font-weight: 100 900; font-display: swap; }`;
+  }
+
+  private resolveTextOverlayFontFamily(input: {
+    style: Record<string, unknown>;
+    embeddedFont?: LoadedCertificateFontAsset | null;
+  }): { fontFamily: string; fontFaceCss?: string } {
+    const fallbackFamily = this.resolvePdfFontFamily(input.style.fontFamily);
+    if (!input.embeddedFont) {
+      return {
+        fontFamily: fallbackFamily,
+      };
+    }
+
+    const fallbackStack = this.parseFontFamilyStack(fallbackFamily);
+    const mergedStack = this.dedupeFontFamilies([
+      `"${input.embeddedFont.internalFamily}"`,
+      ...fallbackStack,
+    ]);
+
+    return {
+      fontFamily: mergedStack.join(', '),
+      fontFaceCss: this.buildEmbeddedFontFaceCss(input.embeddedFont),
+    };
+  }
+
+  private async loadRenderableCertificateFontAsset(
+    storageKey: string,
+  ): Promise<LoadedCertificateFontAsset | null> {
+    const normalizedKey = this.normalizeCertificateFontAssetKey(storageKey);
+    if (!normalizedKey) {
+      return null;
+    }
+
+    try {
+      const buffer = await this.storageService.getObjectBuffer(normalizedKey);
+      if (!buffer || buffer.byteLength === 0) return null;
+      const format = this.detectFontFormatFromBuffer(buffer);
+      if (!format) {
+        this.logger.warn(
+          `Unsupported certificate font asset signature for "${normalizedKey}"`,
+        );
+        return null;
+      }
+      return {
+        storageKey: normalizedKey,
+        format,
+        mimeType: CERTIFICATE_FONT_DATA_MIME_BY_FORMAT[format],
+        buffer,
+        internalFamily: this.buildUploadedFontFamilyName(normalizedKey),
+      };
+    } catch (error) {
+      this.logger.warn(
+        `Could not load certificate font asset "${normalizedKey}": ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
+  }
+
   private buildTextOverlaySvg(input: {
     width: number;
     height: number;
     text: string;
     style: Record<string, unknown>;
+    embeddedFont?: LoadedCertificateFontAsset | null;
     defaultAlign?: 'left' | 'center' | 'right';
     defaultColor?: string;
     defaultFontSize?: number;
@@ -2724,7 +2955,11 @@ export class CertificatesService {
     const width = Math.max(1, Math.round(input.width));
     const height = Math.max(1, Math.round(input.height));
     const style = input.style;
-    const fontFamilyRaw = this.resolvePdfFontFamily(style.fontFamily);
+    const fontResolution = this.resolveTextOverlayFontFamily({
+      style,
+      embeddedFont: input.embeddedFont,
+    });
+    const fontFamilyRaw = fontResolution.fontFamily;
     const fontFamily = this.escapeXml(fontFamilyRaw);
     const fontSize = Math.max(
       8,
@@ -2787,7 +3022,10 @@ export class CertificatesService {
         return `<text x="${this.formatPdfNumber(x)}" y="${this.formatPdfNumber(y)}" fill="${color}" font-family="${fontFamily}" font-size="${this.formatPdfNumber(fontSize)}" font-weight="${fontWeight}" text-anchor="${anchor}" letter-spacing="${this.formatPdfNumber(letterSpacing)}">${lineText}</text>`;
       })
       .join('');
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${lineNodes}</svg>`;
+    const embeddedFontNode = fontResolution.fontFaceCss
+      ? `<defs><style><![CDATA[${fontResolution.fontFaceCss}]]></style></defs>`
+      : '';
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${embeddedFontNode}${lineNodes}</svg>`;
   }
 
   private buildQrOverlaySvg(input: {
@@ -3084,6 +3322,7 @@ export class CertificatesService {
       layout.signatureSlots.map((slot) => [slot.key, slot]),
     );
     const assetKeys = new Set<string>();
+    const fontAssetKeys = new Set<string>();
     if (
       typeof layout.canvas.backgroundAssetKey === 'string' &&
       layout.canvas.backgroundAssetKey.trim().length > 0
@@ -3095,6 +3334,15 @@ export class CertificatesService {
       if (assetKey) {
         assetKeys.add(assetKey);
       }
+      if (element.type === 'text' || element.type === 'dynamic_text') {
+        const style = this.toRecord((element as { style?: unknown }).style);
+        const fontAssetKey = this.normalizeCertificateFontAssetKey(
+          style.fontAssetKey,
+        );
+        if (fontAssetKey) {
+          fontAssetKeys.add(fontAssetKey);
+        }
+      }
     }
 
     const assetBufferByKey = new Map<string, Buffer>();
@@ -3102,6 +3350,15 @@ export class CertificatesService {
       const buffer = await this.loadRenderableCertificateAsset(assetKey);
       if (buffer) {
         assetBufferByKey.set(assetKey, buffer);
+      }
+    }
+
+    const fontAssetByKey = new Map<string, LoadedCertificateFontAsset>();
+    for (const fontAssetKey of fontAssetKeys) {
+      const fontAsset =
+        await this.loadRenderableCertificateFontAsset(fontAssetKey);
+      if (fontAsset) {
+        fontAssetByKey.set(fontAssetKey, fontAsset);
       }
     }
 
@@ -3148,11 +3405,17 @@ export class CertificatesService {
       if (element.type === 'text' || element.type === 'dynamic_text') {
         const style = this.toRecord((element as { style?: unknown }).style);
         const textValue = this.resolveElementTextValue(element, payloadTokens);
+        const fontAssetKey = this.normalizeCertificateFontAssetKey(
+          style.fontAssetKey,
+        );
         const textSvg = this.buildTextOverlaySvg({
           width,
           height,
           text: textValue,
           style,
+          embeddedFont: fontAssetKey
+            ? (fontAssetByKey.get(fontAssetKey) ?? null)
+            : null,
           defaultAlign: 'left',
           defaultColor: '#0f172a',
           defaultFontSize: 32,
@@ -3180,11 +3443,17 @@ export class CertificatesService {
         } else if (element.type === 'signature') {
           const slot = signatureSlotByKey.get(element.signatureSlotKey);
           const label = String(slot?.signerName ?? slot?.label ?? 'Signature');
+          const fontAssetKey = this.normalizeCertificateFontAssetKey(
+            style.fontAssetKey,
+          );
           const textSvg = this.buildTextOverlaySvg({
             width,
             height,
             text: label,
             style,
+            embeddedFont: fontAssetKey
+              ? (fontAssetByKey.get(fontAssetKey) ?? null)
+              : null,
             defaultAlign: 'center',
             defaultColor: '#64748b',
             defaultFontSize: 20,

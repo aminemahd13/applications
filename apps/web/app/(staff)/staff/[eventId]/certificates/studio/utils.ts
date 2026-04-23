@@ -8,7 +8,7 @@ import type {
   CertificateSignatureElement,
 } from "@/lib/certificates";
 
-export type AssetMode = "background" | "image" | "signature";
+export type AssetMode = "background" | "image" | "signature" | "font";
 
 export type LeftRailView = "templates" | "assets" | "issuance";
 

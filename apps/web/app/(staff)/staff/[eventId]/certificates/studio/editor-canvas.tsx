@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Konva from "konva";
 import { Group, Layer, Line, Rect, Stage, Text, Transformer, Image as KonvaImage } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
-import type { CertificateLayout, CertificateTemplateElement } from "@/lib/certificates";
+import type {
+  CertificateAsset,
+  CertificateLayout,
+  CertificateTemplateElement,
+} from "@/lib/certificates";
 import type { PreviewData } from "./utils";
 import { resolveAssetUrl } from "./utils";
 
@@ -31,6 +35,7 @@ interface LassoRect {
 interface EditorCanvasProps {
   canManage: boolean;
   layout: CertificateLayout;
+  assets: CertificateAsset[];
   previewData: PreviewData;
   selectedIds: string[];
   zoomPercent: number;
@@ -71,6 +76,16 @@ function getTokenValue(element: CertificateTemplateElement, previewData: Preview
     return previewData[token] ?? `{{${token}}}`;
   }
   return "";
+}
+
+function buildUploadedFontFamilyName(storageKey: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < storageKey.length; index += 1) {
+    hash ^= storageKey.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const hex = (hash >>> 0).toString(16).padStart(8, "0");
+  return `CertificateUploadedFont_${hex}`;
 }
 
 function getSnapResult(
@@ -169,6 +184,7 @@ export function EditorCanvas(props: EditorCanvasProps) {
   const {
     canManage,
     layout,
+    assets,
     previewData,
     selectedIds,
     zoomPercent,
@@ -187,6 +203,7 @@ export function EditorCanvas(props: EditorCanvasProps) {
   const lassoStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const [imageMap, setImageMap] = useState<Record<string, HTMLImageElement>>({});
+  const [fontFamilyByAssetKey, setFontFamilyByAssetKey] = useState<Record<string, string>>({});
   const [lassoRect, setLassoRect] = useState<LassoRect | null>(null);
   const [snapGuides, setSnapGuides] = useState<SnapGuides>({ vertical: [], horizontal: [] });
 
@@ -263,6 +280,74 @@ export function EditorCanvas(props: EditorCanvasProps) {
       cancelled = true;
     };
   }, [imageMap, layout.canvas.backgroundAssetKey, layout.elements, layout.signatureSlots]);
+
+  useEffect(() => {
+    const availableFontKeys = new Set(
+      assets
+        .filter((asset) => asset.kind === "font")
+        .map((asset) => asset.storageKey.trim())
+        .filter((value) => value.length > 0),
+    );
+
+    const pendingKeys = new Set<string>();
+    for (const element of layout.elements) {
+      if (element.type !== "text" && element.type !== "dynamic_text") {
+        continue;
+      }
+      const style = (element.style ?? {}) as Record<string, unknown>;
+      const fontAssetKey = String(style.fontAssetKey ?? "").trim();
+      if (!fontAssetKey) {
+        continue;
+      }
+      if (availableFontKeys.size > 0 && !availableFontKeys.has(fontAssetKey)) {
+        continue;
+      }
+      if (!fontFamilyByAssetKey[fontAssetKey]) {
+        pendingKeys.add(fontAssetKey);
+      }
+    }
+
+    if (pendingKeys.size === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    Promise.all(
+      Array.from(pendingKeys).map(async (fontAssetKey) => {
+        const familyName = buildUploadedFontFamilyName(fontAssetKey);
+        if (document.fonts.check(`12px "${familyName}"`)) {
+          return { fontAssetKey, familyName, loaded: true };
+        }
+
+        try {
+          const fontFace = new FontFace(
+            familyName,
+            `url(${resolveAssetUrl(fontAssetKey)})`,
+          );
+          await fontFace.load();
+          document.fonts.add(fontFace);
+          return { fontAssetKey, familyName, loaded: true };
+        } catch {
+          return { fontAssetKey, familyName, loaded: false };
+        }
+      }),
+    ).then((rows) => {
+      if (cancelled) return;
+      setFontFamilyByAssetKey((previous) => {
+        const next = { ...previous };
+        for (const row of rows) {
+          if (!row.loaded) continue;
+          next[row.fontAssetKey] = row.familyName;
+        }
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assets, fontFamilyByAssetKey, layout.elements]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -552,6 +637,11 @@ export function EditorCanvas(props: EditorCanvasProps) {
                 const fontSize = Number(style.fontSize ?? 32);
                 const fontWeight = Number(style.fontWeight ?? 500);
                 const color = String(style.color ?? "#0f172a");
+                const fontAssetKey = String(style.fontAssetKey ?? "").trim();
+                const uploadedFontFamily = fontAssetKey ? fontFamilyByAssetKey[fontAssetKey] : undefined;
+                const textFontFamily = uploadedFontFamily
+                  ? `${uploadedFontFamily}, ${String(style.fontFamily ?? "Geist")}`
+                  : String(style.fontFamily ?? "Geist");
 
                 let imageSource: HTMLImageElement | undefined;
                 if (element.type === "image" && element.assetKey) {
@@ -607,7 +697,7 @@ export function EditorCanvas(props: EditorCanvasProps) {
                         y={6}
                         width={Math.max(8, element.width - 12)}
                         height={Math.max(8, element.height - 12)}
-                        fontFamily={String(style.fontFamily ?? "Geist")}
+                        fontFamily={textFontFamily}
                         fontSize={fontSize}
                         fontStyle={fontWeight >= 700 ? "bold" : "normal"}
                         align={textAlign}

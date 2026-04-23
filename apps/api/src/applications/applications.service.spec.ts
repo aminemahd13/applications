@@ -94,6 +94,55 @@ describe('ApplicationsService completion credentials', () => {
     delete process.env.CORS_ORIGIN;
   });
 
+  it('requires PUBLIC_APP_BASE_URL for credential links even when APP_BASE_URL is public', () => {
+    delete process.env.PUBLIC_APP_BASE_URL;
+    process.env.APP_BASE_URL = 'https://apply.example.com';
+    process.env.CORS_ORIGINS = 'https://participant.example.com';
+
+    expect(() =>
+      (service as any).getCompletionCredentialLinks('certificate-1', 'credential-1'),
+    ).toThrow('Set PUBLIC_APP_BASE_URL to the public HTTPS origin');
+
+    delete process.env.CORS_ORIGINS;
+  });
+
+  it('emits participant QR and PDF links on the canonical public host', () => {
+    const rows = [
+      {
+        id: 'issued-1',
+        certificate_id: 'certificate-1',
+        credential_id: 'credential-1',
+        certificate_type_key: 'participation',
+        certificate_type_label: 'Participation',
+        qr_token: 'qr-token-1',
+        issued_at: new Date('2026-02-18T12:00:00.000Z'),
+        released_at: new Date('2026-02-18T12:01:00.000Z'),
+        revoked_at: null,
+        status: 'ISSUED',
+        render_status: 'DONE',
+        pdf_storage_key: 'events/event-1/certificates/pdf/certificate-1.pdf',
+      },
+    ];
+
+    const [entry] = (service as any).toApplicationIssuedCertificates(rows, {
+      hideUnreleased: false,
+      isCheckedIn: true,
+    });
+
+    expect(entry.certificateUrl).toBe(
+      'https://participant.example.com/credentials/certificate/certificate-1',
+    );
+    expect(entry.verifiableCredentialUrl).toBe(
+      'https://participant.example.com/credentials/verify/credential-1',
+    );
+    expect(entry.qrVerificationUrl).toBe(
+      'https://participant.example.com/credentials/qr/qr-token-1',
+    );
+    expect(entry.pdfUrl).toBe(
+      'https://participant.example.com/credentials/certificate/certificate-1/pdf',
+    );
+  });
+
   it('revokes an existing completion credential', async () => {
     mockPrisma.completion_credentials.updateMany.mockResolvedValue({ count: 1 });
 
@@ -1372,11 +1421,13 @@ describe('ApplicationsService CSV export', () => {
   beforeEach(() => {
     jest.useFakeTimers().setSystemTime(now);
     process.env.APP_BASE_URL = 'https://platform.example.com';
+    process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
   });
 
   afterEach(() => {
     jest.useRealTimers();
     delete process.env.APP_BASE_URL;
+    delete process.env.PUBLIC_APP_BASE_URL;
   });
 
   it('exports CSV including profile and application fields', async () => {

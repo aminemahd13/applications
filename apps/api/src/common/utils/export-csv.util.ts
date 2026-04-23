@@ -10,6 +10,10 @@ interface ResolveAppBaseUrlOptions {
   errorContext?: string;
 }
 
+interface ResolvePublicAppBaseUrlOptions {
+  errorContext?: string;
+}
+
 const CSV_FORMULA_PREFIX_PATTERN = /^[\s]*[=+\-@]/;
 const DEFAULT_APP_BASE_URL = 'http://localhost:3000';
 
@@ -65,6 +69,20 @@ export function resolveAppBaseUrl(
   }
 
   return DEFAULT_APP_BASE_URL;
+}
+
+export function resolvePublicAppBaseUrl(
+  env: NodeJS.ProcessEnv = process.env,
+  options?: ResolvePublicAppBaseUrlOptions,
+): string {
+  const normalized = normalizePublicAppBaseUrl(env.PUBLIC_APP_BASE_URL, true);
+  if (normalized) return normalized;
+
+  const context = options?.errorContext?.trim();
+  const contextSuffix = context ? ` for ${context}` : '';
+  throw new Error(
+    `Unable to resolve a public application base URL${contextSuffix}. Set PUBLIC_APP_BASE_URL to the public HTTPS origin (for example, https://participant.mathmaroc.org).`,
+  );
 }
 
 function splitEnvOrigins(rawValue: string | undefined): string[] {
