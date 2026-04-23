@@ -37,6 +37,8 @@ import { Prisma } from '@event-platform/db';
 import * as crypto from 'crypto';
 import * as jwt from 'jsonwebtoken';
 import { createHmac } from 'node:crypto';
+import { existsSync, promises as fs } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import { joinAppUrl, resolvePublicAppBaseUrl } from '../common/utils/export-csv.util';
 import JSZip from 'jszip';
 import QRCode from 'qrcode';
@@ -59,6 +61,21 @@ const CERTIFICATE_RENDER_SAFE_FONT_FALLBACK_CHAIN = [
 ];
 const CERTIFICATE_RENDER_DEFAULT_FONT_FAMILY =
   CERTIFICATE_RENDER_SAFE_FONT_FALLBACK_CHAIN.join(', ');
+const CERTIFICATE_FONT_GENERIC_FAMILIES = new Set([
+  'serif',
+  'sans-serif',
+  'monospace',
+  'cursive',
+  'fantasy',
+  'system-ui',
+  'ui-serif',
+  'ui-sans-serif',
+  'ui-monospace',
+  'ui-rounded',
+  'emoji',
+  'math',
+  'fangsong',
+]);
 const CERTIFICATE_FONT_MIME_BY_FORMAT = {
   ttf: ['font/ttf', 'application/x-font-ttf', 'application/font-sfnt'],
   otf: [
@@ -83,6 +100,20 @@ const CERTIFICATE_PDF_MAX_WIDTH_POINTS = 842;
 const CERTIFICATE_PDF_MAX_HEIGHT_POINTS = 595;
 const UUID_LIKE_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CERTIFICATE_BUNDLED_PDF_FALLBACK_FONT_DEFINITIONS = [
+  {
+    key: 'latin',
+    fileName: 'NotoSans-Regular.ttf',
+    internalFamily: 'CertificateBundledLatinFallback',
+    format: 'ttf',
+  },
+  {
+    key: 'arabic',
+    fileName: 'NotoSansArabic-Regular.ttf',
+    internalFamily: 'CertificateBundledArabicFallback',
+    format: 'ttf',
+  },
+] as const;
 
 type CertificateAssetKind =
   | 'background'
@@ -134,6 +165,8 @@ type IssuedCertificateForRender = {
 @Injectable()
 export class CertificatesService {
   private readonly logger = new Logger(CertificatesService.name);
+  private bundledPdfFallbackFontsPromise: Promise<LoadedCertificateFontAsset[]> | null =
+    null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -2670,44 +2703,18 @@ export class CertificatesService {
     return output;
   }
 
-  private resolvePdfFontFamily(rawValue: unknown): string {
+  private resolvePdfRequestedFontFamilies(rawValue: unknown): string[] {
     const requested =
       typeof rawValue === 'string' ? this.parseFontFamilyStack(rawValue) : [];
-    if (requested.length === 0) {
-      return CERTIFICATE_RENDER_DEFAULT_FONT_FAMILY;
-    }
-
-    const genericFamilies = new Set([
-      'serif',
-      'sans-serif',
-      'monospace',
-      'cursive',
-      'fantasy',
-      'system-ui',
-      'ui-serif',
-      'ui-sans-serif',
-      'ui-monospace',
-      'ui-rounded',
-      'emoji',
-      'math',
-      'fangsong',
-    ]);
-    const hasGenericFamily = requested.some((family) =>
-      genericFamilies.has(this.normalizeFontFamilyToken(family)),
+    if (requested.length === 0) return [];
+    return this.dedupeFontFamilies(
+      requested.filter(
+        (family) =>
+          !CERTIFICATE_FONT_GENERIC_FAMILIES.has(
+            this.normalizeFontFamilyToken(family),
+          ),
+      ),
     );
-
-    if (requested.length === 1 && !hasGenericFamily) {
-      return this.dedupeFontFamilies([
-        requested[0],
-        ...CERTIFICATE_RENDER_SAFE_FONT_FALLBACK_CHAIN,
-      ]).join(', ');
-    }
-
-    if (!hasGenericFamily) {
-      requested.push('sans-serif');
-    }
-
-    return this.dedupeFontFamilies(requested).join(', ');
   }
 
   private estimateTextWidth(
@@ -3026,6 +3033,96 @@ export class CertificatesService {
     return `CertificateUploadedFont_${hash}`;
   }
 
+  private resolveBundledPdfFallbackFontPath(fileName: string): string | null {
+    const normalized = String(fileName ?? '').trim();
+    if (!normalized) return null;
+
+    const candidates = [
+      resolvePath(__dirname, 'assets', 'fonts', normalized),
+      resolvePath(
+        process.cwd(),
+        'apps',
+        'api',
+        'dist',
+        'certificates',
+        'assets',
+        'fonts',
+        normalized,
+      ),
+      resolvePath(
+        process.cwd(),
+        'apps',
+        'api',
+        'src',
+        'certificates',
+        'assets',
+        'fonts',
+        normalized,
+      ),
+    ];
+
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  private async loadBundledPdfFallbackFonts(): Promise<
+    LoadedCertificateFontAsset[]
+  > {
+    const loaded: LoadedCertificateFontAsset[] = [];
+
+    for (const definition of CERTIFICATE_BUNDLED_PDF_FALLBACK_FONT_DEFINITIONS) {
+      const absolutePath = this.resolveBundledPdfFallbackFontPath(
+        definition.fileName,
+      );
+      if (!absolutePath) {
+        this.logger.warn(
+          `Bundled certificate fallback font file is missing: ${definition.fileName}`,
+        );
+        continue;
+      }
+
+      try {
+        const buffer = await fs.readFile(absolutePath);
+        if (!buffer || buffer.byteLength === 0) {
+          this.logger.warn(
+            `Bundled certificate fallback font file is empty: ${definition.fileName}`,
+          );
+          continue;
+        }
+
+        loaded.push({
+          storageKey: `bundled:${definition.key}`,
+          format: definition.format,
+          mimeType: CERTIFICATE_FONT_DATA_MIME_BY_FORMAT[definition.format],
+          buffer,
+          internalFamily: definition.internalFamily,
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Could not load bundled certificate fallback font "${definition.fileName}": ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    return loaded;
+  }
+
+  private async getBundledPdfFallbackFonts(): Promise<
+    LoadedCertificateFontAsset[]
+  > {
+    if (!this.bundledPdfFallbackFontsPromise) {
+      this.bundledPdfFallbackFontsPromise = this.loadBundledPdfFallbackFonts();
+    }
+    return this.bundledPdfFallbackFontsPromise;
+  }
+
   private escapeCssString(value: string): string {
     return String(value ?? '')
       .replace(/\\/g, '\\\\')
@@ -3043,23 +3140,31 @@ export class CertificatesService {
   private resolveTextOverlayFontFamily(input: {
     style: Record<string, unknown>;
     embeddedFont?: LoadedCertificateFontAsset | null;
-  }): { fontFamily: string; fontFaceCss?: string } {
-    const fallbackFamily = this.resolvePdfFontFamily(input.style.fontFamily);
-    if (!input.embeddedFont) {
-      return {
-        fontFamily: fallbackFamily,
-      };
-    }
-
-    const fallbackStack = this.parseFontFamilyStack(fallbackFamily);
+    bundledFallbackFonts?: LoadedCertificateFontAsset[];
+  }): { fontFamily: string; fontFaceCss: string[] } {
+    const requestedStack = this.resolvePdfRequestedFontFamilies(
+      input.style.fontFamily,
+    );
+    const bundledFallbackFonts = input.bundledFallbackFonts ?? [];
+    const genericFallbackStack = this.parseFontFamilyStack(
+      CERTIFICATE_RENDER_DEFAULT_FONT_FAMILY,
+    );
     const mergedStack = this.dedupeFontFamilies([
-      `"${input.embeddedFont.internalFamily}"`,
-      ...fallbackStack,
+      ...(input.embeddedFont ? [`"${input.embeddedFont.internalFamily}"`] : []),
+      ...requestedStack,
+      ...bundledFallbackFonts.map((font) => `"${font.internalFamily}"`),
+      ...genericFallbackStack,
     ]);
+    const fontFaceCss = [
+      ...(input.embeddedFont
+        ? [this.buildEmbeddedFontFaceCss(input.embeddedFont)]
+        : []),
+      ...bundledFallbackFonts.map((font) => this.buildEmbeddedFontFaceCss(font)),
+    ];
 
     return {
       fontFamily: mergedStack.join(', '),
-      fontFaceCss: this.buildEmbeddedFontFaceCss(input.embeddedFont),
+      fontFaceCss,
     };
   }
 
@@ -3104,6 +3209,7 @@ export class CertificatesService {
     text: string;
     style: Record<string, unknown>;
     embeddedFont?: LoadedCertificateFontAsset | null;
+    bundledFallbackFonts?: LoadedCertificateFontAsset[];
     defaultAlign?: 'left' | 'center' | 'right';
     defaultColor?: string;
     defaultFontSize?: number;
@@ -3114,6 +3220,7 @@ export class CertificatesService {
     const fontResolution = this.resolveTextOverlayFontFamily({
       style,
       embeddedFont: input.embeddedFont,
+      bundledFallbackFonts: input.bundledFallbackFonts,
     });
     const fontFamilyRaw = fontResolution.fontFamily;
     const fontFamily = this.escapeXml(fontFamilyRaw);
@@ -3178,8 +3285,8 @@ export class CertificatesService {
         return `<text x="${this.formatPdfNumber(x)}" y="${this.formatPdfNumber(y)}" fill="${color}" font-family="${fontFamily}" font-size="${this.formatPdfNumber(fontSize)}" font-weight="${fontWeight}" text-anchor="${anchor}" letter-spacing="${this.formatPdfNumber(letterSpacing)}">${lineText}</text>`;
       })
       .join('');
-    const embeddedFontNode = fontResolution.fontFaceCss
-      ? `<defs><style><![CDATA[${fontResolution.fontFaceCss}]]></style></defs>`
+    const embeddedFontNode = fontResolution.fontFaceCss.length
+      ? `<defs><style><![CDATA[${fontResolution.fontFaceCss.join('\n')}]]></style></defs>`
       : '';
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${embeddedFontNode}${lineNodes}</svg>`;
   }
@@ -3517,6 +3624,7 @@ export class CertificatesService {
         fontAssetByKey.set(fontAssetKey, fontAsset);
       }
     }
+    const bundledFallbackFonts = await this.getBundledPdfFallbackFonts();
 
     const overlays: Array<{ input: Buffer; top: number; left: number }> = [];
     const backgroundAssetKey =
@@ -3572,6 +3680,7 @@ export class CertificatesService {
           embeddedFont: fontAssetKey
             ? (fontAssetByKey.get(fontAssetKey) ?? null)
             : null,
+          bundledFallbackFonts,
           defaultAlign: 'left',
           defaultColor: '#0f172a',
           defaultFontSize: 32,
@@ -3610,6 +3719,7 @@ export class CertificatesService {
             embeddedFont: fontAssetKey
               ? (fontAssetByKey.get(fontAssetKey) ?? null)
               : null,
+            bundledFallbackFonts,
             defaultAlign: 'center',
             defaultColor: '#64748b',
             defaultFontSize: 20,

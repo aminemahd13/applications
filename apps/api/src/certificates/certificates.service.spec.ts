@@ -603,7 +603,30 @@ describe('CertificatesService issued history and queue lifecycle', () => {
 });
 
 describe('CertificatesService PDF text font fallback', () => {
-  it('appends safe fallback chain for single custom font family', () => {
+  const bundledFallbackFonts: Array<{
+    storageKey: string;
+    format: 'ttf';
+    mimeType: 'font/ttf';
+    buffer: Buffer;
+    internalFamily: string;
+  }> = [
+    {
+      storageKey: 'bundled:latin',
+      format: 'ttf',
+      mimeType: 'font/ttf',
+      buffer: Buffer.from('latin-font-data', 'utf8'),
+      internalFamily: 'CertificateBundledLatinFallback',
+    },
+    {
+      storageKey: 'bundled:arabic',
+      format: 'ttf',
+      mimeType: 'font/ttf',
+      buffer: Buffer.from('arabic-font-data', 'utf8'),
+      internalFamily: 'CertificateBundledArabicFallback',
+    },
+  ];
+
+  it('embeds bundled fallback fonts when no uploaded font is bound', () => {
     const { service } = createServiceHarness();
 
     const svg = (service as any).buildTextOverlaySvg({
@@ -611,13 +634,18 @@ describe('CertificatesService PDF text font fallback', () => {
       height: 120,
       text: 'Certificate',
       style: { fontFamily: 'Geist' },
+      bundledFallbackFonts,
       defaultAlign: 'left',
       defaultColor: '#0f172a',
       defaultFontSize: 32,
     });
 
+    expect(svg).toContain('@font-face');
+    expect(svg).toContain('CertificateBundledLatinFallback');
+    expect(svg).toContain('CertificateBundledArabicFallback');
+    expect(svg).toContain('data:font/ttf;base64,');
     expect(svg).toContain(
-      'font-family="Geist, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
+      'font-family="Geist, &quot;CertificateBundledLatinFallback&quot;, &quot;CertificateBundledArabicFallback&quot;, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
     );
   });
 
@@ -629,13 +657,14 @@ describe('CertificatesService PDF text font fallback', () => {
       height: 120,
       text: 'Certificate',
       style: { fontFamily: '"Times New Roman", Georgia' },
+      bundledFallbackFonts,
       defaultAlign: 'left',
       defaultColor: '#0f172a',
       defaultFontSize: 32,
     });
 
     expect(svg).toContain(
-      'font-family="&quot;Times New Roman&quot;, Georgia, sans-serif"',
+      'font-family="&quot;Times New Roman&quot;, Georgia, &quot;CertificateBundledLatinFallback&quot;, &quot;CertificateBundledArabicFallback&quot;, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
     );
   });
 
@@ -654,6 +683,7 @@ describe('CertificatesService PDF text font fallback', () => {
         buffer: Buffer.from('wOF2fontdata', 'utf8'),
         internalFamily: 'CertificateUploadedFont_a1b2c3d4e5f6',
       },
+      bundledFallbackFonts,
       defaultAlign: 'left',
       defaultColor: '#0f172a',
       defaultFontSize: 32,
@@ -661,8 +691,152 @@ describe('CertificatesService PDF text font fallback', () => {
 
     expect(svg).toContain('@font-face');
     expect(svg).toContain('data:font/woff2;base64,');
+    expect(svg).toContain('CertificateBundledLatinFallback');
+    expect(svg).toContain('CertificateBundledArabicFallback');
     expect(svg).toContain(
-      'font-family="&quot;CertificateUploadedFont_a1b2c3d4e5f6&quot;, Brand Sans, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
+      'font-family="&quot;CertificateUploadedFont_a1b2c3d4e5f6&quot;, Brand Sans, &quot;CertificateBundledLatinFallback&quot;, &quot;CertificateBundledArabicFallback&quot;, &quot;Segoe UI&quot;, Arial, Helvetica, &quot;DejaVu Sans&quot;, &quot;Noto Sans&quot;, sans-serif"',
+    );
+  });
+
+  it('continues rendering when uploaded font cannot be loaded and uses bundled fallback chain', async () => {
+    const { service } = createServiceHarness();
+    process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
+
+    jest
+      .spyOn(service as any, 'getBundledPdfFallbackFonts')
+      .mockResolvedValue(bundledFallbackFonts);
+    jest
+      .spyOn(service as any, 'loadRenderableCertificateFontAsset')
+      .mockResolvedValue(null);
+
+    const buffer = await (service as any).renderVisualCertificatePdfBuffer({
+      id: 'issued-1',
+      event_id: 'event-1',
+      certificate_id: 'certificate-1',
+      credential_id: 'credential-1',
+      qr_token: 'qr-token-1',
+      certificate_type_label: 'Participation',
+      issuer_name: 'Issuer',
+      issued_at: new Date('2026-04-23T10:00:00.000Z'),
+      template_snapshot: {
+        layout: {
+          layoutSchemaVersion: 2,
+          canvas: {
+            width: 900,
+            height: 600,
+            unit: 'px',
+            backgroundColor: '#ffffff',
+          },
+          elements: [
+            {
+              id: 'participant',
+              type: 'dynamic_text',
+              x: 100,
+              y: 120,
+              width: 700,
+              height: 120,
+              token: 'participantName',
+              style: {
+                fontFamily: 'Geist',
+                fontAssetKey:
+                  'events/event-1/certificates/assets/font/missing-font.ttf',
+                fontSize: 48,
+                color: '#0f172a',
+                textAlign: 'center',
+              },
+            },
+          ],
+          signatureSlots: [],
+          metadata: {},
+        },
+      },
+      payload_snapshot: {
+        participantName: 'John أحمد',
+      },
+      applications: {
+        id: 'app-1',
+        users_applications_applicant_user_idTousers: null,
+      },
+      events: {
+        title: 'Event',
+      },
+    });
+
+    expect(Buffer.isBuffer(buffer)).toBe(true);
+    expect(buffer?.byteLength ?? 0).toBeGreaterThan(0);
+  });
+
+  it('applies bundled fallback chain to signature placeholder overlays', async () => {
+    const { service } = createServiceHarness();
+    process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
+
+    jest
+      .spyOn(service as any, 'getBundledPdfFallbackFonts')
+      .mockResolvedValue(bundledFallbackFonts);
+    jest
+      .spyOn(service as any, 'loadRenderableCertificateFontAsset')
+      .mockResolvedValue(null);
+
+    const svgSpy = jest.spyOn(service as any, 'buildTextOverlaySvg');
+
+    await (service as any).renderVisualCertificatePdfBuffer({
+      id: 'issued-2',
+      event_id: 'event-1',
+      certificate_id: 'certificate-2',
+      credential_id: 'credential-2',
+      qr_token: 'qr-token-2',
+      certificate_type_label: 'Participation',
+      issuer_name: 'Issuer',
+      issued_at: new Date('2026-04-23T10:00:00.000Z'),
+      template_snapshot: {
+        layout: {
+          layoutSchemaVersion: 2,
+          canvas: {
+            width: 900,
+            height: 600,
+            unit: 'px',
+            backgroundColor: '#ffffff',
+          },
+          elements: [
+            {
+              id: 'signature-slot',
+              type: 'signature',
+              x: 280,
+              y: 420,
+              width: 340,
+              height: 90,
+              signatureSlotKey: 'organizer_primary',
+              style: {
+                fontFamily: 'Geist',
+              },
+            },
+          ],
+          signatureSlots: [
+            {
+              key: 'organizer_primary',
+              label: 'Primary Organizer',
+              signerName: 'Organizer أحمد',
+            },
+          ],
+          metadata: {},
+        },
+      },
+      payload_snapshot: {},
+      applications: {
+        id: 'app-1',
+        users_applications_applicant_user_idTousers: null,
+      },
+      events: {
+        title: 'Event',
+      },
+    });
+
+    const signatureCall = svgSpy.mock.calls.find(
+      ([arg]) => arg?.text === 'Organizer أحمد',
+    );
+    expect(signatureCall).toBeDefined();
+    expect(signatureCall?.[0]?.bundledFallbackFonts).toEqual(
+      bundledFallbackFonts,
     );
   });
 });

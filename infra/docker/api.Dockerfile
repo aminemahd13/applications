@@ -1,6 +1,7 @@
 FROM node:20-alpine AS builder
 
 WORKDIR /app
+RUN apk add --no-cache fontconfig
 
 # Copy package manifests first for caching
 COPY package*.json ./
@@ -29,6 +30,7 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV production
+RUN apk add --no-cache fontconfig
 
 # Copy necessary files
 COPY --from=builder /app/package*.json ./
