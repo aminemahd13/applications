@@ -98,6 +98,19 @@ const ASSET_KIND_OPTIONS = [
   { value: "font", label: "Fonts" },
 ] as const;
 
+const ASSET_MODE_OPTIONS: Array<{ value: AssetMode; label: string }> = [
+  { value: "background", label: "Background" },
+  { value: "image", label: "Image" },
+  { value: "signature", label: "Signature" },
+  { value: "font", label: "Font" },
+];
+
+function formatAssetSize(sizeBytes: number): string {
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function assetUploadKind(
   assetMode: AssetMode,
   assetKindFilter: LeftRailProps["assetKindFilter"],
@@ -176,7 +189,7 @@ export function LeftRail(props: LeftRailProps) {
   const uploadLabel = `Upload ${uploadKind}`;
 
   return (
-    <aside className="flex min-h-[72vh] min-w-[320px] max-w-[360px] flex-col overflow-hidden rounded-xl border bg-card/60">
+    <aside className="flex min-h-[72vh] w-full min-w-0 flex-col overflow-hidden rounded-xl border bg-card/60 xl:min-w-[320px] xl:max-w-[360px]">
       <div className="border-b p-3">
         <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
           {VIEW_OPTIONS.map((option) => {
@@ -186,7 +199,7 @@ export function LeftRail(props: LeftRailProps) {
                 key={option.value}
                 type="button"
                 className={cn(
-                  "flex items-center justify-center gap-1 rounded-md px-2 py-2 text-xs font-medium transition",
+                  "flex min-w-0 items-center justify-center gap-1 rounded-md px-2 py-2 text-xs font-medium transition",
                   view === option.value
                     ? "bg-background text-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground",
@@ -194,26 +207,26 @@ export function LeftRail(props: LeftRailProps) {
                 onClick={() => onViewChange(option.value)}
               >
                 <Icon className="h-3.5 w-3.5" />
-                {option.label}
+                <span className="truncate">{option.label}</span>
               </button>
             );
           })}
         </div>
       </div>
 
-      <ScrollArea className="h-full">
-        <div className="space-y-4 p-3">
+      <ScrollArea className="h-full w-full">
+        <div className="min-w-0 space-y-4 p-3">
           {view === "templates" && (
             <>
-              <section className="rounded-xl border p-3">
+              <section className="min-w-0 rounded-xl border p-3">
                 <div className="flex items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-sm font-semibold">Selected template</p>
                     <p className="text-xs text-muted-foreground">
                       Choose a template, manage versions, and publish from the command bar.
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex shrink-0 items-center gap-2">
                     <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
                       <DialogTrigger asChild>
                         <Button size="sm" variant="outline" disabled={!canManage}>
@@ -307,9 +320,9 @@ export function LeftRail(props: LeftRailProps) {
 
                 {selectedTemplate ? (
                   <div className="mt-4 space-y-3">
-                    <div className="rounded-xl border bg-muted/20 p-3">
-                      <p className="text-sm font-semibold">{selectedTemplate.name}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
+                    <div className="min-w-0 rounded-xl border bg-muted/20 p-3">
+                      <p className="break-words text-sm font-semibold leading-snug">{selectedTemplate.name}</p>
+                      <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
                         {selectedTemplate.typeLabel} ({selectedTemplate.typeKey})
                       </p>
                       <div className="mt-3 flex flex-wrap gap-1.5">
@@ -324,7 +337,7 @@ export function LeftRail(props: LeftRailProps) {
                       </div>
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="min-w-0 space-y-2">
                       <Label className="text-xs text-muted-foreground">Published versions</Label>
                       <Select
                         value={selectedVersionId ?? "none"}
@@ -376,13 +389,13 @@ export function LeftRail(props: LeftRailProps) {
                 )}
               </section>
 
-              <section className="rounded-xl border p-3">
+              <section className="min-w-0 rounded-xl border p-3">
                 <div className="flex items-center justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-sm font-semibold">Template library</p>
                     <p className="text-xs text-muted-foreground">{templates.length} templates available</p>
                   </div>
-                  <Badge variant="outline">{templates.length}</Badge>
+                  <Badge variant="outline" className="shrink-0">{templates.length}</Badge>
                 </div>
 
                 <div className="mt-4 space-y-2">
@@ -398,7 +411,7 @@ export function LeftRail(props: LeftRailProps) {
                           key={template.id}
                           type="button"
                           className={cn(
-                            "w-full rounded-xl border p-3 text-left transition",
+                            "w-full min-w-0 rounded-xl border p-3 text-left transition",
                             selected
                               ? "border-primary bg-primary/5 shadow-sm"
                               : "hover:border-primary/40 hover:bg-muted/10",
@@ -407,12 +420,12 @@ export function LeftRail(props: LeftRailProps) {
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold">{template.name}</p>
-                              <p className="truncate text-xs text-muted-foreground">
+                              <p className="break-words text-sm font-semibold leading-snug">{template.name}</p>
+                              <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
                                 {template.typeLabel} ({template.typeKey})
                               </p>
                             </div>
-                            <Badge variant="outline">v{template.activeVersionNumber ?? "-"}</Badge>
+                            <Badge variant="outline" className="shrink-0">v{template.activeVersionNumber ?? "-"}</Badge>
                           </div>
                           <div className="mt-3 flex flex-wrap gap-1.5">
                             {template.isDefault ? <Badge variant="secondary">Default</Badge> : null}
@@ -433,15 +446,15 @@ export function LeftRail(props: LeftRailProps) {
           )}
 
           {view === "layers" && (
-            <section className="rounded-xl border p-3">
+            <section className="min-w-0 rounded-xl border p-3">
               <div className="flex items-center justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <p className="text-sm font-semibold">Canvas layers</p>
                   <p className="text-xs text-muted-foreground">
                     Top layers appear first. Click a layer to focus it on the canvas.
                   </p>
                 </div>
-                <Badge variant="outline">{layout.elements.length}</Badge>
+                <Badge variant="outline" className="shrink-0">{layout.elements.length}</Badge>
               </div>
 
               <div className="mt-4 space-y-2">
@@ -457,7 +470,7 @@ export function LeftRail(props: LeftRailProps) {
                         key={element.id}
                         type="button"
                         className={cn(
-                          "w-full rounded-xl border p-3 text-left transition",
+                          "w-full min-w-0 rounded-xl border p-3 text-left transition",
                           selected
                             ? "border-primary bg-primary/5 shadow-sm"
                             : "hover:border-primary/40 hover:bg-muted/10",
@@ -466,12 +479,11 @@ export function LeftRail(props: LeftRailProps) {
                       >
                         <div className="flex items-center justify-between gap-3">
                           <p className="truncate text-sm font-medium">{buildElementLabel(element)}</p>
-                          <Badge variant="outline">z{element.zIndex ?? 0}</Badge>
+                          <Badge variant="outline" className="shrink-0">z{element.zIndex ?? 0}</Badge>
                         </div>
+                        <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">{element.id}</p>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          {Math.round(element.width)} x {Math.round(element.height)} at {Math.round(element.x)},
-                          {" "}
-                          {Math.round(element.y)}
+                          {Math.round(element.width)} x {Math.round(element.height)} • {Math.round(element.x)}, {Math.round(element.y)}
                         </p>
                       </button>
                     );
@@ -483,31 +495,31 @@ export function LeftRail(props: LeftRailProps) {
 
           {view === "assets" && (
             <>
-              <section className="rounded-xl border p-3">
+              <section className="min-w-0 rounded-xl border p-3">
                 <div className="flex items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-sm font-semibold">Asset controls</p>
                     <p className="text-xs text-muted-foreground">
                       Current apply mode: <span className="font-medium capitalize text-foreground">{assetMode}</span>
                     </p>
                   </div>
-                  <Badge variant="outline">{filteredAssets.length}</Badge>
+                  <Badge variant="outline" className="shrink-0">{filteredAssets.length}</Badge>
                 </div>
 
                 <div className="mt-4 grid grid-cols-2 gap-2">
-                  {(["background", "image", "signature", "font"] as const).map((mode) => (
+                  {ASSET_MODE_OPTIONS.map((option) => (
                     <button
-                      key={mode}
+                      key={option.value}
                       type="button"
                       className={cn(
-                        "rounded-lg border px-3 py-2 text-left text-xs font-medium transition",
-                        assetMode === mode
+                        "min-w-0 rounded-lg border px-3 py-2 text-left text-xs font-medium transition",
+                        assetMode === option.value
                           ? "border-primary bg-primary/5 text-foreground"
                           : "text-muted-foreground hover:border-primary/40 hover:text-foreground",
                       )}
-                      onClick={() => onAssetModeChange(mode)}
+                      onClick={() => onAssetModeChange(option.value)}
                     >
-                      {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                      <span className="truncate">{option.label}</span>
                     </button>
                   ))}
                 </div>
@@ -532,7 +544,7 @@ export function LeftRail(props: LeftRailProps) {
                     placeholder="Search by filename or key"
                   />
 
-                  <label>
+                  <label className="block w-full">
                     <input
                       type="file"
                       accept={
@@ -563,9 +575,9 @@ export function LeftRail(props: LeftRailProps) {
                 </div>
               </section>
 
-              <section className="rounded-xl border p-3">
+              <section className="min-w-0 rounded-xl border p-3">
                 <div className="flex items-center justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-sm font-semibold">Asset library</p>
                     <p className="text-xs text-muted-foreground">
                       Apply backgrounds, images, signatures, and fonts to the current draft.
@@ -580,7 +592,7 @@ export function LeftRail(props: LeftRailProps) {
                     </p>
                   ) : (
                     filteredAssets.map((asset) => (
-                      <div key={asset.id} className="rounded-xl border p-3">
+                      <div key={asset.id} className="min-w-0 rounded-xl border p-3">
                         <div className="mb-3 aspect-[4/3] overflow-hidden rounded-lg bg-muted/40">
                           {asset.mimeType.startsWith("image/") ? (
                             // eslint-disable-next-line @next/next/no-img-element
@@ -596,30 +608,32 @@ export function LeftRail(props: LeftRailProps) {
                           )}
                         </div>
 
-                        <div className="space-y-1">
-                          <p className="truncate text-sm font-medium">{asset.originalFilename}</p>
-                          <p className="truncate text-xs text-muted-foreground">{asset.storageKey}</p>
+                        <div className="min-w-0 space-y-1">
+                          <p className="break-words text-sm font-medium leading-snug">{asset.originalFilename}</p>
+                          <p className="break-all font-mono text-[11px] text-muted-foreground">{asset.storageKey}</p>
                         </div>
 
-                        <div className="mt-3 flex items-center justify-between gap-2">
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                           <Badge variant="outline">{asset.kind}</Badge>
-                          <span className="text-[11px] text-muted-foreground">{formatDateTime(asset.createdAt)}</span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {formatAssetSize(asset.sizeBytes)} • {formatDateTime(asset.createdAt)}
+                          </span>
                         </div>
 
-                        <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
-                          <Button size="sm" variant="outline" onClick={() => onApplyAsset(asset)}>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <Button size="sm" variant="outline" onClick={() => onApplyAsset(asset)} disabled={!canManage}>
                             <WandSparkles className="mr-1.5 h-4 w-4" />
                             Apply asset
                           </Button>
                           <Button
-                            size="icon"
+                            size="sm"
                             variant="ghost"
-                            className="h-9 w-9 text-destructive"
+                            className="text-destructive"
                             onClick={() => onDeleteAsset(asset)}
                             disabled={!canManage}
                           >
-                            <Trash2 className="h-4 w-4" />
-                            <span className="sr-only">Delete asset</span>
+                            <Trash2 className="mr-1.5 h-4 w-4" />
+                            Delete
                           </Button>
                         </div>
                       </div>
