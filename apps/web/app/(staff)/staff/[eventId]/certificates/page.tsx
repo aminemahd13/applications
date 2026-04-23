@@ -1,7 +1,10 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { CertificateStudioWorkspace } from "./studio/workspace";
+interface Props {
+  params: Promise<{ eventId: string }>;
+}
 
-export default function CertificatesPage() {
-  return <CertificateStudioWorkspace />;
+export default async function CertificatesPage({ params }: Props) {
+  const { eventId } = await params;
+  redirect(`/staff/${eventId}/certificates/studio`);
 }

@@ -10,7 +10,7 @@ import type {
 
 export type AssetMode = "background" | "image" | "signature" | "font";
 
-export type LeftRailView = "templates" | "assets" | "issuance";
+export type LeftRailView = "templates" | "layers" | "assets";
 
 export type PreviewData = Record<string, string>;
 

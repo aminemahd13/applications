@@ -1,56 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
-import {
-  Monitor,
-  PanelLeftClose,
-  PanelLeftOpen,
-  PanelRightClose,
-  PanelRightOpen,
-  RefreshCw,
-} from "lucide-react";
+import { Monitor } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/lib/api";
 import { useAuth, usePermissions } from "@/lib/auth-context";
-import { PageHeader } from "@/components/shared";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
 import {
   DEFAULT_CERTIFICATE_LAYOUT,
   CERTIFICATE_DYNAMIC_TOKENS,
   activateCertificateTemplateVersion,
-  createCertificatePdfExportJob,
   createCertificateTemplate,
   deleteCertificateAsset,
   deleteCertificateTemplate,
   deleteCertificateTemplateVersion,
   duplicateCertificateTemplate,
-  getCertificatePdfExportJobDownloadUrl,
   getCertificateTemplateDraft,
-  issueCertificatesByTags,
-  issueCertificatesBulk,
-  listCertificateIssuanceTags,
-  searchCertificateIssuanceCandidates,
   listCertificateAssets,
-  listCertificateRenderJobs,
   listCertificateTemplateVersions,
   listCertificateTemplates,
-  listIssuedCertificates,
-  pollCertificatePdfExportJobUntilTerminal,
   publishCertificateTemplate,
-  releaseIssuedCertificate,
-  revokeIssuedCertificate,
-  retryCertificateRenderJob,
   updateCertificateTemplate,
   updateCertificateTemplateDraft,
   uploadCertificateAsset,
@@ -59,9 +29,6 @@ import {
   type CertificateTemplateElement,
   type CertificateTemplateSummary,
   type CertificateTemplateVersion,
-  type IssuedCertificateSummary,
-  type CertificateRenderJobSummary,
-  type CertificateIssuanceCandidate,
 } from "@/lib/certificates";
 import {
   addElement,
@@ -92,12 +59,15 @@ import {
   deepCloneLayout,
   DEFAULT_PREVIEW_DATA,
   isInputLikeTarget,
-  parseApplicationIdsInput,
   slugifyTypeKey,
   type AssetMode,
   type LeftRailView,
   type PreviewData,
 } from "./utils";
+
+interface CertificateStudioWorkspaceProps {
+  eventId: string;
+}
 
 function layoutHash(layout: CertificateLayout): string {
   return JSON.stringify(layout);
@@ -109,10 +79,8 @@ function deriveFontFamilyFromAsset(asset: CertificateAsset): string {
   return normalized.length > 0 ? normalized : "Uploaded Font";
 }
 
-export function CertificateStudioWorkspace() {
-  const params = useParams();
-  const eventId = params.eventId as string;
-
+export function CertificateStudioWorkspace(props: CertificateStudioWorkspaceProps) {
+  const { eventId } = props;
   const { csrfToken } = useAuth();
   const { hasPermission } = usePermissions(eventId);
   const canManage = hasPermission("event.update");
@@ -120,8 +88,6 @@ export function CertificateStudioWorkspace() {
   const [templates, setTemplates] = useState<CertificateTemplateSummary[]>([]);
   const [versions, setVersions] = useState<CertificateTemplateVersion[]>([]);
   const [assets, setAssets] = useState<CertificateAsset[]>([]);
-  const [issuedCertificates, setIssuedCertificates] = useState<IssuedCertificateSummary[]>([]);
-  const [renderJobs, setRenderJobs] = useState<CertificateRenderJobSummary[]>([]);
 
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
@@ -141,35 +107,13 @@ export function CertificateStudioWorkspace() {
   const [typeLabelDraft, setTypeLabelDraft] = useState("Participation");
   const [typeKeyDraft, setTypeKeyDraft] = useState("participation");
 
-  const [issuanceApplicationIds, setIssuanceApplicationIds] = useState("");
-  const [issuanceIssuerName, setIssuanceIssuerName] = useState("");
-  const [issuanceReissueIfExists, setIssuanceReissueIfExists] = useState(false);
-  const [issuanceSearchInput, setIssuanceSearchInput] = useState("");
-  const [issuanceCandidates, setIssuanceCandidates] = useState<CertificateIssuanceCandidate[]>([]);
-  const [issuanceSearchAttempted, setIssuanceSearchAttempted] = useState(false);
-  const [issuanceTagSearchInput, setIssuanceTagSearchInput] = useState("");
-  const [issuanceTags, setIssuanceTags] = useState<string[]>([]);
-  const [issuanceSelectedTags, setIssuanceSelectedTags] = useState<string[]>([]);
-  const [issuanceDownloadAfterIssue, setIssuanceDownloadAfterIssue] = useState(false);
-  const [issuedHistorySearchInput, setIssuedHistorySearchInput] = useState("");
-
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isRefreshingIssuance, setIsRefreshingIssuance] = useState(false);
-  const [isSearchingIssuanceCandidates, setIsSearchingIssuanceCandidates] = useState(false);
-  const [isLoadingIssuanceTags, setIsLoadingIssuanceTags] = useState(false);
   const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
   const [isBusyTemplateAction, setIsBusyTemplateAction] = useState(false);
   const [isBusyVersionAction, setIsBusyVersionAction] = useState(false);
   const [isUploadingAsset, setIsUploadingAsset] = useState(false);
-  const [isIssuing, setIsIssuing] = useState(false);
-  const [isDownloadingIssuanceZip, setIsDownloadingIssuanceZip] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
-  const [isRevokingIssuedCertificate, setIsRevokingIssuedCertificate] = useState(false);
-  const [releasingIssuedCertificateId, setReleasingIssuedCertificateId] = useState<string | null>(null);
-  const [revokeDialogOpen, setRevokeDialogOpen] = useState(false);
-  const [revokeReasonDraft, setRevokeReasonDraft] = useState("");
-  const [revokeTargetCertificate, setRevokeTargetCertificate] = useState<IssuedCertificateSummary | null>(null);
 
   const [isDraftReady, setIsDraftReady] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
@@ -210,193 +154,124 @@ export function CertificateStudioWorkspace() {
     return "grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)_360px]";
   }, [isInspectorCollapsed, isLeftRailCollapsed]);
 
-  const refreshIssuance = useCallback(async () => {
-    const search = issuedHistorySearchInput.trim();
-    const [issuedRows, jobRows] = await Promise.all([
-      listIssuedCertificates(eventId, {
-        limit: 100,
-        search: search || undefined,
-      }),
-      listCertificateRenderJobs(eventId, { limit: 100 }),
-    ]);
-    setIssuedCertificates(issuedRows);
-    setRenderJobs(jobRows);
-  }, [eventId, issuedHistorySearchInput]);
+  const resetEditorState = useCallback(() => {
+    setVersions([]);
+    setSelectedVersionId(null);
+    setSelectedIds([]);
+    setHistory(createEditorHistory(deepCloneLayout(DEFAULT_CERTIFICATE_LAYOUT)));
+    setIsDraftReady(false);
+    setSavedHash(layoutHash(DEFAULT_CERTIFICATE_LAYOUT));
+    setDraftRevision(0);
+    setHasConflict(false);
+  }, []);
+
+  const loadTemplateEditorState = useCallback(
+    async (templateId: string, activeVersionId?: string | null) => {
+      const [versionRows, draft] = await Promise.all([
+        listCertificateTemplateVersions(eventId, templateId),
+        getCertificateTemplateDraft(eventId, templateId),
+      ]);
+
+      setVersions(versionRows);
+
+      const preferredVersion =
+        versionRows.find((version) => version.id === activeVersionId) ?? versionRows[0] ?? null;
+      setSelectedVersionId(preferredVersion?.id ?? null);
+
+      const nextLayout = deepCloneLayout(draft.layout ?? DEFAULT_CERTIFICATE_LAYOUT);
+      setHistory(createEditorHistory(nextLayout));
+      setSelectedIds([]);
+      setDraftRevision(draft.revision);
+      setSavedHash(layoutHash(nextLayout));
+      setHasConflict(false);
+      setIsDraftReady(true);
+
+      const savedZoom = window.localStorage.getItem(`cert-studio-zoom:${templateId}`);
+      const parsedZoom = Number(savedZoom ?? 100);
+      if (Number.isFinite(parsedZoom) && parsedZoom >= 25 && parsedZoom <= 200) {
+        setZoomPercent(Math.round(parsedZoom));
+      } else {
+        setZoomPercent(100);
+      }
+    },
+    [eventId],
+  );
 
   const refreshWorkspace = useCallback(async () => {
-    const search = issuedHistorySearchInput.trim();
-    const [templateRows, assetRows, issuedRows, jobRows] = await Promise.all([
+    const [templateRows, assetRows] = await Promise.all([
       listCertificateTemplates(eventId),
       listCertificateAssets(eventId, "all"),
-      listIssuedCertificates(eventId, {
-        limit: 100,
-        search: search || undefined,
-      }),
-      listCertificateRenderJobs(eventId, { limit: 100 }),
     ]);
 
     setTemplates(templateRows);
     setAssets(assetRows);
-    setIssuedCertificates(issuedRows);
-    setRenderJobs(jobRows);
 
+    let nextSelectedTemplateId: string | null = null;
     setSelectedTemplateId((current) => {
-      if (current && templateRows.some((template) => template.id === current)) {
-        return current;
-      }
       const preferred =
         templateRows.find((template) => template.isDefault && template.isActive) ?? templateRows[0] ?? null;
-      return preferred?.id ?? null;
+      nextSelectedTemplateId =
+        current && templateRows.some((template) => template.id === current)
+          ? current
+          : preferred?.id ?? null;
+      return nextSelectedTemplateId;
     });
-  }, [eventId, issuedHistorySearchInput]);
-
-  const refreshIssuanceTags = useCallback(() => {
-    setIsLoadingIssuanceTags(true);
-    listCertificateIssuanceTags(eventId, {
-      search: issuanceTagSearchInput.trim() || undefined,
-      limit: 80,
-    })
-      .then((tags) => setIssuanceTags(tags))
-      .catch(() => {
-        setIssuanceTags([]);
-        toast.error("Failed to load tags.");
-      })
-      .finally(() => setIsLoadingIssuanceTags(false));
-  }, [eventId, issuanceTagSearchInput]);
+    return { templateRows, nextSelectedTemplateId };
+  }, [eventId]);
 
   useEffect(() => {
     if (!canManage) return;
     let cancelled = false;
-    Promise.resolve().then(async () => {
-      if (cancelled) return;
-      try {
-        await refreshWorkspace();
-      } catch {
-        toast.error("Failed to load certificate workspace.");
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [canManage, refreshWorkspace]);
 
-  useEffect(() => {
-    if (!selectedTemplateId) {
-      const reset = () => {
-        setVersions([]);
-        setSelectedVersionId(null);
-        setSelectedIds([]);
-        setHistory(createEditorHistory(deepCloneLayout(DEFAULT_CERTIFICATE_LAYOUT)));
-        setIsDraftReady(false);
-        setSavedHash(layoutHash(DEFAULT_CERTIFICATE_LAYOUT));
-        setDraftRevision(0);
-      };
-      queueMicrotask(reset);
-      return;
-    }
-
-    let cancelled = false;
-    queueMicrotask(() => setIsDraftReady(false));
-
-    Promise.all([
-      listCertificateTemplateVersions(eventId, selectedTemplateId),
-      getCertificateTemplateDraft(eventId, selectedTemplateId),
-    ])
-      .then(([versionRows, draft]) => {
+    Promise.resolve()
+      .then(async () => {
+        const { templateRows } = await refreshWorkspace();
         if (cancelled) return;
-        setVersions(versionRows);
-
-        const template = templates.find((item) => item.id === selectedTemplateId) ?? null;
-        const preferredVersion =
-          versionRows.find((version) => version.id === template?.activeVersionId) ?? versionRows[0] ?? null;
-        setSelectedVersionId(preferredVersion?.id ?? null);
-
-        const nextLayout = deepCloneLayout(draft.layout ?? DEFAULT_CERTIFICATE_LAYOUT);
-        setHistory(createEditorHistory(nextLayout));
-        setSelectedIds([]);
-        setDraftRevision(draft.revision);
-        setSavedHash(layoutHash(nextLayout));
-        setHasConflict(false);
-        setIsDraftReady(true);
-
-        const savedZoom = window.localStorage.getItem(`cert-studio-zoom:${selectedTemplateId}`);
-        const parsedZoom = Number(savedZoom ?? 100);
-        if (Number.isFinite(parsedZoom) && parsedZoom >= 25 && parsedZoom <= 200) {
-          setZoomPercent(Math.round(parsedZoom));
-        } else {
-          setZoomPercent(100);
+        if (templateRows.length === 0) {
+          resetEditorState();
         }
       })
       .catch(() => {
-        if (cancelled) return;
-        toast.error("Failed to load template draft.");
-        setVersions([]);
-        setSelectedVersionId(null);
-        setHistory(createEditorHistory(deepCloneLayout(DEFAULT_CERTIFICATE_LAYOUT)));
-        setSelectedIds([]);
-        setIsDraftReady(false);
+        if (!cancelled) {
+          toast.error("Failed to load certificate workspace.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [eventId, selectedTemplateId, templates]);
+  }, [canManage, refreshWorkspace, resetEditorState]);
+
+  useEffect(() => {
+    if (!selectedTemplateId) {
+      resetEditorState();
+      return;
+    }
+
+    let cancelled = false;
+    setIsDraftReady(false);
+
+    loadTemplateEditorState(selectedTemplateId, selectedTemplate?.activeVersionId)
+      .catch(() => {
+        if (cancelled) return;
+        toast.error("Failed to load template draft.");
+        resetEditorState();
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadTemplateEditorState, resetEditorState, selectedTemplate?.activeVersionId, selectedTemplateId]);
 
   useEffect(() => {
     if (!selectedTemplateId) return;
     window.localStorage.setItem(`cert-studio-zoom:${selectedTemplateId}`, String(zoomPercent));
   }, [selectedTemplateId, zoomPercent]);
-
-  useEffect(() => {
-    if (!canManage || isLoading) return;
-    let cancelled = false;
-
-    listCertificateAssets(eventId, "all")
-      .then((rows) => {
-        if (!cancelled) {
-          setAssets(rows);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          toast.error("Failed to refresh assets.");
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [canManage, eventId, isLoading]);
-
-  useEffect(() => {
-    if (issuanceSearchInput.trim()) return;
-    setIssuanceCandidates([]);
-    setIssuanceSearchAttempted(false);
-  }, [issuanceSearchInput]);
-
-  useEffect(() => {
-    if (!canManage || view !== "issuance") return;
-    const timer = setTimeout(() => {
-      refreshIssuanceTags();
-    }, 150);
-    return () => clearTimeout(timer);
-  }, [canManage, refreshIssuanceTags, view]);
-
-  useEffect(() => {
-    if (!canManage || view !== "issuance") return;
-    const timer = setTimeout(() => {
-      setIsRefreshingIssuance(true);
-      refreshIssuance()
-        .catch(() => toast.error("Failed to refresh issuance status."))
-        .finally(() => setIsRefreshingIssuance(false));
-    }, 180);
-
-    return () => clearTimeout(timer);
-  }, [canManage, refreshIssuance, view]);
 
   useEffect(() => {
     if (!canManage || !selectedTemplateId || !isDraftReady) return;
@@ -542,8 +417,9 @@ export function CertificateStudioWorkspace() {
       setSelectedIds([draft.id]);
       if (type === "image") setAssetMode("image");
       if (type === "signature") setAssetMode("signature");
+      if (view === "templates") setView("layers");
     },
-    [commitLayout, layout],
+    [commitLayout, layout, view],
   );
 
   const handleDeleteSelection = useCallback(() => {
@@ -622,9 +498,19 @@ export function CertificateStudioWorkspace() {
   const handleRefresh = useCallback(() => {
     setIsRefreshing(true);
     refreshWorkspace()
-      .catch(() => toast.error("Failed to refresh workspace."))
+      .then(async ({ templateRows, nextSelectedTemplateId }) => {
+        if (nextSelectedTemplateId) {
+          await loadTemplateEditorState(
+            nextSelectedTemplateId,
+            templateRows.find((template) => template.id === nextSelectedTemplateId)?.activeVersionId,
+          );
+        } else {
+          resetEditorState();
+        }
+      })
+      .catch(() => toast.error("Failed to refresh certificate studio."))
       .finally(() => setIsRefreshing(false));
-  }, [refreshWorkspace]);
+  }, [loadTemplateEditorState, refreshWorkspace, resetEditorState]);
 
   const handleCreateTemplate = useCallback(() => {
     const name = templateNameDraft.trim();
@@ -789,6 +675,7 @@ export function CertificateStudioWorkspace() {
         const nextLayout = addElement(layout, draft);
         commitLayout(nextLayout);
         setSelectedIds([draft.id]);
+        setView("layers");
         return;
       }
 
@@ -833,276 +720,6 @@ export function CertificateStudioWorkspace() {
         .catch(() => toast.error("Failed to delete asset."));
     },
     [csrfToken, eventId],
-  );
-
-  const handleSearchIssuanceCandidates = useCallback(() => {
-    const search = issuanceSearchInput.trim();
-    if (!search) {
-      setIssuanceCandidates([]);
-      setIssuanceSearchAttempted(false);
-      return;
-    }
-
-    setIsSearchingIssuanceCandidates(true);
-    setIssuanceSearchAttempted(true);
-    searchCertificateIssuanceCandidates(eventId, { search, limit: 20 })
-      .then((rows) => setIssuanceCandidates(rows))
-      .catch(() => {
-        setIssuanceCandidates([]);
-        toast.error("Failed to search applications.");
-      })
-      .finally(() => setIsSearchingIssuanceCandidates(false));
-  }, [eventId, issuanceSearchInput]);
-
-  const downloadIssuanceZipByIssuedIds = useCallback(
-    async (issuedCertificateIds: string[]) => {
-      const ids = Array.from(
-        new Set(
-          issuedCertificateIds.filter(
-            (issuedCertificateId) =>
-              typeof issuedCertificateId === "string" &&
-              issuedCertificateId.length > 0,
-          ),
-        ),
-      );
-      if (ids.length === 0) return;
-
-      setIsDownloadingIssuanceZip(true);
-      try {
-        const queuedJob = await createCertificatePdfExportJob(
-          eventId,
-          { issuedCertificateIds: ids },
-          csrfToken ?? undefined,
-        );
-        const terminalJob = await pollCertificatePdfExportJobUntilTerminal({
-          eventId,
-          jobId: queuedJob.id,
-          intervalMs: 2000,
-          timeoutMs: 15 * 60 * 1000,
-        });
-        if (String(terminalJob.status ?? "").toUpperCase() === "FAILED") {
-          throw new Error(
-            terminalJob.errorMessage || "Certificate PDF export failed.",
-          );
-        }
-        const download = await getCertificatePdfExportJobDownloadUrl(
-          eventId,
-          queuedJob.id,
-        );
-        const a = document.createElement("a");
-        a.href = download.url;
-        a.download = download.filename || `${eventId}-certificates.zip`;
-        a.click();
-        toast.success("Certificates ZIP downloaded.");
-      } catch (error) {
-        if (error instanceof ApiError && error.message.trim().length > 0) {
-          toast.error(error.message);
-        } else if (error instanceof Error && error.message.trim().length > 0) {
-          toast.error(error.message);
-        } else {
-          toast.error("Could not download certificates ZIP.");
-        }
-      } finally {
-        setIsDownloadingIssuanceZip(false);
-      }
-    },
-    [csrfToken, eventId],
-  );
-
-  const handleIssueCertificates = useCallback(() => {
-    if (!selectedTemplateId) {
-      toast.error("Select a template first.");
-      return;
-    }
-
-    const ids = parseApplicationIdsInput(issuanceApplicationIds);
-    if (ids.length === 0) {
-      toast.error("Provide at least one application ID.");
-      return;
-    }
-
-    setIsIssuing(true);
-    issueCertificatesBulk(
-      eventId,
-      {
-        templateId: selectedTemplateId,
-        templateVersionId: selectedVersionId ?? undefined,
-        applicationIds: ids,
-        issuerName: issuanceIssuerName.trim() || undefined,
-        reissueIfExists: issuanceReissueIfExists,
-      },
-      csrfToken ?? undefined,
-    )
-      .then((result) => {
-        toast.success(`Issued ${result.issued} certificate(s).`);
-        setIssuanceApplicationIds("");
-        return refreshIssuance().then(async () => {
-          if (issuanceDownloadAfterIssue) {
-            await downloadIssuanceZipByIssuedIds(
-              (result.certificates ?? [])
-                .map((certificate) => String(certificate.id ?? "").trim())
-                .filter((value) => value.length > 0),
-            );
-          }
-        });
-      })
-      .catch(() => toast.error("Failed to issue certificates."))
-      .finally(() => setIsIssuing(false));
-  }, [
-    csrfToken,
-    downloadIssuanceZipByIssuedIds,
-    eventId,
-    issuanceApplicationIds,
-    issuanceDownloadAfterIssue,
-    issuanceIssuerName,
-    issuanceReissueIfExists,
-    refreshIssuance,
-    selectedTemplateId,
-    selectedVersionId,
-  ]);
-
-  const handleIssueSingleCandidate = useCallback(
-    (applicationId: string) => {
-      if (!selectedTemplateId) {
-        toast.error("Select a template first.");
-        return;
-      }
-
-      setIsIssuing(true);
-      issueCertificatesBulk(
-        eventId,
-        {
-          templateId: selectedTemplateId,
-          templateVersionId: selectedVersionId ?? undefined,
-          applicationIds: [applicationId],
-          issuerName: issuanceIssuerName.trim() || undefined,
-          reissueIfExists: issuanceReissueIfExists,
-        },
-        csrfToken ?? undefined,
-      )
-        .then((result) => {
-          if (result.issued > 0) {
-            toast.success("Certificate issued.");
-          } else if (result.alreadyIssued > 0) {
-            toast.info("Certificate already issued.");
-          } else if (result.notFound.length > 0) {
-            toast.error("Application not found.");
-          } else if (result.failed.length > 0) {
-            toast.error(result.failed[0]?.reason || "Failed to issue certificate.");
-          } else {
-            toast.error("Failed to issue certificate.");
-          }
-          return refreshIssuance().then(async () => {
-            if (issuanceDownloadAfterIssue) {
-              await downloadIssuanceZipByIssuedIds(
-                (result.certificates ?? [])
-                  .map((certificate) => String(certificate.id ?? "").trim())
-                  .filter((value) => value.length > 0),
-              );
-            }
-          });
-        })
-        .catch(() => toast.error("Failed to issue certificate."))
-        .finally(() => setIsIssuing(false));
-    },
-    [
-      csrfToken,
-      downloadIssuanceZipByIssuedIds,
-      eventId,
-      issuanceDownloadAfterIssue,
-      issuanceIssuerName,
-      issuanceReissueIfExists,
-      refreshIssuance,
-      selectedTemplateId,
-      selectedVersionId,
-    ],
-  );
-
-  const handleIssueCertificatesByTags = useCallback(() => {
-    if (!selectedTemplateId) {
-      toast.error("Select a template first.");
-      return;
-    }
-    if (issuanceSelectedTags.length === 0) {
-      toast.error("Select at least one tag.");
-      return;
-    }
-
-    setIsIssuing(true);
-    issueCertificatesByTags(
-      eventId,
-      {
-        templateId: selectedTemplateId,
-        templateVersionId: selectedVersionId ?? undefined,
-        tags: issuanceSelectedTags,
-        issuerName: issuanceIssuerName.trim() || undefined,
-        reissueIfExists: issuanceReissueIfExists,
-      },
-      csrfToken ?? undefined,
-    )
-      .then((result) => {
-        toast.success(`Issued ${result.issued} certificate(s).`);
-        return refreshIssuance().then(async () => {
-          if (issuanceDownloadAfterIssue) {
-            await downloadIssuanceZipByIssuedIds(
-              (result.certificates ?? [])
-                .map((certificate) => String(certificate.id ?? "").trim())
-                .filter((value) => value.length > 0),
-            );
-          }
-        });
-      })
-      .catch((error: unknown) => {
-        if (error instanceof ApiError) {
-          toast.error(error.message);
-          return;
-        }
-        toast.error("Failed to issue certificates by tags.");
-      })
-      .finally(() => setIsIssuing(false));
-  }, [
-    csrfToken,
-    downloadIssuanceZipByIssuedIds,
-    eventId,
-    issuanceDownloadAfterIssue,
-    issuanceIssuerName,
-    issuanceReissueIfExists,
-    issuanceSelectedTags,
-    refreshIssuance,
-    selectedTemplateId,
-    selectedVersionId,
-  ]);
-
-  const handleReleaseIssuedCertificate = useCallback(
-    (certificate: IssuedCertificateSummary) => {
-      setReleasingIssuedCertificateId(certificate.id);
-      releaseIssuedCertificate(eventId, certificate.id, csrfToken ?? undefined)
-        .then(() => {
-          toast.success("Certificate released.");
-          return refreshIssuance();
-        })
-        .catch((error: unknown) => {
-          if (error instanceof ApiError) {
-            toast.error(error.message);
-            return;
-          }
-          toast.error("Failed to release certificate.");
-        })
-        .finally(() => setReleasingIssuedCertificateId(null));
-    },
-    [csrfToken, eventId, refreshIssuance],
-  );
-
-  const handleRetryRenderJob = useCallback(
-    (jobId: string) => {
-      retryCertificateRenderJob(eventId, jobId, csrfToken ?? undefined)
-        .then(() => {
-          toast.success("Render job queued for retry.");
-          return refreshIssuance();
-        })
-        .catch(() => toast.error("Failed to retry render job."));
-    },
-    [csrfToken, eventId, refreshIssuance],
   );
 
   const handleActivateVersion = useCallback(() => {
@@ -1174,63 +791,11 @@ export function CertificateStudioWorkspace() {
       .finally(() => setIsBusyVersionAction(false));
   }, [csrfToken, eventId, selectedTemplateId, selectedVersionId, versions]);
 
-  const handleRequestRevokeIssuedCertificate = useCallback(
-    (certificate: IssuedCertificateSummary) => {
-      setRevokeTargetCertificate(certificate);
-      setRevokeReasonDraft("");
-      setRevokeDialogOpen(true);
-    },
-    [],
-  );
-
-  const handleConfirmRevokeIssuedCertificate = useCallback(() => {
-    if (!revokeTargetCertificate) return;
-
-    setIsRevokingIssuedCertificate(true);
-    revokeIssuedCertificate(
-      eventId,
-      revokeTargetCertificate.id,
-      revokeReasonDraft.trim() || undefined,
-      csrfToken ?? undefined,
-    )
-      .then((deleted) => {
-        toast.success("Certificate revoked and deleted.");
-        setIssuedCertificates((previous) =>
-          previous.filter((item) => item.id !== deleted.id),
-        );
-        setRevokeDialogOpen(false);
-        setRevokeTargetCertificate(null);
-        setRevokeReasonDraft("");
-        return refreshIssuance();
-      })
-      .catch((error: unknown) => {
-        if (error instanceof ApiError) {
-          toast.error(error.message);
-          return;
-        }
-        toast.error("Failed to revoke certificate.");
-      })
-      .finally(() => setIsRevokingIssuedCertificate(false));
-  }, [
-    csrfToken,
-    eventId,
-    refreshIssuance,
-    revokeReasonDraft,
-    revokeTargetCertificate,
-  ]);
-
   const handleReloadDraft = useCallback(() => {
     if (!selectedTemplateId) return;
-    getCertificateTemplateDraft(eventId, selectedTemplateId)
-      .then((draft) => {
-        setHistory(createEditorHistory(deepCloneLayout(draft.layout)));
-        setSelectedIds([]);
-        setDraftRevision(draft.revision);
-        setSavedHash(layoutHash(draft.layout));
-        setHasConflict(false);
-      })
+    loadTemplateEditorState(selectedTemplateId, selectedTemplate?.activeVersionId)
       .catch(() => toast.error("Failed to reload draft."));
-  }, [eventId, selectedTemplateId]);
+  }, [loadTemplateEditorState, selectedTemplate?.activeVersionId, selectedTemplateId]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -1308,8 +873,9 @@ export function CertificateStudioWorkspace() {
       .filter((element) => element.type === "dynamic_text" || element.type === "qr")
       .map((element) => (element.token ?? "").trim())
       .filter((token) => token.length > 0);
-    const unknown = Array.from(new Set(usedTokens.filter((token) => !allowed.has(token))));
-    return { used: Array.from(new Set(usedTokens)), unknown };
+    const uniqueUsedTokens = Array.from(new Set(usedTokens));
+    const unknown = uniqueUsedTokens.filter((token) => !allowed.has(token));
+    return { used: uniqueUsedTokens, unknown };
   }, [layout.elements]);
 
   if (!canManage) {
@@ -1324,45 +890,17 @@ export function CertificateStudioWorkspace() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Certificate Studio"
-        description="Templates, assets, publishing, and issuance in one place."
-      >
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setIsLeftRailCollapsed((previous) => !previous)}>
-            {isLeftRailCollapsed ? (
-              <PanelLeftOpen className="mr-1.5 h-4 w-4" />
-            ) : (
-              <PanelLeftClose className="mr-1.5 h-4 w-4" />
-            )}
-            {isLeftRailCollapsed ? "Show left panel" : "Hide left panel"}
-          </Button>
-          <Button variant="outline" onClick={() => setIsInspectorCollapsed((previous) => !previous)}>
-            {isInspectorCollapsed ? (
-              <PanelRightOpen className="mr-1.5 h-4 w-4" />
-            ) : (
-              <PanelRightClose className="mr-1.5 h-4 w-4" />
-            )}
-            {isInspectorCollapsed ? "Show inspector" : "Hide inspector"}
-          </Button>
-          <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
-            <RefreshCw className={`mr-1.5 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-            Refresh status
-          </Button>
-        </div>
-      </PageHeader>
-
       <div className="lg:hidden">
         <Alert>
           <Monitor className="h-4 w-4" />
           <AlertDescription>
-            Advanced editing is desktop-first. On mobile you can review templates and issuance status.
+            Advanced template editing is desktop-first. On smaller screens you can still review templates and assets.
           </AlertDescription>
         </Alert>
       </div>
 
       {isLoading ? (
-        <div className="rounded-xl border p-10 text-center text-muted-foreground">Loading workspace...</div>
+        <div className="rounded-xl border p-10 text-center text-muted-foreground">Loading studio...</div>
       ) : (
         <>
           {hasConflict && (
@@ -1399,6 +937,10 @@ export function CertificateStudioWorkspace() {
             hasConflict={hasConflict}
             dirty={dirty}
             activeVersionNumber={activeVersionNumber}
+            isLeftRailCollapsed={isLeftRailCollapsed}
+            isInspectorCollapsed={isInspectorCollapsed}
+            onToggleLeftRail={() => setIsLeftRailCollapsed((previous) => !previous)}
+            onToggleInspector={() => setIsInspectorCollapsed((previous) => !previous)}
             onRefresh={handleRefresh}
             onAddElement={handleAddElement}
             onDeleteSelection={handleDeleteSelection}
@@ -1416,103 +958,51 @@ export function CertificateStudioWorkspace() {
 
           <div className={workspaceGridClass}>
             {!isLeftRailCollapsed && (
-              <div>
-                <LeftRail
-                  canManage={canManage}
-                  view={view}
-                  onViewChange={setView}
-                  templates={templates}
-                  selectedTemplateId={selectedTemplateId}
-                  versions={versions}
-                  selectedVersionId={selectedVersionId}
-                  onSelectTemplate={setSelectedTemplateId}
-                  onSelectVersion={setSelectedVersionId}
-                  onActivateSelectedVersion={handleActivateVersion}
-                  onDeleteSelectedVersion={handleDeleteSelectedVersion}
-                  onCreateTemplate={handleCreateTemplate}
-                  onDuplicateTemplate={handleDuplicateTemplate}
-                  onDeleteTemplate={handleDeleteTemplate}
-                  onArchiveTemplate={handleArchiveTemplate}
-                  templateNameDraft={templateNameDraft}
-                  typeLabelDraft={typeLabelDraft}
-                  typeKeyDraft={typeKeyDraft}
-                  onTemplateNameDraftChange={setTemplateNameDraft}
-                  onTypeLabelDraftChange={(value) => {
-                    setTypeLabelDraft(value);
-                    if (!typeKeyDraft.trim()) {
-                      setTypeKeyDraft(slugifyTypeKey(value));
-                    }
-                  }}
-                  onTypeKeyDraftChange={(value) => setTypeKeyDraft(slugifyTypeKey(value))}
-                  isCreatingTemplate={isCreatingTemplate}
-                  isBusyTemplateAction={isBusyTemplateAction}
-                  isBusyVersionAction={isBusyVersionAction}
-                  assetMode={assetMode}
-                  onAssetModeChange={setAssetMode}
-                  assets={assets}
-                  assetSearch={assetSearch}
-                  onAssetSearchChange={setAssetSearch}
-                  assetKindFilter={assetKindFilter}
-                  onAssetKindFilterChange={setAssetKindFilter}
-                  onApplyAsset={handleApplyAsset}
-                  onUploadAsset={handleUploadAsset}
-                  onDeleteAsset={handleDeleteAsset}
-                  isUploadingAsset={isUploadingAsset}
-                  issuanceApplicationIds={issuanceApplicationIds}
-                  onIssuanceApplicationIdsChange={setIssuanceApplicationIds}
-                  issuanceSearchInput={issuanceSearchInput}
-                  onIssuanceSearchInputChange={setIssuanceSearchInput}
-                  onSearchIssuanceCandidates={handleSearchIssuanceCandidates}
-                  issuanceCandidates={issuanceCandidates}
-                  issuanceSearchAttempted={issuanceSearchAttempted}
-                  isSearchingIssuanceCandidates={isSearchingIssuanceCandidates}
-                  issuanceTagSearchInput={issuanceTagSearchInput}
-                  onIssuanceTagSearchInputChange={setIssuanceTagSearchInput}
-                  onRefreshIssuanceTags={refreshIssuanceTags}
-                  issuanceTags={issuanceTags}
-                  issuanceSelectedTags={issuanceSelectedTags}
-                  onToggleIssuanceTag={(tag) => {
-                    setIssuanceSelectedTags((previous) =>
-                      previous.includes(tag)
-                        ? previous.filter((item) => item !== tag)
-                        : [...previous, tag],
-                    );
-                  }}
-                  onIssueCertificatesByTags={handleIssueCertificatesByTags}
-                  issuanceIssuerName={issuanceIssuerName}
-                  onIssuanceIssuerNameChange={setIssuanceIssuerName}
-                  issuanceReissueIfExists={issuanceReissueIfExists}
-                  onIssuanceReissueIfExistsChange={setIssuanceReissueIfExists}
-                  issuanceDownloadAfterIssue={issuanceDownloadAfterIssue}
-                  onIssuanceDownloadAfterIssueChange={setIssuanceDownloadAfterIssue}
-                  onIssueCertificates={handleIssueCertificates}
-                  onIssueCandidate={handleIssueSingleCandidate}
-                  isIssuing={isIssuing}
-                  isLoadingIssuanceTags={isLoadingIssuanceTags}
-                  isDownloadingIssuanceZip={isDownloadingIssuanceZip}
-                  issuedHistorySearchInput={issuedHistorySearchInput}
-                  onIssuedHistorySearchInputChange={setIssuedHistorySearchInput}
-                  issuedCertificates={issuedCertificates}
-                  renderJobs={renderJobs}
-                  onRequestRevokeIssuedCertificate={handleRequestRevokeIssuedCertificate}
-                  onReleaseIssuedCertificate={handleReleaseIssuedCertificate}
-                  revokingIssuedCertificateId={
-                    isRevokingIssuedCertificate ? revokeTargetCertificate?.id ?? null : null
+              <LeftRail
+                canManage={canManage}
+                view={view}
+                onViewChange={setView}
+                templates={templates}
+                selectedTemplateId={selectedTemplateId}
+                versions={versions}
+                selectedVersionId={selectedVersionId}
+                onSelectTemplate={setSelectedTemplateId}
+                onSelectVersion={setSelectedVersionId}
+                onActivateSelectedVersion={handleActivateVersion}
+                onDeleteSelectedVersion={handleDeleteSelectedVersion}
+                onCreateTemplate={handleCreateTemplate}
+                onDuplicateTemplate={handleDuplicateTemplate}
+                onDeleteTemplate={handleDeleteTemplate}
+                onArchiveTemplate={handleArchiveTemplate}
+                templateNameDraft={templateNameDraft}
+                typeLabelDraft={typeLabelDraft}
+                typeKeyDraft={typeKeyDraft}
+                onTemplateNameDraftChange={setTemplateNameDraft}
+                onTypeLabelDraftChange={(value) => {
+                  setTypeLabelDraft(value);
+                  if (!typeKeyDraft.trim()) {
+                    setTypeKeyDraft(slugifyTypeKey(value));
                   }
-                  releasingIssuedCertificateId={releasingIssuedCertificateId}
-                  onDownloadIssuedCertificates={(issuedCertificateIds) => {
-                    void downloadIssuanceZipByIssuedIds(issuedCertificateIds);
-                  }}
-                  onRetryRenderJob={handleRetryRenderJob}
-                  onRefreshIssuance={() => {
-                    setIsRefreshingIssuance(true);
-                    refreshIssuance()
-                      .catch(() => toast.error("Failed to refresh issuance status."))
-                      .finally(() => setIsRefreshingIssuance(false));
-                  }}
-                  isRefreshingIssuance={isRefreshingIssuance}
-                />
-              </div>
+                }}
+                onTypeKeyDraftChange={(value) => setTypeKeyDraft(slugifyTypeKey(value))}
+                isCreatingTemplate={isCreatingTemplate}
+                isBusyTemplateAction={isBusyTemplateAction}
+                isBusyVersionAction={isBusyVersionAction}
+                layout={layout}
+                selectedIds={selectedIds}
+                onSelectLayer={setSelectedIds}
+                assetMode={assetMode}
+                onAssetModeChange={setAssetMode}
+                assets={assets}
+                assetSearch={assetSearch}
+                onAssetSearchChange={setAssetSearch}
+                assetKindFilter={assetKindFilter}
+                onAssetKindFilterChange={setAssetKindFilter}
+                onApplyAsset={handleApplyAsset}
+                onUploadAsset={handleUploadAsset}
+                onDeleteAsset={handleDeleteAsset}
+                isUploadingAsset={isUploadingAsset}
+              />
             )}
 
             <EditorCanvas
@@ -1541,6 +1031,15 @@ export function CertificateStudioWorkspace() {
                 onUpdatePrimaryToken={handleUpdatePrimaryToken}
                 tokenOptions={Array.from(CERTIFICATE_DYNAMIC_TOKENS)}
                 assets={assets}
+                previewData={previewData}
+                previewTokenKeys={tokenValidation.used}
+                onPreviewDataChange={(key, value) =>
+                  setPreviewData((previous) => ({
+                    ...previous,
+                    [key]: value,
+                  }))
+                }
+                onResetPreviewData={() => setPreviewData(DEFAULT_PREVIEW_DATA)}
                 onUpdateCanvas={handleUpdateCanvas}
                 onSetAssetMode={setAssetMode}
                 onDeleteSelection={handleDeleteSelection}
@@ -1550,88 +1049,6 @@ export function CertificateStudioWorkspace() {
               />
             )}
           </div>
-
-          <div className="rounded-xl border p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <p className="text-sm font-semibold">Preview Tokens</p>
-              <Button size="sm" variant="ghost" onClick={() => setPreviewData(DEFAULT_PREVIEW_DATA)}>
-                Reset values
-              </Button>
-            </div>
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-              {Object.entries(previewData).map(([key, value]) => (
-                <label key={key} className="space-y-1">
-                  <span className="text-[11px] text-muted-foreground">{key}</span>
-                  <input
-                    value={value}
-                    onChange={(event) =>
-                      setPreviewData((previous) => ({
-                        ...previous,
-                        [key]: event.target.value,
-                      }))
-                    }
-                    className="h-8 w-full rounded-md border bg-background px-2 text-sm"
-                  />
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <Dialog
-            open={revokeDialogOpen}
-            onOpenChange={(open) => {
-              if (isRevokingIssuedCertificate) return;
-              setRevokeDialogOpen(open);
-              if (!open) {
-                setRevokeTargetCertificate(null);
-                setRevokeReasonDraft("");
-              }
-            }}
-          >
-            <DialogContent className="sm:max-w-md">
-              <DialogHeader>
-                <DialogTitle>Revoke certificate</DialogTitle>
-                <DialogDescription>
-                  {revokeTargetCertificate
-                    ? `Certificate ${revokeTargetCertificate.certificateId} will be marked as revoked.`
-                    : "This certificate will be marked as revoked."}
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground">Reason (optional)</p>
-                <Textarea
-                  value={revokeReasonDraft}
-                  onChange={(event) => setRevokeReasonDraft(event.target.value)}
-                  placeholder="Add a reason for revocation"
-                  disabled={isRevokingIssuedCertificate}
-                  className="min-h-24"
-                />
-              </div>
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => setRevokeDialogOpen(false)}
-                  disabled={isRevokingIssuedCertificate}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="destructive"
-                  onClick={handleConfirmRevokeIssuedCertificate}
-                  disabled={!revokeTargetCertificate || isRevokingIssuedCertificate}
-                >
-                  {isRevokingIssuedCertificate ? (
-                    <>
-                      <RefreshCw className="mr-1.5 h-4 w-4 animate-spin" />
-                      Revoking...
-                    </>
-                  ) : (
-                    "Confirm revoke"
-                  )}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
         </>
       )}
     </div>
