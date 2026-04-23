@@ -286,10 +286,7 @@ export class CertificatesService {
     status?: string | null;
     checked_in_at?: Date | null;
   } | null | undefined): boolean {
-    return (
-      String(attendance?.status ?? '').toUpperCase() === 'CHECKED_IN' &&
-      Boolean(attendance?.checked_in_at)
-    );
+    return String(attendance?.status ?? '').toUpperCase() === 'CHECKED_IN';
   }
 
   private isParticipantVisibleIssuedCertificateRecord(record: {

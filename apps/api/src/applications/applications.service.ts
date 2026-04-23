@@ -3348,8 +3348,7 @@ export class ApplicationsService {
           hideUnreleased:
             options?.hideUnreleasedCertificates === true,
           isCheckedIn:
-            app.attendance_records?.status === 'CHECKED_IN' &&
-            Boolean(app.attendance_records?.checked_in_at),
+            app.attendance_records?.status === 'CHECKED_IN',
         },
       ),
       stepStates: stepStates.map((ss: any) => {

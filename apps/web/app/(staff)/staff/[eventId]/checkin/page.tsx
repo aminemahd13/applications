@@ -835,7 +835,7 @@ export default function CheckinPage() {
         </Card>
       </div>
 
-      <Card>
+      <Card className="overflow-hidden">
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -855,7 +855,7 @@ export default function CheckinPage() {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="flex max-h-[70vh] min-h-0 flex-col gap-4 overflow-hidden">
           <div className="grid gap-2 md:grid-cols-[220px_minmax(0,1fr)_auto]">
             <Select
               value={attendeeStatusFilter}
@@ -947,71 +947,75 @@ export default function CheckinPage() {
             </span>
           </div>
 
-          {isLoadingAttendees ? (
-            <p className="text-sm text-muted-foreground py-6">Loading attendees...</p>
-          ) : attendees.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-6">
-              No attendees match the current filters.
-            </p>
-          ) : (
-            <ScrollArea className="max-h-96">
-              <div className="space-y-2">
-                {attendees.map((attendee) => {
-                  const tags = parseTagList(attendee.tags);
-                  const isCheckedIn =
-                    attendee.isCheckedIn || attendee.attendanceStatus === "CHECKED_IN";
-                  const canManualCheckin =
-                    attendee.attendanceStatus === "CONFIRMED" &&
-                    canUseScanner &&
-                    !isScanning;
-                  return (
-                    <div
-                      key={attendee.applicationId}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm"
-                    >
-                      <div className="space-y-1">
-                        <p className="font-medium">{attendee.applicantName}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {attendee.applicantEmail || attendee.applicantUserId}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {isCheckedIn
-                            ? attendee.checkedInAt
-                              ? `Checked in ${new Date(attendee.checkedInAt).toLocaleString("en-GB")}`
-                              : "Checked in"
-                            : "Not checked in"}
-                          {isCheckedIn && attendee.checkedInByEmail
-                            ? ` - ${attendee.checkedInByEmail}`
-                            : ""}
-                        </p>
-                        {tags.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {tags.map((tag) => (
-                              <Badge key={`${attendee.applicationId}-${tag}`} variant="secondary">
-                                {tag}
-                              </Badge>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <Button
-                        size="sm"
-                        onClick={() => handleManualCheckin(attendee.applicationId)}
-                        disabled={!canManualCheckin}
-                        variant={canManualCheckin ? "default" : "outline"}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {isLoadingAttendees ? (
+              <p className="flex h-full items-center text-sm text-muted-foreground">
+                Loading attendees...
+              </p>
+            ) : attendees.length === 0 ? (
+              <p className="flex h-full items-center text-sm text-muted-foreground">
+                No attendees match the current filters.
+              </p>
+            ) : (
+              <ScrollArea className="h-full">
+                <div className="space-y-2 pr-3">
+                  {attendees.map((attendee) => {
+                    const tags = parseTagList(attendee.tags);
+                    const isCheckedIn =
+                      attendee.isCheckedIn || attendee.attendanceStatus === "CHECKED_IN";
+                    const canManualCheckin =
+                      attendee.attendanceStatus === "CONFIRMED" &&
+                      canUseScanner &&
+                      !isScanning;
+                    return (
+                      <div
+                        key={attendee.applicationId}
+                        className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm"
                       >
-                        {canManualCheckin
-                          ? "Check in"
-                          : isCheckedIn
-                            ? "Checked in"
-                            : "Not eligible"}
-                      </Button>
-                    </div>
-                  );
-                })}
-              </div>
-            </ScrollArea>
-          )}
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <p className="break-words font-medium">{attendee.applicantName}</p>
+                          <p className="break-all text-xs text-muted-foreground">
+                            {attendee.applicantEmail || attendee.applicantUserId}
+                          </p>
+                          <p className="break-words text-xs text-muted-foreground">
+                            {isCheckedIn
+                              ? attendee.checkedInAt
+                                ? `Checked in ${new Date(attendee.checkedInAt).toLocaleString("en-GB")}`
+                                : "Checked in"
+                              : "Not checked in"}
+                            {isCheckedIn && attendee.checkedInByEmail
+                              ? ` - ${attendee.checkedInByEmail}`
+                              : ""}
+                          </p>
+                          {tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {tags.map((tag) => (
+                                <Badge key={`${attendee.applicationId}-${tag}`} variant="secondary">
+                                  {tag}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => handleManualCheckin(attendee.applicationId)}
+                          disabled={!canManualCheckin}
+                          variant={canManualCheckin ? "default" : "outline"}
+                        >
+                          {canManualCheckin
+                            ? "Check in"
+                            : isCheckedIn
+                              ? "Checked in"
+                              : "Not eligible"}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+            )}
+          </div>
 
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">Page {attendeesPage}</p>

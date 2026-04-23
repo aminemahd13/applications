@@ -762,6 +762,71 @@ describe('ApplicationsService applicant visibility', () => {
     expect(result?.certificates?.length).toBe(1);
     expect(result?.certificates?.[0]?.certificateId).toBe('cert-1');
   });
+
+  it('shows issued certificates when checked-in status exists without timestamp', async () => {
+    const now = new Date('2026-02-20T10:00:00.000Z');
+    const mockPrisma = {
+      applications: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'app-1',
+          event_id: 'event-1',
+          applicant_user_id: 'user-1',
+          decision_status: 'NONE',
+          decision_published_at: null,
+          decision_draft: null,
+          tags: [],
+          internal_notes: null,
+          assigned_reviewer_id: null,
+          created_at: now,
+          updated_at: now,
+          users_applications_applicant_user_idTousers: {
+            id: 'user-1',
+            email: 'user@example.com',
+            applicant_profiles: null,
+          },
+          application_step_states: [],
+          attendance_records: {
+            status: 'CHECKED_IN',
+            checked_in_at: null,
+          },
+          completion_credentials: null,
+          issued_certificates: [
+            {
+              id: 'issued-1',
+              certificate_id: 'cert-1',
+              credential_id: 'cred-1',
+              certificate_type_key: 'participation',
+              certificate_type_label: 'Participation',
+              qr_token: 'qr-1',
+              issued_at: now,
+              released_at: now,
+              revoked_at: null,
+              status: 'ISSUED',
+              render_status: 'DONE',
+              pdf_storage_key: 'events/event-1/certificates/pdf/cert-1.pdf',
+            },
+          ],
+        }),
+      },
+    };
+    const mockCls = {
+      get: jest.fn((key: string) => (key === 'actorId' ? 'user-1' : undefined)),
+    };
+    const stepStateService = {
+      ensureStepStates: jest.fn().mockResolvedValue(false),
+    };
+
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      mockCls as any,
+      stepStateService as any,
+    );
+
+    const result = await service.findMyApplication('event-1');
+
+    expect(result?.certificates?.length).toBe(1);
+    expect(result?.certificates?.[0]?.certificateId).toBe('cert-1');
+  });
 });
 
 describe('ApplicationsService ticket confirmation gating', () => {

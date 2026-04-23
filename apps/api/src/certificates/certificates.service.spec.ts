@@ -143,6 +143,35 @@ describe('CertificatesService public resolvers', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it('returns participant PDF URL when attendee is checked in without timestamp', async () => {
+    const { service, prisma, storageService } = createServiceHarness();
+    const storageKey = 'events/event-1/certificates/pdf/certificate-legacy.pdf';
+
+    prisma.issued_certificates.findUnique.mockResolvedValue({
+      status: 'ISSUED',
+      revoked_at: null,
+      released_at: new Date('2026-04-23T10:00:00.000Z'),
+      pdf_storage_key: storageKey,
+      applications: {
+        attendance_records: {
+          status: 'CHECKED_IN',
+          checked_in_at: null,
+        },
+      },
+    });
+    storageService.getPresignedGetUrl.mockResolvedValue(
+      'https://storage.example.com/signed-pdf-legacy',
+    );
+
+    const result = await service.resolveCertificatePdfUrl('certificate-legacy');
+
+    expect(storageService.getPresignedGetUrl).toHaveBeenCalledWith(
+      storageKey,
+      3600,
+    );
+    expect(result).toBe('https://storage.example.com/signed-pdf-legacy');
+  });
+
   it('throws 404 for unreleased participant certificate PDF', async () => {
     const { service, prisma } = createServiceHarness();
 
