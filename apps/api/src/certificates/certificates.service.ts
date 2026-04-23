@@ -10,6 +10,10 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
 import { StorageService } from '../common/storage/storage.service';
 import {
+  CertificateLayoutSchema,
+  type CertificateLayout,
+  type CertificateSignatureSlot,
+  type CertificateTemplateElement,
   CreateCertificatePdfExportJobDto,
   CreateCertificateTemplateDto,
   CreateCertificateTemplateVersionDto,
@@ -35,12 +39,19 @@ import * as jwt from 'jsonwebtoken';
 import { createHmac } from 'node:crypto';
 import { joinAppUrl, resolveAppBaseUrl } from '../common/utils/export-csv.util';
 import JSZip from 'jszip';
+import QRCode from 'qrcode';
+import sharp from 'sharp';
 
 const CERTIFICATE_ASSET_PREFIX = /^events\/[^/]+\/certificates\/assets\/.+/;
 const CERTIFICATE_PDF_PREFIX = /^events\/[^/]+\/certificates\/pdf\/.+/;
 const CERTIFICATE_PDF_EXPORT_PREFIX =
   /^events\/[^/]+\/certificates\/exports\/.+/;
 const CERTIFICATE_PDF_EXPORT_PRESIGNED_DOWNLOAD_TTL_SECONDS = 600;
+const CERTIFICATE_RENDER_MAX_CANVAS_SIZE = 8000;
+const CERTIFICATE_RENDER_TEXT_PADDING = 6;
+const CERTIFICATE_RENDER_DEFAULT_FONT_FAMILY = 'Arial, Helvetica, sans-serif';
+const CERTIFICATE_PDF_MAX_WIDTH_POINTS = 842;
+const CERTIFICATE_PDF_MAX_HEIGHT_POINTS = 595;
 
 interface QrSigningConfig {
   activeKid: string;
@@ -52,9 +63,11 @@ type IssuedCertificateForRender = {
   event_id: string;
   certificate_id: string;
   credential_id: string;
+  qr_token: string;
   certificate_type_label: string;
   issuer_name: string;
   issued_at: Date;
+  template_snapshot: unknown;
   payload_snapshot: unknown;
   applications: {
     id: string;
@@ -1944,16 +1957,13 @@ export class CertificatesService {
 
         const zip = new JSZip();
         for (const row of issued) {
-          const pdfStorageKey = String(row.pdf_storage_key ?? '')
-            .trim()
-            .replace(/^\/+/, '');
-          const pdfBuffer = await this.storageService.getObjectBuffer(pdfStorageKey);
-          const safeCertificateId = String(row.certificate_id ?? 'certificate')
+          const rendered = await this.renderIssuedCertificatePdf(String(row.id));
+          const safeCertificateId = String(rendered.certificateId ?? 'certificate')
             .trim()
             .replace(/[^a-zA-Z0-9._-]+/g, '-')
             .replace(/-+/g, '-')
             .replace(/^-|-$/g, '');
-          zip.file(`${safeCertificateId || 'certificate'}.pdf`, pdfBuffer);
+          zip.file(`${safeCertificateId || 'certificate'}.pdf`, rendered.pdfBuffer);
         }
         const zipBuffer = await zip.generateAsync({
           type: 'nodebuffer',
@@ -2347,6 +2357,839 @@ export class CertificatesService {
     await this.prisma.file_objects.delete({ where: { id: file.id } });
   }
 
+  private normalizeHexColor(value: unknown, fallback: string): string {
+    const normalized = String(value ?? '')
+      .trim()
+      .toLowerCase();
+    return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : fallback;
+  }
+
+  private escapeXml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  private toPayloadStringMap(value: unknown): Record<string, string> {
+    const payload = this.toRecord(value);
+    const out: Record<string, string> = {};
+    for (const [key, entry] of Object.entries(payload)) {
+      if (typeof entry === 'string') {
+        out[key] = entry;
+        continue;
+      }
+      if (
+        typeof entry === 'number' ||
+        typeof entry === 'boolean' ||
+        typeof entry === 'bigint'
+      ) {
+        out[key] = String(entry);
+      }
+    }
+    return out;
+  }
+
+  private resolveRenderPayloadTokens(
+    record: IssuedCertificateForRender,
+  ): Record<string, string> {
+    const links = this.getCredentialLinks(record.certificate_id, record.credential_id);
+    const qrVerificationUrl = this.getQrVerificationUrl(record.qr_token);
+    return {
+      ...this.toPayloadStringMap(record.payload_snapshot),
+      verificationUrl: links.verifiableCredentialUrl,
+      verifiableCredentialUrl: links.verifiableCredentialUrl,
+      certificateUrl: links.certificateUrl,
+      qrVerificationUrl,
+    };
+  }
+
+  private estimateTextWidth(
+    value: string,
+    fontSize: number,
+    letterSpacing: number,
+  ): number {
+    if (!value) return 0;
+    let width = 0;
+    for (let index = 0; index < value.length; index += 1) {
+      const char = value[index];
+      if (char === ' ') {
+        width += fontSize * 0.33;
+      } else if (/[ilI.,'`]/.test(char)) {
+        width += fontSize * 0.28;
+      } else if (/[A-Z0-9]/.test(char)) {
+        width += fontSize * 0.62;
+      } else {
+        width += fontSize * 0.56;
+      }
+      if (index < value.length - 1) {
+        width += letterSpacing;
+      }
+    }
+    return width;
+  }
+
+  private breakLongWord(
+    word: string,
+    maxWidth: number,
+    fontSize: number,
+    letterSpacing: number,
+  ): string[] {
+    if (!word) return [''];
+    const chunks: string[] = [];
+    let cursor = '';
+    for (const char of word) {
+      const next = `${cursor}${char}`;
+      if (
+        cursor &&
+        this.estimateTextWidth(next, fontSize, letterSpacing) > maxWidth
+      ) {
+        chunks.push(cursor);
+        cursor = char;
+      } else {
+        cursor = next;
+      }
+    }
+    if (cursor) {
+      chunks.push(cursor);
+    }
+    return chunks.length > 0 ? chunks : [word];
+  }
+
+  private wrapTextToLines(input: {
+    text: string;
+    maxWidth: number;
+    maxLines: number;
+    fontSize: number;
+    letterSpacing: number;
+  }): string[] {
+    const maxWidth = Math.max(8, input.maxWidth);
+    const maxLines = Math.max(1, Math.floor(input.maxLines));
+    const fontSize = Math.max(8, input.fontSize);
+    const letterSpacing = Number.isFinite(input.letterSpacing)
+      ? input.letterSpacing
+      : 0;
+
+    const paragraphs = String(input.text ?? '')
+      .replace(/\r\n?/g, '\n')
+      .split('\n');
+    const lines: string[] = [];
+
+    for (const paragraph of paragraphs) {
+      const trimmedParagraph = paragraph.trim();
+      if (!trimmedParagraph) {
+        lines.push('');
+        continue;
+      }
+
+      const words = trimmedParagraph.split(/\s+/).filter(Boolean);
+      let current = '';
+
+      for (const word of words) {
+        if (!current) {
+          if (this.estimateTextWidth(word, fontSize, letterSpacing) <= maxWidth) {
+            current = word;
+          } else {
+            const chunks = this.breakLongWord(
+              word,
+              maxWidth,
+              fontSize,
+              letterSpacing,
+            );
+            lines.push(...chunks.slice(0, -1));
+            current = chunks[chunks.length - 1] ?? '';
+          }
+          continue;
+        }
+
+        const candidate = `${current} ${word}`;
+        if (
+          this.estimateTextWidth(candidate, fontSize, letterSpacing) <= maxWidth
+        ) {
+          current = candidate;
+          continue;
+        }
+
+        lines.push(current);
+        if (this.estimateTextWidth(word, fontSize, letterSpacing) <= maxWidth) {
+          current = word;
+          continue;
+        }
+
+        const chunks = this.breakLongWord(word, maxWidth, fontSize, letterSpacing);
+        lines.push(...chunks.slice(0, -1));
+        current = chunks[chunks.length - 1] ?? '';
+      }
+
+      if (current) {
+        lines.push(current);
+      }
+    }
+
+    const normalizedLines = lines.length > 0 ? lines : [''];
+    if (normalizedLines.length <= maxLines) {
+      return normalizedLines;
+    }
+
+    const sliced = normalizedLines.slice(0, maxLines);
+    let last = sliced[maxLines - 1] ?? '';
+    while (
+      last.length > 0 &&
+      this.estimateTextWidth(`${last}…`, fontSize, letterSpacing) > maxWidth
+    ) {
+      last = last.slice(0, -1);
+    }
+    sliced[maxLines - 1] = last ? `${last}…` : '…';
+    return sliced;
+  }
+
+  private formatPdfNumber(value: number): string {
+    if (!Number.isFinite(value)) return '0';
+    const rounded = Math.round(value * 1000) / 1000;
+    return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+  }
+
+  private inferMimeTypeFromStorageKey(storageKey: string): string {
+    const normalized = String(storageKey ?? '').trim().toLowerCase();
+    if (normalized.endsWith('.png')) return 'image/png';
+    if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) {
+      return 'image/jpeg';
+    }
+    if (normalized.endsWith('.webp')) return 'image/webp';
+    if (normalized.endsWith('.gif')) return 'image/gif';
+    if (normalized.endsWith('.svg')) return 'image/svg+xml';
+    return 'application/octet-stream';
+  }
+
+  private inferMimeTypeFromBuffer(buffer: Buffer, fallbackMime: string): string {
+    if (buffer.byteLength >= 8) {
+      const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+      const isPng = pngSignature.every((byte, index) => buffer[index] === byte);
+      if (isPng) return 'image/png';
+    }
+    if (
+      buffer.byteLength >= 3 &&
+      buffer[0] === 0xff &&
+      buffer[1] === 0xd8 &&
+      buffer[2] === 0xff
+    ) {
+      return 'image/jpeg';
+    }
+    if (buffer.byteLength >= 12) {
+      const riff = buffer.subarray(0, 4).toString('ascii');
+      const webp = buffer.subarray(8, 12).toString('ascii');
+      if (riff === 'RIFF' && webp === 'WEBP') {
+        return 'image/webp';
+      }
+    }
+    if (buffer.byteLength >= 6) {
+      const header = buffer.subarray(0, 6).toString('ascii');
+      if (header === 'GIF87a' || header === 'GIF89a') {
+        return 'image/gif';
+      }
+    }
+    const head = buffer
+      .subarray(0, 512)
+      .toString('utf8')
+      .trimStart()
+      .toLowerCase();
+    if (head.startsWith('<svg') || (head.startsWith('<?xml') && head.includes('<svg'))) {
+      return 'image/svg+xml';
+    }
+    return fallbackMime;
+  }
+
+  private async loadRenderableCertificateAsset(
+    storageKey: string,
+  ): Promise<Buffer | null> {
+    const normalizedKey = String(storageKey ?? '')
+      .trim()
+      .replace(/^\/+/, '');
+    if (!normalizedKey || !CERTIFICATE_ASSET_PREFIX.test(normalizedKey)) {
+      return null;
+    }
+
+    try {
+      const buffer = await this.storageService.getObjectBuffer(normalizedKey);
+      if (!buffer || buffer.byteLength === 0) return null;
+      const mimeFromKey = this.inferMimeTypeFromStorageKey(normalizedKey);
+      const mimeType = this.inferMimeTypeFromBuffer(buffer, mimeFromKey);
+      if (!mimeType.startsWith('image/')) {
+        return null;
+      }
+      return buffer;
+    } catch (error) {
+      this.logger.warn(
+        `Could not load certificate asset "${normalizedKey}": ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
+  }
+
+  private buildTextOverlaySvg(input: {
+    width: number;
+    height: number;
+    text: string;
+    style: Record<string, unknown>;
+    defaultAlign?: 'left' | 'center' | 'right';
+    defaultColor?: string;
+    defaultFontSize?: number;
+  }): string {
+    const width = Math.max(1, Math.round(input.width));
+    const height = Math.max(1, Math.round(input.height));
+    const style = input.style;
+    const fontFamilyRaw =
+      typeof style.fontFamily === 'string' && style.fontFamily.trim().length > 0
+        ? style.fontFamily.trim()
+        : CERTIFICATE_RENDER_DEFAULT_FONT_FAMILY;
+    const fontFamily = this.escapeXml(fontFamilyRaw);
+    const fontSize = Math.max(
+      8,
+      Number(style.fontSize ?? input.defaultFontSize ?? 32),
+    );
+    const fontWeight = Math.max(
+      100,
+      Math.min(900, Math.round(Number(style.fontWeight ?? 500))),
+    );
+    const lineHeightRatio = Math.min(
+      3,
+      Math.max(0.8, Number(style.lineHeight ?? 1.2)),
+    );
+    const lineHeight = fontSize * lineHeightRatio;
+    const letterSpacing = Number(style.letterSpacing ?? 0);
+    const color = this.normalizeHexColor(
+      style.color,
+      input.defaultColor ?? '#0f172a',
+    );
+    const textAlign =
+      style.textAlign === 'center' || style.textAlign === 'right'
+        ? (style.textAlign as 'center' | 'right')
+        : input.defaultAlign ?? 'left';
+    const anchor =
+      textAlign === 'center'
+        ? 'middle'
+        : textAlign === 'right'
+          ? 'end'
+          : 'start';
+    const x =
+      textAlign === 'center'
+        ? width / 2
+        : textAlign === 'right'
+          ? Math.max(0, width - CERTIFICATE_RENDER_TEXT_PADDING)
+          : CERTIFICATE_RENDER_TEXT_PADDING;
+    const maxWidth = Math.max(8, width - CERTIFICATE_RENDER_TEXT_PADDING * 2);
+    const maxLines = Math.max(
+      1,
+      Math.floor(
+        Math.max(1, height - CERTIFICATE_RENDER_TEXT_PADDING * 2) / lineHeight,
+      ),
+    );
+    const lines = this.wrapTextToLines({
+      text: input.text,
+      maxWidth,
+      maxLines,
+      fontSize,
+      letterSpacing,
+    });
+    const totalTextHeight = lines.length * lineHeight;
+    const baselineOffset = fontSize * 0.8;
+    const startY = Math.max(
+      baselineOffset,
+      (height - totalTextHeight) / 2 + baselineOffset,
+    );
+    const lineNodes = lines
+      .map((line, index) => {
+        const lineText = line.length > 0 ? this.escapeXml(line) : '&#8203;';
+        const y = startY + index * lineHeight;
+        return `<text x="${this.formatPdfNumber(x)}" y="${this.formatPdfNumber(y)}" fill="${color}" font-family="${fontFamily}" font-size="${this.formatPdfNumber(fontSize)}" font-weight="${fontWeight}" text-anchor="${anchor}" letter-spacing="${this.formatPdfNumber(letterSpacing)}">${lineText}</text>`;
+      })
+      .join('');
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${lineNodes}</svg>`;
+  }
+
+  private buildQrOverlaySvg(input: {
+    width: number;
+    height: number;
+    value: string;
+    foregroundColor: string;
+    backgroundColor: string;
+  }): string {
+    const width = Math.max(1, Math.round(input.width));
+    const height = Math.max(1, Math.round(input.height));
+    const foregroundColor = this.normalizeHexColor(input.foregroundColor, '#0f172a');
+    const backgroundColor = this.normalizeHexColor(input.backgroundColor, '#ffffff');
+    const gridSize = 29;
+    const padding = Math.max(2, Math.floor(Math.min(width, height) * 0.06));
+    const available = Math.max(16, Math.min(width, height) - padding * 2);
+    const cellSize = Math.max(1, Math.floor(available / gridSize));
+    const qrSize = cellSize * gridSize;
+    const offsetX = Math.floor((width - qrSize) / 2);
+    const offsetY = Math.floor((height - qrSize) / 2);
+    const cells = Array.from({ length: gridSize }, () =>
+      Array.from({ length: gridSize }, () => false),
+    );
+    const reserved = Array.from({ length: gridSize }, () =>
+      Array.from({ length: gridSize }, () => false),
+    );
+
+    const drawFinder = (originX: number, originY: number) => {
+      for (let y = 0; y < 7; y += 1) {
+        for (let x = 0; x < 7; x += 1) {
+          const gx = originX + x;
+          const gy = originY + y;
+          if (gx < 0 || gy < 0 || gx >= gridSize || gy >= gridSize) continue;
+          reserved[gy][gx] = true;
+          const isBorder = x === 0 || x === 6 || y === 0 || y === 6;
+          const isCore = x >= 2 && x <= 4 && y >= 2 && y <= 4;
+          if (isBorder || isCore) {
+            cells[gy][gx] = true;
+          }
+        }
+      }
+    };
+
+    drawFinder(0, 0);
+    drawFinder(gridSize - 7, 0);
+    drawFinder(0, gridSize - 7);
+
+    const hash = crypto
+      .createHash('sha256')
+      .update(String(input.value ?? ''), 'utf8')
+      .digest();
+    let bitIndex = 0;
+    for (let y = 0; y < gridSize; y += 1) {
+      for (let x = 0; x < gridSize; x += 1) {
+        if (reserved[y][x]) continue;
+        const byte = hash[Math.floor(bitIndex / 8) % hash.length];
+        const bit = (byte >> (bitIndex % 8)) & 1;
+        const parity = (x + y + Math.floor(bitIndex / hash.length)) % 2;
+        cells[y][x] = parity === 0 ? bit === 1 : bit === 0;
+        bitIndex += 1;
+      }
+    }
+
+    const rects: string[] = [];
+    for (let y = 0; y < gridSize; y += 1) {
+      for (let x = 0; x < gridSize; x += 1) {
+        if (!cells[y][x]) continue;
+        rects.push(
+          `<rect x="${offsetX + x * cellSize}" y="${offsetY + y * cellSize}" width="${cellSize}" height="${cellSize}" fill="${foregroundColor}" />`,
+        );
+      }
+    }
+
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect x="0" y="0" width="${width}" height="${height}" fill="${backgroundColor}" />${rects.join('')}</svg>`;
+  }
+
+  private async buildQrOverlayBuffer(input: {
+    width: number;
+    height: number;
+    value: string;
+    foregroundColor: string;
+    backgroundColor: string;
+  }): Promise<Buffer> {
+    const width = Math.max(1, Math.round(input.width));
+    const height = Math.max(1, Math.round(input.height));
+    const foregroundColor = this.normalizeHexColor(input.foregroundColor, '#0f172a');
+    const backgroundColor = this.normalizeHexColor(input.backgroundColor, '#ffffff');
+    const squareSize = Math.max(96, Math.min(CERTIFICATE_RENDER_MAX_CANVAS_SIZE, Math.max(width, height)));
+    const value = String(input.value ?? '').trim() || ' ';
+
+    try {
+      const qrBuffer = await QRCode.toBuffer(value, {
+        type: 'png',
+        width: squareSize,
+        margin: 0,
+        errorCorrectionLevel: 'M',
+        color: {
+          dark: foregroundColor,
+          light: backgroundColor,
+        },
+      });
+      return this.buildImageOverlayBuffer({
+        sourceBuffer: qrBuffer,
+        width,
+        height,
+        fit: 'contain',
+        borderRadius: 0,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to render QR code for certificate "${value.slice(0, 120)}": ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      const fallbackSvg = this.buildQrOverlaySvg({
+        width,
+        height,
+        value,
+        foregroundColor,
+        backgroundColor,
+      });
+      return sharp(Buffer.from(fallbackSvg, 'utf8')).png().toBuffer();
+    }
+  }
+
+  private async buildImageOverlayBuffer(input: {
+    sourceBuffer: Buffer;
+    width: number;
+    height: number;
+    fit?: string;
+    borderRadius?: number;
+  }): Promise<Buffer> {
+    const width = Math.max(1, Math.round(input.width));
+    const height = Math.max(1, Math.round(input.height));
+    const fitMode =
+      input.fit === 'cover' || input.fit === 'fill' || input.fit === 'contain'
+        ? input.fit
+        : 'contain';
+
+    let outputBuffer = await sharp(input.sourceBuffer)
+      .rotate()
+      .resize(width, height, {
+        fit: fitMode as 'cover' | 'contain' | 'fill',
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .png()
+      .toBuffer();
+
+    const borderRadius = Math.max(0, Number(input.borderRadius ?? 0));
+    if (borderRadius > 0) {
+      const radius = Math.min(borderRadius, width / 2, height / 2);
+      const mask = Buffer.from(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect x="0" y="0" width="${width}" height="${height}" rx="${this.formatPdfNumber(radius)}" ry="${this.formatPdfNumber(radius)}" fill="#ffffff" /></svg>`,
+        'utf8',
+      );
+      outputBuffer = await sharp(outputBuffer)
+        .composite([{ input: mask, blend: 'dest-in' }])
+        .png()
+        .toBuffer();
+    }
+
+    return outputBuffer;
+  }
+
+  private getAssetKeyForElement(
+    element: CertificateTemplateElement,
+    signatureSlotByKey: Map<string, CertificateSignatureSlot>,
+  ): string | null {
+    if (element.type === 'image') {
+      const value = String(element.assetKey ?? '')
+        .trim()
+        .replace(/^\/+/, '');
+      return value || null;
+    }
+    if (element.type === 'signature') {
+      const slot = signatureSlotByKey.get(element.signatureSlotKey);
+      const value = String(slot?.assetKey ?? '')
+        .trim()
+        .replace(/^\/+/, '');
+      return value || null;
+    }
+    return null;
+  }
+
+  private resolveElementTextValue(
+    element: CertificateTemplateElement,
+    payloadTokens: Record<string, string>,
+  ): string {
+    if (element.type === 'text') {
+      return String(element.content ?? '');
+    }
+    if (element.type === 'dynamic_text') {
+      const token = String(element.token ?? '').trim();
+      if (!token) return '';
+      return payloadTokens[token] ?? `{{${token}}}`;
+    }
+    return '';
+  }
+
+  private createRasterPdfBuffer(input: {
+    jpegBuffer: Buffer;
+    imageWidth: number;
+    imageHeight: number;
+  }): Buffer {
+    const safeWidth = Math.max(1, Math.round(input.imageWidth));
+    const safeHeight = Math.max(1, Math.round(input.imageHeight));
+    const aspectRatio = safeWidth / safeHeight;
+
+    let pageWidth = CERTIFICATE_PDF_MAX_WIDTH_POINTS;
+    let pageHeight = pageWidth / Math.max(0.01, aspectRatio);
+    if (pageHeight > CERTIFICATE_PDF_MAX_HEIGHT_POINTS) {
+      pageHeight = CERTIFICATE_PDF_MAX_HEIGHT_POINTS;
+      pageWidth = pageHeight * aspectRatio;
+    }
+
+    const clampedPageWidth = Math.max(100, pageWidth);
+    const clampedPageHeight = Math.max(100, pageHeight);
+    const contentStream = `q\n${this.formatPdfNumber(clampedPageWidth)} 0 0 ${this.formatPdfNumber(clampedPageHeight)} 0 0 cm\n/Im0 Do\nQ\n`;
+    const contentStreamLength = Buffer.byteLength(contentStream, 'ascii');
+
+    const objectBuffers: Buffer[] = [
+      Buffer.from('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n', 'ascii'),
+      Buffer.from(
+        '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+        'ascii',
+      ),
+      Buffer.from(
+        `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${this.formatPdfNumber(
+          clampedPageWidth,
+        )} ${this.formatPdfNumber(
+          clampedPageHeight,
+        )}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`,
+        'ascii',
+      ),
+      Buffer.concat([
+        Buffer.from(
+          `4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${safeWidth} /Height ${safeHeight} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${input.jpegBuffer.byteLength} >>\nstream\n`,
+          'ascii',
+        ),
+        input.jpegBuffer,
+        Buffer.from('\nendstream\nendobj\n', 'ascii'),
+      ]),
+      Buffer.from(
+        `5 0 obj\n<< /Length ${contentStreamLength} >>\nstream\n${contentStream}endstream\nendobj\n`,
+        'ascii',
+      ),
+    ];
+
+    const parts: Buffer[] = [Buffer.from('%PDF-1.4\n', 'ascii')];
+    const offsets: number[] = [0];
+    let cursor = parts[0].byteLength;
+
+    for (const objectBuffer of objectBuffers) {
+      offsets.push(cursor);
+      parts.push(objectBuffer);
+      cursor += objectBuffer.byteLength;
+    }
+
+    const xrefOffset = cursor;
+    let xref = `xref\n0 ${objectBuffers.length + 1}\n`;
+    xref += '0000000000 65535 f \n';
+    for (let index = 1; index <= objectBuffers.length; index += 1) {
+      xref += `${String(offsets[index]).padStart(10, '0')} 00000 n \n`;
+    }
+    xref += `trailer\n<< /Size ${objectBuffers.length + 1} /Root 1 0 R >>\n`;
+    xref += `startxref\n${xrefOffset}\n%%EOF`;
+    parts.push(Buffer.from(xref, 'ascii'));
+
+    return Buffer.concat(parts);
+  }
+
+  private async renderVisualCertificatePdfBuffer(
+    record: IssuedCertificateForRender,
+  ): Promise<Buffer | null> {
+    const templateSnapshot = this.toRecord(record.template_snapshot);
+    const layoutResult = CertificateLayoutSchema.safeParse(templateSnapshot.layout);
+    if (!layoutResult.success) {
+      return null;
+    }
+    const layout: CertificateLayout = layoutResult.data;
+    const canvasWidth = Math.max(
+      1,
+      Math.min(CERTIFICATE_RENDER_MAX_CANVAS_SIZE, Math.round(layout.canvas.width)),
+    );
+    const canvasHeight = Math.max(
+      1,
+      Math.min(
+        CERTIFICATE_RENDER_MAX_CANVAS_SIZE,
+        Math.round(layout.canvas.height),
+      ),
+    );
+    const payloadTokens = this.resolveRenderPayloadTokens(record);
+    const signatureSlotByKey = new Map<string, CertificateSignatureSlot>(
+      layout.signatureSlots.map((slot) => [slot.key, slot]),
+    );
+    const assetKeys = new Set<string>();
+    if (
+      typeof layout.canvas.backgroundAssetKey === 'string' &&
+      layout.canvas.backgroundAssetKey.trim().length > 0
+    ) {
+      assetKeys.add(layout.canvas.backgroundAssetKey.trim().replace(/^\/+/, ''));
+    }
+    for (const element of layout.elements) {
+      const assetKey = this.getAssetKeyForElement(element, signatureSlotByKey);
+      if (assetKey) {
+        assetKeys.add(assetKey);
+      }
+    }
+
+    const assetBufferByKey = new Map<string, Buffer>();
+    for (const assetKey of assetKeys) {
+      const buffer = await this.loadRenderableCertificateAsset(assetKey);
+      if (buffer) {
+        assetBufferByKey.set(assetKey, buffer);
+      }
+    }
+
+    const overlays: Array<{ input: Buffer; top: number; left: number }> = [];
+    const backgroundAssetKey =
+      typeof layout.canvas.backgroundAssetKey === 'string'
+        ? layout.canvas.backgroundAssetKey.trim().replace(/^\/+/, '')
+        : '';
+    if (backgroundAssetKey && assetBufferByKey.has(backgroundAssetKey)) {
+      const backgroundBuffer = await this.buildImageOverlayBuffer({
+        sourceBuffer: assetBufferByKey.get(backgroundAssetKey) as Buffer,
+        width: canvasWidth,
+        height: canvasHeight,
+        fit: 'cover',
+        borderRadius: 0,
+      });
+      overlays.push({
+        input: backgroundBuffer,
+        top: 0,
+        left: 0,
+      });
+    }
+
+    const sortedElements = [...layout.elements].sort(
+      (a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0),
+    );
+
+    for (const element of sortedElements) {
+      const left = Math.max(0, Math.round(element.x));
+      const top = Math.max(0, Math.round(element.y));
+      if (left >= canvasWidth || top >= canvasHeight) {
+        continue;
+      }
+      const width = Math.max(
+        1,
+        Math.min(canvasWidth - left, Math.round(element.width)),
+      );
+      const height = Math.max(
+        1,
+        Math.min(canvasHeight - top, Math.round(element.height)),
+      );
+
+      let overlayBuffer: Buffer | null = null;
+      if (element.type === 'text' || element.type === 'dynamic_text') {
+        const style = this.toRecord((element as { style?: unknown }).style);
+        const textValue = this.resolveElementTextValue(element, payloadTokens);
+        const textSvg = this.buildTextOverlaySvg({
+          width,
+          height,
+          text: textValue,
+          style,
+          defaultAlign: 'left',
+          defaultColor: '#0f172a',
+          defaultFontSize: 32,
+        });
+        overlayBuffer = await sharp(Buffer.from(textSvg, 'utf8'))
+          .png()
+          .toBuffer();
+      } else if (element.type === 'image' || element.type === 'signature') {
+        const style = this.toRecord((element as { style?: unknown }).style);
+        const assetKey = this.getAssetKeyForElement(element, signatureSlotByKey);
+        const fit =
+          typeof style.fit === 'string' && style.fit.trim().length > 0
+            ? style.fit.trim().toLowerCase()
+            : 'contain';
+        const borderRadius = Number(style.borderRadius ?? 0);
+
+        if (assetKey && assetBufferByKey.has(assetKey)) {
+          overlayBuffer = await this.buildImageOverlayBuffer({
+            sourceBuffer: assetBufferByKey.get(assetKey) as Buffer,
+            width,
+            height,
+            fit,
+            borderRadius,
+          });
+        } else if (element.type === 'signature') {
+          const slot = signatureSlotByKey.get(element.signatureSlotKey);
+          const label = String(slot?.signerName ?? slot?.label ?? 'Signature');
+          const textSvg = this.buildTextOverlaySvg({
+            width,
+            height,
+            text: label,
+            style,
+            defaultAlign: 'center',
+            defaultColor: '#64748b',
+            defaultFontSize: 20,
+          });
+          overlayBuffer = await sharp(Buffer.from(textSvg, 'utf8'))
+            .png()
+            .toBuffer();
+        }
+      } else if (element.type === 'qr') {
+        const style = this.toRecord((element as { style?: unknown }).style);
+        const token =
+          typeof element.token === 'string' && element.token.trim().length > 0
+            ? element.token.trim()
+            : 'qrVerificationUrl';
+        const qrValue =
+          payloadTokens[token] ||
+          payloadTokens.qrVerificationUrl ||
+          payloadTokens.verificationUrl ||
+          payloadTokens.verifiableCredentialUrl ||
+          payloadTokens.certificateUrl ||
+          '';
+        overlayBuffer = await this.buildQrOverlayBuffer({
+          width,
+          height,
+          value: qrValue,
+          foregroundColor: this.normalizeHexColor(
+            style.foregroundColor,
+            '#0f172a',
+          ),
+          backgroundColor: this.normalizeHexColor(
+            style.backgroundColor,
+            '#ffffff',
+          ),
+        });
+      }
+
+      if (!overlayBuffer) {
+        continue;
+      }
+
+      const rotation = Number(element.rotation ?? 0);
+      if (Number.isFinite(rotation) && Math.abs(rotation) > 0.05) {
+        overlayBuffer = await sharp(overlayBuffer)
+          .rotate(rotation, {
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+          })
+          .png()
+          .toBuffer();
+      }
+
+      overlays.push({
+        input: overlayBuffer,
+        top,
+        left,
+      });
+    }
+
+    const baseBackground = this.normalizeHexColor(
+      layout.canvas.backgroundColor,
+      '#ffffff',
+    );
+    const baseImage = sharp({
+      create: {
+        width: canvasWidth,
+        height: canvasHeight,
+        channels: 4,
+        background: baseBackground,
+      },
+    });
+    const composited =
+      overlays.length > 0
+        ? baseImage.composite(overlays)
+        : baseImage;
+    const jpegBuffer = await composited
+      .jpeg({ quality: 95, chromaSubsampling: '4:4:4' })
+      .toBuffer();
+
+    return this.createRasterPdfBuffer({
+      jpegBuffer,
+      imageWidth: canvasWidth,
+      imageHeight: canvasHeight,
+    });
+  }
+
   private createSimplePdfBuffer(lines: string[]): Buffer {
     const sanitize = (value: string) =>
       value
@@ -2413,7 +3256,11 @@ export class CertificatesService {
     ];
   }
 
-  private async renderIssuedCertificatePdf(issuedCertificateId: string) {
+  private async renderIssuedCertificatePdf(issuedCertificateId: string): Promise<{
+    certificateId: string;
+    pdfStorageKey: string;
+    pdfBuffer: Buffer;
+  }> {
     const record = await (this.prisma as any).issued_certificates.findUnique({
       where: { id: issuedCertificateId },
       include: {
@@ -2446,8 +3293,9 @@ export class CertificatesService {
     }
 
     const typedRecord = record as IssuedCertificateForRender;
+    const visualPdfBuffer = await this.renderVisualCertificatePdfBuffer(typedRecord);
     const lines = this.buildPdfLines(typedRecord);
-    const pdfBuffer = this.createSimplePdfBuffer(lines);
+    const pdfBuffer = visualPdfBuffer ?? this.createSimplePdfBuffer(lines);
 
     const pdfStorageKey = `events/${record.event_id}/certificates/pdf/${record.certificate_id}.pdf`;
 
@@ -2467,6 +3315,12 @@ export class CertificatesService {
         updated_at: new Date(),
       },
     });
+
+    return {
+      certificateId: String(record.certificate_id),
+      pdfStorageKey,
+      pdfBuffer,
+    };
   }
 
   async processRenderJobsBatch(workerId: string, batchSize: number) {

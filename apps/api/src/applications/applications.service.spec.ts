@@ -827,6 +827,40 @@ describe('ApplicationsService applicant visibility', () => {
     expect(result?.certificates?.length).toBe(1);
     expect(result?.certificates?.[0]?.certificateId).toBe('cert-1');
   });
+
+  it('selects released_at when fetching applicant certificates', async () => {
+    const findFirst = jest
+      .fn()
+      .mockResolvedValueOnce({ id: 'app-1' })
+      .mockResolvedValueOnce(null);
+    const mockPrisma = {
+      applications: {
+        findFirst,
+      },
+    };
+    const mockCls = {
+      get: jest.fn((key: string) => (key === 'actorId' ? 'user-1' : undefined)),
+    };
+    const stepStateService = {
+      ensureStepStates: jest.fn().mockResolvedValue(true),
+    };
+
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      mockCls as any,
+      stepStateService as any,
+    );
+
+    await service.findMyApplication('event-1');
+
+    expect(findFirst).toHaveBeenCalledTimes(2);
+    expect(
+      findFirst.mock.calls[0][0].include.issued_certificates.select.released_at,
+    ).toBe(true);
+    expect(
+      findFirst.mock.calls[1][0].include.issued_certificates.select.released_at,
+    ).toBe(true);
+  });
 });
 
 describe('ApplicationsService ticket confirmation gating', () => {
