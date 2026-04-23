@@ -337,6 +337,15 @@ export type RevokeIssuedCertificateDto = z.infer<
   typeof RevokeIssuedCertificateSchema
 >;
 
+export const RevokeIssuedCertificateResponseSchema = z.object({
+  id: z.string().uuid(),
+  deleted: z.literal(true),
+});
+
+export type RevokeIssuedCertificateResponse = z.infer<
+  typeof RevokeIssuedCertificateResponseSchema
+>;
+
 export const ReleaseIssuedCertificateSchema = z.object({});
 
 export type ReleaseIssuedCertificateDto = z.infer<
@@ -409,6 +418,7 @@ export const ListIssuedCertificatesQuerySchema = z.object({
   applicationId: z.string().uuid().optional(),
   certificateTypeKey: z.string().trim().max(80).optional(),
   status: IssuedCertificateStatusSchema.optional(),
+  search: z.string().trim().max(120).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 

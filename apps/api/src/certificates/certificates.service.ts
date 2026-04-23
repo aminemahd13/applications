@@ -81,6 +81,8 @@ const CERTIFICATE_FONT_CSS_FORMAT_BY_FORMAT = {
 } as const;
 const CERTIFICATE_PDF_MAX_WIDTH_POINTS = 842;
 const CERTIFICATE_PDF_MAX_HEIGHT_POINTS = 595;
+const UUID_LIKE_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type CertificateAssetKind =
   | 'background'
@@ -152,6 +154,128 @@ export class CertificatesService {
       return {};
     }
     return value as Record<string, unknown>;
+  }
+
+  private isUuidLike(value: string): boolean {
+    return UUID_LIKE_PATTERN.test(value.trim());
+  }
+
+  private buildIssuedHistorySearchConditions(
+    rawSearch: string,
+  ): Record<string, unknown>[] {
+    const search = rawSearch.trim();
+    if (!search) return [];
+
+    const conditions: Record<string, unknown>[] = [
+      {
+        certificate_type_label: { contains: search, mode: 'insensitive' },
+      },
+      {
+        certificate_type_key: { contains: search, mode: 'insensitive' },
+      },
+      {
+        issuer_name: { contains: search, mode: 'insensitive' },
+      },
+      {
+        applications: {
+          is: {
+            users_applications_applicant_user_idTousers: {
+              is: {
+                email: { contains: search, mode: 'insensitive' },
+              },
+            },
+          },
+        },
+      },
+      {
+        applications: {
+          is: {
+            users_applications_applicant_user_idTousers: {
+              is: {
+                applicant_profiles: {
+                  is: {
+                    full_name: { contains: search, mode: 'insensitive' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        applications: {
+          is: {
+            users_applications_applicant_user_idTousers: {
+              is: {
+                applicant_profiles: {
+                  is: {
+                    first_name: { contains: search, mode: 'insensitive' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        applications: {
+          is: {
+            users_applications_applicant_user_idTousers: {
+              is: {
+                applicant_profiles: {
+                  is: {
+                    last_name: { contains: search, mode: 'insensitive' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    ];
+
+    if (this.isUuidLike(search)) {
+      conditions.unshift(
+        { application_id: search },
+        { certificate_id: search },
+        { credential_id: search },
+      );
+    }
+
+    return conditions;
+  }
+
+  private async deleteIssuedCertificatePdfObjectIfPresent(record: {
+    id: string;
+    event_id: string;
+    certificate_id: string;
+    pdf_storage_key?: string | null;
+  }): Promise<void> {
+    const storageKey = String(record.pdf_storage_key ?? '').trim();
+    if (!storageKey) return;
+    if (!CERTIFICATE_PDF_PREFIX.test(storageKey)) {
+      this.logger.warn(
+        `Skipping unexpected certificate PDF key during delete for issued certificate ${record.id}: ${storageKey}`,
+      );
+      return;
+    }
+
+    try {
+      await this.storageService.deleteObject(storageKey);
+    } catch (error) {
+      this.logger.warn(
+        `Failed deleting certificate PDF object for issued certificate ${record.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private async cleanupLegacyCompletedRenderJobs(): Promise<number> {
+    const result = await (this.prisma as any).certificate_render_jobs.deleteMany({
+      where: {
+        status: 'DONE',
+      },
+    });
+    return Number(result?.count ?? 0);
   }
 
   private isCertificateStudioSchemaMissing(error: unknown): boolean {
@@ -1240,16 +1364,15 @@ export class CertificatesService {
 
     const issuerName =
       input.issuerName?.trim() || this.getCredentialIssuerName();
+    const deletedExistingPdfStorageKey =
+      existingActive && input.reissueIfExists
+        ? String(existingActive.pdf_storage_key ?? '').trim() || null
+        : null;
 
     const created = await this.prisma.$transaction(async (tx) => {
       if (existingActive && input.reissueIfExists) {
-        await (tx as any).issued_certificates.update({
+        await (tx as any).issued_certificates.delete({
           where: { id: existingActive.id },
-          data: {
-            status: 'REVOKED',
-            revoked_at: issuedAt,
-            updated_at: issuedAt,
-          },
         });
       }
 
@@ -1308,8 +1431,17 @@ export class CertificatesService {
             select: { version_number: true },
           },
         },
-      });
+        });
     });
+
+    if (deletedExistingPdfStorageKey && existingActive) {
+      await this.deleteIssuedCertificatePdfObjectIfPresent({
+        id: existingActive.id,
+        event_id: existingActive.event_id,
+        certificate_id: existingActive.certificate_id,
+        pdf_storage_key: deletedExistingPdfStorageKey,
+      });
+    }
 
     return {
       certificate: this.mapIssuedCertificateRow(created),
@@ -1609,32 +1741,28 @@ export class CertificatesService {
       throw new NotFoundException('Issued certificate not found');
     }
 
-    const revokedAt = new Date();
-    const snapshot = this.toRecord(record.payload_snapshot);
-    if (dto.reason && dto.reason.trim()) {
-      snapshot.revocationReason = dto.reason.trim();
-      snapshot.revokedBy = actorId;
-    }
+    const reason = String(dto.reason ?? '').trim();
+    this.logger.log(
+      `Hard-deleting issued certificate ${record.id} for event ${eventId} by ${actorId}${reason ? ` (reason: ${reason})` : ''}`,
+    );
 
-    const updated = await (this.prisma as any).issued_certificates.update({
-      where: { id: record.id },
-      data: {
-        status: 'REVOKED',
-        revoked_at: revokedAt,
-        payload_snapshot: snapshot,
-        updated_at: revokedAt,
-      },
-      include: {
-        certificate_templates: {
-          select: { name: true },
-        },
-        certificate_template_versions: {
-          select: { version_number: true },
-        },
-      },
+    await this.deleteIssuedCertificatePdfObjectIfPresent({
+      id: record.id,
+      event_id: record.event_id,
+      certificate_id: record.certificate_id,
+      pdf_storage_key: record.pdf_storage_key,
     });
 
-    return this.mapIssuedCertificateRow(updated);
+    await this.prisma.$transaction(async (tx) => {
+      await (tx as any).issued_certificates.delete({
+        where: { id: record.id },
+      });
+    });
+
+    return {
+      id: record.id,
+      deleted: true as const,
+    };
   }
 
   async listIssuedCertificates(
@@ -1644,21 +1772,45 @@ export class CertificatesService {
     const where: Record<string, unknown> = {
       event_id: eventId,
     };
+    const andConditions: Record<string, unknown>[] = [];
 
     if (query.applicationId) {
-      where.application_id = query.applicationId;
+      andConditions.push({
+        application_id: query.applicationId,
+      });
     }
 
     if (query.certificateTypeKey && query.certificateTypeKey.trim()) {
-      where.certificate_type_key = query.certificateTypeKey.trim().toLowerCase();
+      andConditions.push({
+        certificate_type_key: query.certificateTypeKey.trim().toLowerCase(),
+      });
     }
 
     if (query.status) {
       if (query.status === 'ISSUED') {
-        where.revoked_at = null;
+        andConditions.push({
+          revoked_at: null,
+        });
       } else if (query.status === 'REVOKED') {
-        where.NOT = { revoked_at: null };
+        andConditions.push({
+          NOT: { revoked_at: null },
+        });
       }
+    }
+
+    if (query.search && query.search.trim()) {
+      const searchConditions = this.buildIssuedHistorySearchConditions(
+        query.search,
+      );
+      if (searchConditions.length > 0) {
+        andConditions.push({
+          OR: searchConditions,
+        });
+      }
+    }
+
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
     }
 
     const rows = await (this.prisma as any).issued_certificates.findMany({
@@ -1685,6 +1837,10 @@ export class CertificatesService {
 
     if (query.status) {
       where.status = query.status;
+    } else {
+      where.status = {
+        in: ['PENDING', 'PROCESSING', 'FAILED'],
+      };
     }
 
     const rows = await (this.prisma as any).certificate_render_jobs.findMany({
@@ -3672,6 +3828,14 @@ export class CertificatesService {
   }
 
   async processRenderJobsBatch(workerId: string, batchSize: number) {
+    try {
+      await this.cleanupLegacyCompletedRenderJobs();
+    } catch (error) {
+      this.logger.warn(
+        `Failed cleaning legacy completed render jobs: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
     const claimed = await this.prisma.$queryRawUnsafe<any[]>(
       `
       WITH candidates AS (
@@ -3708,16 +3872,8 @@ export class CertificatesService {
     for (const job of claimed) {
       try {
         await this.renderIssuedCertificatePdf(job.issued_certificate_id);
-        await (this.prisma as any).certificate_render_jobs.update({
+        await (this.prisma as any).certificate_render_jobs.delete({
           where: { id: job.id },
-          data: {
-            status: 'DONE',
-            completed_at: new Date(),
-            error_message: null,
-            locked_at: null,
-            locked_by: null,
-            updated_at: new Date(),
-          },
         });
         completed += 1;
       } catch (error) {

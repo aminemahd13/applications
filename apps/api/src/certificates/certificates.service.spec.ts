@@ -1,11 +1,35 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ListIssuedCertificatesQuerySchema } from '../../../../packages/shared/dtos/certificates.dto';
 import { CertificatesService } from './certificates.service';
 
 function createServiceHarness() {
+  const tx = {
+    issued_certificates: {
+      delete: jest.fn(),
+      create: jest.fn(),
+      findUnique: jest.fn(),
+    },
+    certificate_render_jobs: {
+      create: jest.fn(),
+      delete: jest.fn(),
+      update: jest.fn(),
+      deleteMany: jest.fn(),
+    },
+  };
   const prisma = {
     issued_certificates: {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
+      findMany: jest.fn(),
+      delete: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+    },
+    certificate_render_jobs: {
+      findMany: jest.fn(),
+      deleteMany: jest.fn(),
+      delete: jest.fn(),
+      update: jest.fn(),
     },
     file_objects: {
       findFirst: jest.fn(),
@@ -15,6 +39,10 @@ function createServiceHarness() {
       delete: jest.fn(),
       findMany: jest.fn(),
     },
+    $queryRawUnsafe: jest.fn(),
+    $transaction: jest.fn(async (callback: (ctx: typeof tx) => Promise<unknown>) =>
+      callback(tx),
+    ),
   };
   const storageService = {
     getPresignedGetUrl: jest.fn(),
@@ -33,7 +61,7 @@ function createServiceHarness() {
     storageService as any,
   );
 
-  return { service, prisma, storageService };
+  return { service, prisma, storageService, tx };
 }
 
 function createVersionLifecycleHarness() {
@@ -342,6 +370,235 @@ describe('CertificatesService public link generation', () => {
     expect(() =>
       (service as any).getCredentialLinks('certificate-1', 'credential-1'),
     ).toThrow('Set PUBLIC_APP_BASE_URL to the public HTTPS origin');
+  });
+});
+
+describe('CertificatesService issued history and queue lifecycle', () => {
+  beforeEach(() => {
+    process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
+  });
+
+  afterEach(() => {
+    delete process.env.PUBLIC_APP_BASE_URL;
+  });
+
+  it('parses and trims issued history search query', () => {
+    expect(
+      ListIssuedCertificatesQuerySchema.parse({
+        search: '  amina  ',
+        limit: 20,
+      }).search,
+    ).toBe('amina');
+
+    expect(() =>
+      ListIssuedCertificatesQuerySchema.parse({
+        search: 'x'.repeat(121),
+      }),
+    ).toThrow();
+  });
+
+  it('builds issued history search filters for identifiers and applicant identity', async () => {
+    const { service, prisma } = createServiceHarness();
+    const search = '11111111-1111-4111-8111-111111111111';
+
+    prisma.issued_certificates.findMany.mockResolvedValue([]);
+
+    await service.listIssuedCertificates('event-1', {
+      limit: 25,
+      search,
+    } as any);
+
+    const where = prisma.issued_certificates.findMany.mock.calls[0][0].where;
+    const andConditions = Array.isArray(where.AND) ? where.AND : [];
+    const searchClause = andConditions.find((item: any) => Array.isArray(item?.OR));
+    const orConditions = searchClause?.OR ?? [];
+    const serialized = JSON.stringify(orConditions);
+
+    expect(orConditions).toEqual(
+      expect.arrayContaining([
+        { application_id: search },
+        { certificate_id: search },
+        { credential_id: search },
+        {
+          certificate_type_label: {
+            contains: search,
+            mode: 'insensitive',
+          },
+        },
+      ]),
+    );
+    expect(serialized).toContain('"email"');
+    expect(serialized).toContain('"full_name"');
+    expect(serialized).toContain('"first_name"');
+    expect(serialized).toContain('"last_name"');
+  });
+
+  it('hard-deletes revoked certificates and removes their PDF object when present', async () => {
+    const { service, prisma, storageService, tx } = createServiceHarness();
+    prisma.issued_certificates.findFirst.mockResolvedValue({
+      id: 'issued-1',
+      event_id: 'event-1',
+      certificate_id: 'certificate-1',
+      pdf_storage_key: 'events/event-1/certificates/pdf/certificate-1.pdf',
+    });
+    tx.issued_certificates.delete.mockResolvedValue({ id: 'issued-1' });
+
+    const result = await service.revokeIssuedCertificate(
+      'event-1',
+      'issued-1',
+      { reason: 'Invalid record' },
+    );
+
+    expect(storageService.deleteObject).toHaveBeenCalledWith(
+      'events/event-1/certificates/pdf/certificate-1.pdf',
+    );
+    expect(tx.issued_certificates.delete).toHaveBeenCalledWith({
+      where: { id: 'issued-1' },
+    });
+    expect(result).toEqual({ id: 'issued-1', deleted: true });
+  });
+
+  it('deletes previous active certificate during reissue flow', async () => {
+    const { service, prisma, storageService, tx } = createServiceHarness();
+    prisma.issued_certificates.findFirst.mockResolvedValue({
+      id: 'issued-existing',
+      event_id: 'event-1',
+      certificate_id: 'certificate-existing',
+      pdf_storage_key: 'events/event-1/certificates/pdf/existing.pdf',
+    });
+    tx.issued_certificates.delete.mockResolvedValue({ id: 'issued-existing' });
+    tx.issued_certificates.create.mockResolvedValue({ id: 'issued-new' });
+    tx.certificate_render_jobs.create.mockResolvedValue({ id: 'job-1' });
+    tx.issued_certificates.findUnique.mockResolvedValue({
+      id: 'issued-new',
+      event_id: 'event-1',
+      application_id: 'app-1',
+      template_id: 'template-1',
+      template_version_id: 'version-1',
+      certificate_type_key: 'participation',
+      certificate_type_label: 'Participation',
+      certificate_id: 'certificate-new',
+      credential_id: 'credential-new',
+      qr_token: 'qr-token-new',
+      issuer_name: 'Issuer',
+      status: 'ISSUED',
+      issued_at: new Date('2026-04-23T12:00:00.000Z'),
+      released_at: null,
+      released_by: null,
+      revoked_at: null,
+      template_snapshot: {
+        name: 'Participation',
+        versionNumber: 1,
+      },
+      payload_snapshot: {},
+      pdf_storage_key: null,
+      pdf_generated_at: null,
+      render_status: 'PENDING',
+      render_error: null,
+      certificate_templates: {
+        name: 'Participation',
+      },
+      certificate_template_versions: {
+        version_number: 1,
+      },
+    });
+
+    jest.spyOn(service as any, 'getTemplateForEvent').mockResolvedValue({
+      id: 'template-1',
+      name: 'Participation',
+      type_key: 'participation',
+      type_label: 'Participation',
+      metadata: {},
+      is_active: true,
+      archived_at: null,
+    });
+    jest.spyOn(service as any, 'getTemplateVersion').mockResolvedValue({
+      id: 'version-1',
+      version_number: 1,
+      layout_json: {},
+    });
+    jest.spyOn(service as any, 'getApplicationForIssuance').mockResolvedValue({
+      id: 'app-1',
+      users_applications_applicant_user_idTousers: {
+        email: 'applicant@example.com',
+        applicant_profiles: {
+          full_name: 'Applicant Name',
+          first_name: 'Applicant',
+          last_name: 'Name',
+        },
+      },
+    });
+    jest.spyOn(service as any, 'getEventForIssuance').mockResolvedValue({
+      id: 'event-1',
+      title: 'Event',
+      slug: 'event',
+      venue_name: null,
+      venue_address: null,
+    });
+    jest
+      .spyOn(service as any, 'signQrToken')
+      .mockReturnValue({ token: 'qr-token-new', kid: 'kid-1' });
+    jest.spyOn(service as any, 'buildPayloadSnapshot').mockReturnValue({
+      participantName: 'Applicant Name',
+    });
+    jest
+      .spyOn(service as any, 'buildIssuedCertificateSignature')
+      .mockReturnValue('signature');
+
+    await (service as any).issueOneCertificate('event-1', {
+      templateId: 'template-1',
+      applicationId: 'app-1',
+      reissueIfExists: true,
+    });
+
+    expect(tx.issued_certificates.delete).toHaveBeenCalledWith({
+      where: { id: 'issued-existing' },
+    });
+    expect(storageService.deleteObject).toHaveBeenCalledWith(
+      'events/event-1/certificates/pdf/existing.pdf',
+    );
+  });
+
+  it('removes completed render jobs from storage and keeps default queue filters actionable', async () => {
+    const { service, prisma } = createServiceHarness();
+    prisma.certificate_render_jobs.deleteMany.mockResolvedValue({ count: 3 });
+    prisma.$queryRawUnsafe.mockResolvedValue([
+      {
+        id: 'job-1',
+        issued_certificate_id: 'issued-1',
+        attempts: 1,
+        max_attempts: 5,
+        next_retry_at: new Date('2026-04-23T12:00:00.000Z'),
+      },
+    ]);
+    prisma.certificate_render_jobs.delete.mockResolvedValue({ id: 'job-1' });
+    jest.spyOn(service as any, 'renderIssuedCertificatePdf').mockResolvedValue({
+      certificateId: 'certificate-1',
+      pdfStorageKey: 'events/event-1/certificates/pdf/certificate-1.pdf',
+      pdfBuffer: Buffer.from('pdf'),
+    });
+
+    const batchResult = await service.processRenderJobsBatch('worker-1', 5);
+    expect(batchResult).toEqual({ claimed: 1, completed: 1, failed: 0 });
+    expect(prisma.certificate_render_jobs.deleteMany).toHaveBeenCalledWith({
+      where: { status: 'DONE' },
+    });
+    expect(prisma.certificate_render_jobs.delete).toHaveBeenCalledWith({
+      where: { id: 'job-1' },
+    });
+
+    prisma.certificate_render_jobs.findMany.mockResolvedValue([]);
+    await service.listRenderJobs('event-1', { limit: 20 } as any);
+    expect(prisma.certificate_render_jobs.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          event_id: 'event-1',
+          status: {
+            in: ['PENDING', 'PROCESSING', 'FAILED'],
+          },
+        },
+      }),
+    );
   });
 });
 

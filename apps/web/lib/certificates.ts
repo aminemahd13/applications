@@ -186,6 +186,11 @@ export interface CertificateRenderJobSummary {
   updatedAt: string;
 }
 
+export interface IssuedCertificateDeleteAck {
+  id: string;
+  deleted: true;
+}
+
 export interface CertificateAsset {
   id: string;
   storageKey: string;
@@ -685,6 +690,7 @@ export async function listIssuedCertificates(
     applicationId?: string;
     certificateTypeKey?: string;
     status?: "ISSUED" | "REVOKED";
+    search?: string;
     limit?: number;
   },
 ): Promise<IssuedCertificateSummary[]> {
@@ -694,6 +700,7 @@ export async function listIssuedCertificates(
     query.set("certificateTypeKey", options.certificateTypeKey);
   }
   if (options?.status) query.set("status", options.status);
+  if (options?.search?.trim()) query.set("search", options.search.trim());
   if (options?.limit) query.set("limit", String(options.limit));
   const suffix = query.toString() ? `?${query}` : "";
   const response = await apiClient<unknown>(
@@ -707,7 +714,7 @@ export async function revokeIssuedCertificate(
   issuedCertificateId: string,
   reason: string | undefined,
   csrfToken?: string,
-): Promise<IssuedCertificateSummary> {
+): Promise<IssuedCertificateDeleteAck> {
   const response = await apiClient<unknown>(
     `/events/${eventId}/certificates/${issuedCertificateId}/revoke`,
     {
@@ -716,7 +723,7 @@ export async function revokeIssuedCertificate(
       csrfToken,
     },
   );
-  return unwrapData<IssuedCertificateSummary>(response);
+  return unwrapData<IssuedCertificateDeleteAck>(response);
 }
 
 export async function releaseIssuedCertificate(

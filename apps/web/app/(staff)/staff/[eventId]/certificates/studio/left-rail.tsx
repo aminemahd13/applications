@@ -105,6 +105,8 @@ interface LeftRailProps {
   isIssuing: boolean;
   isLoadingIssuanceTags: boolean;
   isDownloadingIssuanceZip: boolean;
+  issuedHistorySearchInput: string;
+  onIssuedHistorySearchInputChange: (value: string) => void;
   issuedCertificates: IssuedCertificateSummary[];
   renderJobs: CertificateRenderJobSummary[];
   onRequestRevokeIssuedCertificate: (certificate: IssuedCertificateSummary) => void;
@@ -186,6 +188,8 @@ export function LeftRail(props: LeftRailProps) {
     isIssuing,
     isLoadingIssuanceTags,
     isDownloadingIssuanceZip,
+    issuedHistorySearchInput,
+    onIssuedHistorySearchInputChange,
     issuedCertificates,
     renderJobs,
     onRequestRevokeIssuedCertificate,
@@ -807,6 +811,13 @@ export function LeftRail(props: LeftRailProps) {
                   </span>
                 </AccordionTrigger>
                 <AccordionContent className="space-y-2 pb-3">
+                  <Input
+                    value={issuedHistorySearchInput}
+                    onChange={(event) =>
+                      onIssuedHistorySearchInputChange(event.target.value)
+                    }
+                    placeholder="Search by ID, type, issuer, applicant..."
+                  />
                   {issuedCertificates.length > 0 && (
                     <Button
                       size="sm"
@@ -832,7 +843,7 @@ export function LeftRail(props: LeftRailProps) {
                   {issuedCertificates.length === 0 ? (
                     <p className="text-xs text-muted-foreground">No certificates issued yet.</p>
                   ) : (
-                    issuedCertificates.slice(0, 10).map((item) => (
+                    issuedCertificates.map((item) => (
                       <div key={item.id} className="rounded-md border p-2 text-xs">
                         {(() => {
                           const certificateHref = sanitizeClientFacingUrl(item.certificateUrl) ?? item.certificateUrl;

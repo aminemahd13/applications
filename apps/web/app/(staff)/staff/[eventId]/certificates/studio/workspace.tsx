@@ -151,6 +151,7 @@ export function CertificateStudioWorkspace() {
   const [issuanceTags, setIssuanceTags] = useState<string[]>([]);
   const [issuanceSelectedTags, setIssuanceSelectedTags] = useState<string[]>([]);
   const [issuanceDownloadAfterIssue, setIssuanceDownloadAfterIssue] = useState(false);
+  const [issuedHistorySearchInput, setIssuedHistorySearchInput] = useState("");
 
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -210,19 +211,27 @@ export function CertificateStudioWorkspace() {
   }, [isInspectorCollapsed, isLeftRailCollapsed]);
 
   const refreshIssuance = useCallback(async () => {
+    const search = issuedHistorySearchInput.trim();
     const [issuedRows, jobRows] = await Promise.all([
-      listIssuedCertificates(eventId, { limit: 100 }),
+      listIssuedCertificates(eventId, {
+        limit: 100,
+        search: search || undefined,
+      }),
       listCertificateRenderJobs(eventId, { limit: 100 }),
     ]);
     setIssuedCertificates(issuedRows);
     setRenderJobs(jobRows);
-  }, [eventId]);
+  }, [eventId, issuedHistorySearchInput]);
 
   const refreshWorkspace = useCallback(async () => {
+    const search = issuedHistorySearchInput.trim();
     const [templateRows, assetRows, issuedRows, jobRows] = await Promise.all([
       listCertificateTemplates(eventId),
       listCertificateAssets(eventId, "all"),
-      listIssuedCertificates(eventId, { limit: 100 }),
+      listIssuedCertificates(eventId, {
+        limit: 100,
+        search: search || undefined,
+      }),
       listCertificateRenderJobs(eventId, { limit: 100 }),
     ]);
 
@@ -239,7 +248,7 @@ export function CertificateStudioWorkspace() {
         templateRows.find((template) => template.isDefault && template.isActive) ?? templateRows[0] ?? null;
       return preferred?.id ?? null;
     });
-  }, [eventId]);
+  }, [eventId, issuedHistorySearchInput]);
 
   const refreshIssuanceTags = useCallback(() => {
     setIsLoadingIssuanceTags(true);
@@ -376,6 +385,18 @@ export function CertificateStudioWorkspace() {
     }, 150);
     return () => clearTimeout(timer);
   }, [canManage, refreshIssuanceTags, view]);
+
+  useEffect(() => {
+    if (!canManage || view !== "issuance") return;
+    const timer = setTimeout(() => {
+      setIsRefreshingIssuance(true);
+      refreshIssuance()
+        .catch(() => toast.error("Failed to refresh issuance status."))
+        .finally(() => setIsRefreshingIssuance(false));
+    }, 180);
+
+    return () => clearTimeout(timer);
+  }, [canManage, refreshIssuance, view]);
 
   useEffect(() => {
     if (!canManage || !selectedTemplateId || !isDraftReady) return;
@@ -1172,13 +1193,14 @@ export function CertificateStudioWorkspace() {
       revokeReasonDraft.trim() || undefined,
       csrfToken ?? undefined,
     )
-      .then((updated) => {
-        toast.success("Certificate revoked.");
+      .then((deleted) => {
+        toast.success("Certificate revoked and deleted.");
         setIssuedCertificates((previous) =>
-          previous.map((item) => (item.id === updated.id ? updated : item)),
+          previous.filter((item) => item.id !== deleted.id),
         );
         setRevokeDialogOpen(false);
         setRevokeTargetCertificate(null);
+        setRevokeReasonDraft("");
         return refreshIssuance();
       })
       .catch((error: unknown) => {
@@ -1468,6 +1490,8 @@ export function CertificateStudioWorkspace() {
                   isIssuing={isIssuing}
                   isLoadingIssuanceTags={isLoadingIssuanceTags}
                   isDownloadingIssuanceZip={isDownloadingIssuanceZip}
+                  issuedHistorySearchInput={issuedHistorySearchInput}
+                  onIssuedHistorySearchInputChange={setIssuedHistorySearchInput}
                   issuedCertificates={issuedCertificates}
                   renderJobs={renderJobs}
                   onRequestRevokeIssuedCertificate={handleRequestRevokeIssuedCertificate}
