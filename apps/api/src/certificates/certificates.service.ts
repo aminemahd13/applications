@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleDestroy,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
@@ -41,6 +42,7 @@ import { existsSync, promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { joinAppUrl, resolvePublicAppBaseUrl } from '../common/utils/export-csv.util';
 import JSZip from 'jszip';
+import { chromium, type Browser } from 'playwright';
 import QRCode from 'qrcode';
 import sharp from 'sharp';
 
@@ -143,6 +145,12 @@ interface QrSigningConfig {
   keys: Map<string, string>;
 }
 
+interface CertificateRenderTokenClaims {
+  purpose: 'certificate-pdf-render';
+  eventId: string;
+  issuedCertificateId: string;
+}
+
 type IssuedCertificateForRender = {
   id: string;
   event_id: string;
@@ -170,16 +178,32 @@ type IssuedCertificateForRender = {
 };
 
 @Injectable()
-export class CertificatesService {
+export class CertificatesService implements OnModuleDestroy {
   private readonly logger = new Logger(CertificatesService.name);
   private bundledPdfFallbackFontsPromise: Promise<LoadedCertificateFontAsset[]> | null =
     null;
+  private browserPromise: Promise<Browser> | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly cls: ClsService,
     private readonly storageService: StorageService,
   ) {}
+
+  async onModuleDestroy(): Promise<void> {
+    const browserPromise = this.browserPromise;
+    this.browserPromise = null;
+    if (!browserPromise) {
+      return;
+    }
+
+    try {
+      const browser = await browserPromise;
+      await browser.close();
+    } catch {
+      // Browser launch/close failures should not block shutdown.
+    }
+  }
 
   private getActorId(): string {
     const actorId = this.cls.get('actorId');
@@ -375,6 +399,54 @@ export class CertificatesService {
     );
   }
 
+  private getCertificateRenderSigningSecret(): string {
+    const explicit = (process.env.CERTIFICATE_RENDER_SIGNING_SECRET ?? '').trim();
+    if (explicit.length > 0) {
+      return explicit;
+    }
+
+    const jwtSecret = (process.env.JWT_SECRET ?? '').trim();
+    if (jwtSecret.length > 0) {
+      return jwtSecret;
+    }
+
+    throw new Error(
+      'CERTIFICATE_RENDER_SIGNING_SECRET or JWT_SECRET must be configured',
+    );
+  }
+
+  private getInternalWebBaseUrl(): string {
+    const candidates = [
+      process.env.INTERNAL_WEB_BASE_URL,
+      process.env.PUBLIC_APP_BASE_URL,
+      process.env.APP_BASE_URL,
+      'http://localhost:3000',
+    ];
+
+    for (const candidate of candidates) {
+      const normalized = String(candidate ?? '').trim();
+      if (!normalized) {
+        continue;
+      }
+      if (
+        !normalized.startsWith('http://') &&
+        !normalized.startsWith('https://')
+      ) {
+        continue;
+      }
+
+      try {
+        return new URL(normalized).toString().replace(/\/+$/, '');
+      } catch {
+        continue;
+      }
+    }
+
+    throw new Error(
+      'Unable to resolve INTERNAL_WEB_BASE_URL for certificate rendering',
+    );
+  }
+
   private parseQrSigningConfig(): QrSigningConfig {
     const parsed = new Map<string, string>();
     const fromEnv = (process.env.CERTIFICATE_QR_SIGNING_KEYS ?? '').trim();
@@ -472,6 +544,87 @@ export class CertificatesService {
     }
 
     throw new BadRequestException('QR token is invalid');
+  }
+
+  private signCertificateRenderToken(input: {
+    eventId: string;
+    issuedCertificateId: string;
+  }): string {
+    return jwt.sign(
+      {
+        purpose: 'certificate-pdf-render',
+        eventId: input.eventId,
+        issuedCertificateId: input.issuedCertificateId,
+      } satisfies CertificateRenderTokenClaims,
+      this.getCertificateRenderSigningSecret(),
+      {
+        algorithm: 'HS256',
+        expiresIn: '5m',
+      },
+    );
+  }
+
+  private verifyCertificateRenderToken(token: string): CertificateRenderTokenClaims {
+    try {
+      const verified = jwt.verify(
+        token,
+        this.getCertificateRenderSigningSecret(),
+        {
+          algorithms: ['HS256'],
+        },
+      );
+      const claims = this.toRecord(verified);
+      const purpose = String(claims.purpose ?? '').trim();
+      const eventId = String(claims.eventId ?? '').trim();
+      const issuedCertificateId = String(claims.issuedCertificateId ?? '').trim();
+
+      if (
+        purpose !== 'certificate-pdf-render' ||
+        !eventId ||
+        !issuedCertificateId
+      ) {
+        throw new BadRequestException('Certificate render token is invalid');
+      }
+
+      return {
+        purpose: 'certificate-pdf-render',
+        eventId,
+        issuedCertificateId,
+      };
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      throw new BadRequestException('Certificate render token is invalid');
+    }
+  }
+
+  private getCertificateRenderUrl(token: string): string {
+    return joinAppUrl(
+      this.getInternalWebBaseUrl(),
+      `/credentials/render/${encodeURIComponent(token)}`,
+    );
+  }
+
+  private async getPlaywrightBrowser(): Promise<Browser> {
+    if (!this.browserPromise) {
+      this.browserPromise = chromium
+        .launch({
+          headless: true,
+        })
+        .then((browser) => {
+          browser.on('disconnected', () => {
+            this.browserPromise = null;
+          });
+          return browser;
+        })
+        .catch((error) => {
+          this.browserPromise = null;
+          throw error;
+        });
+    }
+
+    return this.browserPromise;
   }
 
   private getCredentialLinks(certificateId: string, credentialId: string) {
@@ -4040,6 +4193,71 @@ export class CertificatesService {
     return Buffer.from(pdf, 'utf8');
   }
 
+  private async renderCertificatePdfBufferFromBrowser(
+    record: IssuedCertificateForRender,
+  ): Promise<Buffer> {
+    const layoutResult = CertificateLayoutSchema.safeParse(
+      this.toRecord(record.template_snapshot).layout,
+    );
+    const fallbackWidth = layoutResult.success ? layoutResult.data.canvas.width : 1600;
+    const fallbackHeight = layoutResult.success
+      ? layoutResult.data.canvas.height
+      : 1131;
+    const viewportWidth = Math.max(
+      900,
+      Math.min(2400, Math.round(fallbackWidth) + 64),
+    );
+    const viewportHeight = Math.max(
+      700,
+      Math.min(1800, Math.round(fallbackHeight) + 64),
+    );
+
+    const renderToken = this.signCertificateRenderToken({
+      eventId: record.event_id,
+      issuedCertificateId: record.id,
+    });
+    const renderUrl = this.getCertificateRenderUrl(renderToken);
+    const browser = await this.getPlaywrightBrowser();
+    const context = await browser.newContext({
+      colorScheme: 'light',
+      viewport: {
+        width: viewportWidth,
+        height: viewportHeight,
+      },
+    });
+
+    try {
+      const page = await context.newPage();
+      await page.goto(renderUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30_000,
+      });
+      await page.waitForSelector('[data-certificate-artboard-ready="true"]', {
+        timeout: 30_000,
+      });
+
+      const artboard = page.locator('[data-certificate-artboard="true"]').first();
+      const pngBuffer = await artboard.screenshot({
+        type: 'png',
+      });
+      const metadata = await sharp(pngBuffer).metadata();
+      const imageWidth = Math.max(1, Number(metadata.width ?? fallbackWidth));
+      const imageHeight = Math.max(1, Number(metadata.height ?? fallbackHeight));
+      const jpegBuffer = await sharp(pngBuffer)
+        .flatten({ background: '#ffffff' })
+        .jpeg({ quality: 100, chromaSubsampling: '4:4:4' })
+        .toBuffer();
+
+      return this.createRasterPdfBuffer({
+        jpegBuffer,
+        imageWidth,
+        imageHeight,
+      });
+    } finally {
+      await context.close();
+    }
+  }
+
   private buildPdfLines(record: IssuedCertificateForRender): string[] {
     const payload = this.toRecord(record.payload_snapshot);
     const eventTitle =
@@ -4096,9 +4314,9 @@ export class CertificatesService {
     }
 
     const typedRecord = record as IssuedCertificateForRender;
-    const visualPdfBuffer = await this.renderVisualCertificatePdfBuffer(typedRecord);
-    const lines = this.buildPdfLines(typedRecord);
-    const pdfBuffer = visualPdfBuffer ?? this.createSimplePdfBuffer(lines);
+    const pdfBuffer = await this.renderCertificatePdfBufferFromBrowser(
+      typedRecord,
+    );
 
     const pdfStorageKey = `events/${record.event_id}/certificates/pdf/${record.certificate_id}.pdf`;
 
@@ -4217,6 +4435,108 @@ export class CertificatesService {
     };
   }
 
+  private buildCertificateDocumentResponse(
+    record: any,
+    options?: { includeIssuedCertificateId?: boolean },
+  ) {
+    const links = this.getCredentialLinks(record.certificate_id, record.credential_id);
+    const qrVerificationUrl = this.getQrVerificationUrl(record.qr_token);
+    const payload = this.toRecord(record.payload_snapshot);
+    const payloadWithCanonicalLinks = {
+      ...payload,
+      verificationUrl: links.verifiableCredentialUrl,
+      verifiableCredentialUrl: links.verifiableCredentialUrl,
+      certificateUrl: links.certificateUrl,
+      qrVerificationUrl,
+    };
+    const templateSnapshot = this.toRecord(record.template_snapshot);
+    const layout = templateSnapshot.layout ?? null;
+    const participantName =
+      String(payload.participantName ?? '').trim() ||
+      this.getDisplayName(
+        record.applications.users_applications_applicant_user_idTousers
+          ?.applicant_profiles,
+      );
+    const eventTitle =
+      typeof payload.eventTitle === 'string'
+        ? payload.eventTitle
+        : record.events.title;
+    const eventLocation =
+      typeof payload.eventLocation === 'string'
+        ? payload.eventLocation || undefined
+        : record.events.venue_name?.trim() ||
+          record.events.venue_address?.trim() ||
+          undefined;
+
+    const data: Record<string, unknown> = {
+      certificateId: record.certificate_id,
+      credentialId: record.credential_id,
+      status: record.revoked_at ? 'REVOKED' : 'ISSUED',
+      issuedAt: record.issued_at,
+      checkedInAt:
+        record.applications.attendance_records?.checked_in_at ?? record.issued_at,
+      revokedAt: record.revoked_at,
+      issuer: record.issuer_name,
+      certificateType: {
+        key: record.certificate_type_key,
+        label: record.certificate_type_label,
+      },
+      certificateUrl: links.certificateUrl,
+      verifiableCredentialUrl: links.verifiableCredentialUrl,
+      qrVerificationUrl,
+      pdfUrl: record.pdf_storage_key
+        ? this.getCertificatePdfUrl(record.certificate_id)
+        : null,
+      pdfStorageKey: record.pdf_storage_key ?? null,
+      renderStatus: String(record.render_status ?? 'PENDING').toUpperCase(),
+      renderError: record.render_error ?? null,
+      event: {
+        id: record.events.id,
+        title: eventTitle,
+        slug: record.events.slug,
+        status: record.events.status,
+        startAt: record.events.start_at,
+        endAt: record.events.end_at,
+        location: eventLocation,
+      },
+      recipient: {
+        name: participantName,
+      },
+      verification: {
+        algorithm: 'HMAC-SHA256',
+        signature: record.credential_signature,
+      },
+      payload: payloadWithCanonicalLinks,
+      layout,
+      template: {
+        text: {
+          title: String(payload.title ?? 'Certificate'),
+          subtitle: String(payload.subtitle ?? 'This certifies that'),
+          completionText: String(
+            payload.completionText ?? 'has successfully completed',
+          ),
+          footerText: String(
+            payload.footerText ??
+              'Verification available via the secure credential link below.',
+          ),
+        },
+        style: {
+          primaryColor: '#2563eb',
+          secondaryColor: '#1d4ed8',
+          backgroundColor: '#ffffff',
+          textColor: '#0f172a',
+          borderColor: '#cbd5e1',
+        },
+      },
+    };
+
+    if (options?.includeIssuedCertificateId) {
+      data.issuedCertificateId = record.id;
+    }
+
+    return data;
+  }
+
   async getPublicCertificate(certificateId: string): Promise<any | null> {
     const record = await (this.prisma as any).issued_certificates.findUnique({
       where: { certificate_id: certificateId },
@@ -4260,99 +4580,61 @@ export class CertificatesService {
 
     if (!record) return null;
     if (!this.isParticipantVisibleIssuedCertificateRecord(record)) return null;
+    return this.buildCertificateDocumentResponse(record);
+  }
 
-    const links = this.getCredentialLinks(record.certificate_id, record.credential_id);
-    const qrVerificationUrl = this.getQrVerificationUrl(record.qr_token);
-    const payload = this.toRecord(record.payload_snapshot);
-    const payloadWithCanonicalLinks = {
-      ...payload,
-      verificationUrl: links.verifiableCredentialUrl,
-      verifiableCredentialUrl: links.verifiableCredentialUrl,
-      certificateUrl: links.certificateUrl,
-      qrVerificationUrl,
-    };
-    const templateSnapshot = this.toRecord(record.template_snapshot);
-    const layout = templateSnapshot.layout ?? null;
-    const participantName =
-      String(payload.participantName ?? '').trim() ||
-      this.getDisplayName(
-        record.applications.users_applications_applicant_user_idTousers
-          ?.applicant_profiles,
-      );
-    const eventTitle =
-      typeof payload.eventTitle === 'string'
-        ? payload.eventTitle
-        : record.events.title;
-    const eventLocation =
-      typeof payload.eventLocation === 'string'
-        ? payload.eventLocation || undefined
-        : record.events.venue_name?.trim() ||
-          record.events.venue_address?.trim() ||
-          undefined;
-
-    const pdfUrl = record.pdf_storage_key
-      ? this.getCertificatePdfUrl(record.certificate_id)
-      : null;
-
-    return {
-      certificateId: record.certificate_id,
-      credentialId: record.credential_id,
-      status: record.revoked_at ? 'REVOKED' : 'ISSUED',
-      issuedAt: record.issued_at,
-      checkedInAt:
-        record.applications.attendance_records?.checked_in_at ?? record.issued_at,
-      revokedAt: record.revoked_at,
-      issuer: record.issuer_name,
-      certificateType: {
-        key: record.certificate_type_key,
-        label: record.certificate_type_label,
+  async getCertificateRenderPayload(token: string): Promise<any> {
+    const claims = this.verifyCertificateRenderToken(token);
+    const record = await (this.prisma as any).issued_certificates.findFirst({
+      where: {
+        id: claims.issuedCertificateId,
+        event_id: claims.eventId,
       },
-      certificateUrl: links.certificateUrl,
-      verifiableCredentialUrl: links.verifiableCredentialUrl,
-      qrVerificationUrl,
-      pdfUrl,
-      pdfStorageKey: record.pdf_storage_key ?? null,
-      renderStatus: String(record.render_status ?? 'PENDING').toUpperCase(),
-      renderError: record.render_error ?? null,
-      event: {
-        id: record.events.id,
-        title: eventTitle,
-        slug: record.events.slug,
-        status: record.events.status,
-        startAt: record.events.start_at,
-        endAt: record.events.end_at,
-        location: eventLocation,
-      },
-      recipient: {
-        name: participantName,
-      },
-      verification: {
-        algorithm: 'HMAC-SHA256',
-        signature: record.credential_signature,
-      },
-      payload: payloadWithCanonicalLinks,
-      layout,
-      template: {
-        text: {
-          title: String(payload.title ?? 'Certificate'),
-          subtitle: String(payload.subtitle ?? 'This certifies that'),
-          completionText: String(
-            payload.completionText ?? 'has successfully completed',
-          ),
-          footerText: String(
-            payload.footerText ??
-              'Verification available via the secure credential link below.',
-          ),
+      include: {
+        events: {
+          select: {
+            id: true,
+            title: true,
+            slug: true,
+            status: true,
+            start_at: true,
+            end_at: true,
+            venue_name: true,
+            venue_address: true,
+          },
         },
-        style: {
-          primaryColor: '#2563eb',
-          secondaryColor: '#1d4ed8',
-          backgroundColor: '#ffffff',
-          textColor: '#0f172a',
-          borderColor: '#cbd5e1',
+        applications: {
+          select: {
+            id: true,
+            attendance_records: {
+              select: {
+                status: true,
+                checked_in_at: true,
+              },
+            },
+            users_applications_applicant_user_idTousers: {
+              select: {
+                applicant_profiles: {
+                  select: {
+                    first_name: true,
+                    last_name: true,
+                    full_name: true,
+                  },
+                },
+              },
+            },
+          },
         },
       },
-    };
+    });
+
+    if (!record) {
+      throw new NotFoundException('Certificate render payload not found');
+    }
+
+    return this.buildCertificateDocumentResponse(record, {
+      includeIssuedCertificateId: true,
+    });
   }
 
   async verifyCredential(credentialId: string): Promise<any | null> {

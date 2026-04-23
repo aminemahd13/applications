@@ -48,6 +48,7 @@ function createServiceHarness() {
     getPresignedGetUrl: jest.fn(),
     getHeadObject: jest.fn(),
     getObjectBuffer: jest.fn(),
+    putObjectBuffer: jest.fn(),
     computeSha256: jest.fn(),
     deleteObject: jest.fn(),
   };
@@ -309,6 +310,7 @@ describe('CertificatesService public resolvers', () => {
 describe('CertificatesService public link generation', () => {
   beforeEach(() => {
     process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
+    process.env.JWT_SECRET = 'jwt-secret';
   });
 
   afterEach(() => {
@@ -316,6 +318,9 @@ describe('CertificatesService public link generation', () => {
     delete process.env.APP_BASE_URL;
     delete process.env.CORS_ORIGINS;
     delete process.env.CORS_ORIGIN;
+    delete process.env.JWT_SECRET;
+    delete process.env.CERTIFICATE_RENDER_SIGNING_SECRET;
+    delete process.env.INTERNAL_WEB_BASE_URL;
   });
 
   it('generates credential, QR, and PDF links from canonical public host', () => {
@@ -370,6 +375,177 @@ describe('CertificatesService public link generation', () => {
     expect(() =>
       (service as any).getCredentialLinks('certificate-1', 'credential-1'),
     ).toThrow('Set PUBLIC_APP_BASE_URL to the public HTTPS origin');
+  });
+
+  it('signs and verifies short-lived certificate render tokens', () => {
+    const { service } = createServiceHarness();
+    process.env.CERTIFICATE_RENDER_SIGNING_SECRET = 'render-secret';
+
+    const token = (service as any).signCertificateRenderToken({
+      eventId: 'event-1',
+      issuedCertificateId: 'issued-1',
+    });
+
+    const claims = (service as any).verifyCertificateRenderToken(token);
+    expect(claims).toEqual({
+      purpose: 'certificate-pdf-render',
+      eventId: 'event-1',
+      issuedCertificateId: 'issued-1',
+    });
+  });
+
+  it('rejects invalid certificate render tokens', () => {
+    const { service } = createServiceHarness();
+    process.env.CERTIFICATE_RENDER_SIGNING_SECRET = 'render-secret';
+
+    expect(() =>
+      (service as any).verifyCertificateRenderToken('invalid-token'),
+    ).toThrow('Certificate render token is invalid');
+  });
+
+  it('uses INTERNAL_WEB_BASE_URL for browser-render routes', () => {
+    const { service } = createServiceHarness();
+    process.env.INTERNAL_WEB_BASE_URL = 'http://web:3000';
+
+    const url = (service as any).getCertificateRenderUrl('token-1');
+
+    expect(url).toBe('http://web:3000/credentials/render/token-1');
+  });
+});
+
+describe('CertificatesService internal render payloads', () => {
+  beforeEach(() => {
+    process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
+    process.env.JWT_SECRET = 'jwt-secret';
+    process.env.CERTIFICATE_RENDER_SIGNING_SECRET = 'render-secret';
+  });
+
+  afterEach(() => {
+    delete process.env.PUBLIC_APP_BASE_URL;
+    delete process.env.JWT_SECRET;
+    delete process.env.CERTIFICATE_RENDER_SIGNING_SECRET;
+  });
+
+  it('returns protected render payload for a valid render token', async () => {
+    const { service, prisma } = createServiceHarness();
+    const token = (service as any).signCertificateRenderToken({
+      eventId: 'event-1',
+      issuedCertificateId: 'issued-1',
+    });
+
+    prisma.issued_certificates.findFirst.mockResolvedValue({
+      id: 'issued-1',
+      event_id: 'event-1',
+      certificate_id: 'certificate-1',
+      credential_id: 'credential-1',
+      qr_token: 'qr-token-1',
+      certificate_type_key: 'participation',
+      certificate_type_label: 'Participation',
+      credential_signature: 'signature-1',
+      issuer_name: 'Issuer',
+      status: 'ISSUED',
+      revoked_at: null,
+      issued_at: new Date('2026-04-23T10:00:00.000Z'),
+      render_status: 'DONE',
+      render_error: null,
+      pdf_storage_key: 'events/event-1/certificates/pdf/certificate-1.pdf',
+      payload_snapshot: {
+        participantName: 'Amina',
+        eventTitle: 'Math Camp',
+      },
+      template_snapshot: {
+        layout: {
+          layoutSchemaVersion: 2,
+          canvas: {
+            width: 1600,
+            height: 1131,
+            unit: 'px',
+          },
+          elements: [],
+          signatureSlots: [],
+          metadata: {},
+        },
+      },
+      events: {
+        id: 'event-1',
+        title: 'Math Camp',
+        slug: 'math-camp',
+        status: 'published',
+        start_at: new Date('2026-04-23T08:00:00.000Z'),
+        end_at: new Date('2026-04-23T18:00:00.000Z'),
+        venue_name: 'Casablanca',
+        venue_address: null,
+      },
+      applications: {
+        id: 'app-1',
+        attendance_records: {
+          status: 'CHECKED_IN',
+          checked_in_at: new Date('2026-04-23T09:00:00.000Z'),
+        },
+        users_applications_applicant_user_idTousers: {
+          applicant_profiles: {
+            first_name: 'Amina',
+            last_name: 'Z.',
+            full_name: 'Amina Z.',
+          },
+        },
+      },
+    });
+
+    const result = await service.getCertificateRenderPayload(token);
+
+    expect(prisma.issued_certificates.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'issued-1',
+        event_id: 'event-1',
+      },
+      include: {
+        events: {
+          select: {
+            id: true,
+            title: true,
+            slug: true,
+            status: true,
+            start_at: true,
+            end_at: true,
+            venue_name: true,
+            venue_address: true,
+          },
+        },
+        applications: {
+          select: {
+            id: true,
+            attendance_records: {
+              select: {
+                status: true,
+                checked_in_at: true,
+              },
+            },
+            users_applications_applicant_user_idTousers: {
+              select: {
+                applicant_profiles: {
+                  select: {
+                    first_name: true,
+                    last_name: true,
+                    full_name: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(result.issuedCertificateId).toBe('issued-1');
+    expect(result.certificateUrl).toBe(
+      'https://participant.example.com/credentials/certificate/certificate-1',
+    );
+    expect(result.verifiableCredentialUrl).toBe(
+      'https://participant.example.com/credentials/verify/credential-1',
+    );
+    expect(result.qrVerificationUrl).toBe(
+      'https://participant.example.com/credentials/qr/qr-token-1',
+    );
   });
 });
 
@@ -599,6 +775,82 @@ describe('CertificatesService issued history and queue lifecycle', () => {
         },
       }),
     );
+  });
+
+  it('renders issued certificate PDFs through the browser capture path and stores the result', async () => {
+    const { service, prisma, storageService } = createServiceHarness();
+    prisma.issued_certificates.findUnique.mockResolvedValue({
+      id: 'issued-1',
+      event_id: 'event-1',
+      certificate_id: 'certificate-1',
+      credential_id: 'credential-1',
+      qr_token: 'qr-token-1',
+      certificate_type_label: 'Participation',
+      issuer_name: 'Issuer',
+      issued_at: new Date('2026-04-23T10:00:00.000Z'),
+      template_snapshot: {
+        layout: {
+          layoutSchemaVersion: 2,
+          canvas: {
+            width: 1600,
+            height: 1131,
+            unit: 'px',
+          },
+          elements: [],
+          signatureSlots: [],
+          metadata: {},
+        },
+      },
+      payload_snapshot: {
+        participantName: 'Amina',
+      },
+      applications: {
+        id: 'app-1',
+        users_applications_applicant_user_idTousers: {
+          applicant_profiles: {
+            first_name: 'Amina',
+            last_name: 'Z.',
+            full_name: 'Amina Z.',
+          },
+        },
+      },
+      events: {
+        title: 'Math Camp',
+      },
+    });
+    prisma.issued_certificates.update.mockResolvedValue({
+      id: 'issued-1',
+    });
+    jest
+      .spyOn(service as any, 'renderCertificatePdfBufferFromBrowser')
+      .mockResolvedValue(Buffer.from('pdf-buffer'));
+
+    const result = await (service as any).renderIssuedCertificatePdf('issued-1');
+
+    expect((service as any).renderCertificatePdfBufferFromBrowser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'issued-1',
+        event_id: 'event-1',
+      }),
+    );
+    expect(storageService.putObjectBuffer).toHaveBeenCalledWith(
+      'events/event-1/certificates/pdf/certificate-1.pdf',
+      Buffer.from('pdf-buffer'),
+      'application/pdf',
+    );
+    expect(prisma.issued_certificates.update).toHaveBeenCalledWith({
+      where: { id: 'issued-1' },
+      data: expect.objectContaining({
+        pdf_storage_key: 'events/event-1/certificates/pdf/certificate-1.pdf',
+        render_status: 'DONE',
+        render_error: null,
+      }),
+    });
+    expect(result).toEqual({
+      certificateId: 'certificate-1',
+      pdfStorageKey: 'events/event-1/certificates/pdf/certificate-1.pdf',
+      pdfBuffer: Buffer.from('pdf-buffer'),
+    });
   });
 });
 

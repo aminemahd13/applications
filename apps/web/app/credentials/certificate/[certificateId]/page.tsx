@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Award,
@@ -10,61 +10,21 @@ import {
   MapPin,
   ShieldCheck,
 } from "lucide-react";
-import { QRCodeSVG } from "qrcode.react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { CertificateTemplateElement } from "@/lib/certificates";
-import { sanitizeClientFacingUrl } from "@/lib/public-link-url";
+import { CertificateArtboard } from "@/components/certificates/certificate-artboard";
 import { apiClient } from "@/lib/api";
 import {
-  computeCanvasScale,
-  parseCertificateLayout,
+  buildCertificateTokenValues,
+  formatCertificateDate,
+  formatCertificateDateTime,
+  parseCertificateDocumentResponse,
   parseCertificatePayloadMap,
-} from "@/lib/certificate-viewer";
-
-interface CertificatePayload {
-  certificateId: string;
-  credentialId: string;
-  status: "ISSUED" | "REVOKED";
-  issuedAt: string;
-  checkedInAt?: string;
-  revokedAt?: string | null;
-  issuer: string;
-  certificateUrl: string;
-  verifiableCredentialUrl: string;
-  qrVerificationUrl?: string;
-  pdfUrl?: string | null;
-  renderStatus?: string | null;
-  event: {
-    id: string;
-    title: string;
-    slug: string;
-    startAt?: string;
-    endAt?: string;
-    location?: string;
-  };
-  recipient: {
-    name: string;
-  };
-  payload?: unknown;
-  layout?: unknown;
-  template?: {
-    text?: {
-      title?: string;
-      subtitle?: string;
-      completionText?: string;
-      footerText?: string;
-    };
-    style?: {
-      primaryColor?: string;
-      secondaryColor?: string;
-      backgroundColor?: string;
-      textColor?: string;
-      borderColor?: string;
-    };
-  };
-}
+  type CertificateDocumentData,
+} from "@/lib/certificate-document";
+import { sanitizeClientFacingUrl } from "@/lib/public-link-url";
+import { computeCanvasScale, parseCertificateLayout } from "@/lib/certificate-viewer";
 
 const DEFAULT_CERTIFICATE_TEMPLATE = {
   text: {
@@ -83,75 +43,10 @@ const DEFAULT_CERTIFICATE_TEMPLATE = {
   },
 } as const;
 
-function resolveAssetUrl(storageKey?: string | null): string {
-  const raw = (storageKey ?? "").trim();
-  if (!raw) return "";
-  if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("data:")) {
-    return raw;
-  }
-  return `/credentials/assets?key=${encodeURIComponent(raw)}`;
-}
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return "-";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleDateString("en-GB");
-}
-
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "-";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString("en-GB");
-}
-
-function getStyleNumber(
-  style: unknown,
-  key: string,
-  fallback: number,
-): number {
-  const record = style && typeof style === "object" ? (style as Record<string, unknown>) : null;
-  const raw = record?.[key];
-  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-  if (typeof raw === "string") {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return fallback;
-}
-
-function getStyleString(
-  style: unknown,
-  key: string,
-  fallback: string,
-): string {
-  const record = style && typeof style === "object" ? (style as Record<string, unknown>) : null;
-  const raw = record?.[key];
-  if (typeof raw === "string" && raw.trim().length > 0) return raw;
-  return fallback;
-}
-
-function buildElementLabel(element: CertificateTemplateElement): string {
-  if (element.type === "dynamic_text") {
-    return `Dynamic (${element.token ?? "token"})`;
-  }
-  if (element.type === "text") {
-    return `Text (${(element.content ?? "text").slice(0, 20)})`;
-  }
-  if (element.type === "image") {
-    return "Image";
-  }
-  if (element.type === "signature") {
-    return "Signature";
-  }
-  return "QR";
-}
-
 export default function CertificatePage() {
   const params = useParams();
   const certificateId = params.certificateId as string;
-  const [certificate, setCertificate] = useState<CertificatePayload | null>(null);
+  const [certificate, setCertificate] = useState<CertificateDocumentData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [canvasScale, setCanvasScale] = useState(1);
   const [isPrintMode, setIsPrintMode] = useState(false);
@@ -169,66 +64,33 @@ export default function CertificatePage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
       try {
         const res = await apiClient<Record<string, unknown> | { data: Record<string, unknown> }>(
           `/credentials/certificate/${certificateId}`,
         );
+        if (cancelled) return;
         const raw =
-          res && typeof res === "object" && "data" in res ? (res as { data: Record<string, unknown> }).data : res;
-        if (raw) {
-          setCertificate({
-            certificateId: String(raw.certificateId ?? ""),
-            credentialId: String(raw.credentialId ?? ""),
-            status: raw.status === "REVOKED" ? "REVOKED" : "ISSUED",
-            issuedAt: String(raw.issuedAt ?? ""),
-            checkedInAt: typeof raw.checkedInAt === "string" ? raw.checkedInAt : undefined,
-            revokedAt: typeof raw.revokedAt === "string" ? raw.revokedAt : null,
-            issuer: typeof raw.issuer === "string" ? raw.issuer : "Math&Maroc Event Platform",
-            certificateUrl: String(raw.certificateUrl ?? ""),
-            verifiableCredentialUrl: String(raw.verifiableCredentialUrl ?? ""),
-            qrVerificationUrl: typeof raw.qrVerificationUrl === "string" ? raw.qrVerificationUrl : undefined,
-            pdfUrl: typeof raw.pdfUrl === "string" ? raw.pdfUrl : null,
-            renderStatus: typeof raw.renderStatus === "string" ? raw.renderStatus : null,
-            event: {
-              id: String((raw.event as Record<string, unknown> | undefined)?.id ?? ""),
-              title: String((raw.event as Record<string, unknown> | undefined)?.title ?? "Event"),
-              slug: String((raw.event as Record<string, unknown> | undefined)?.slug ?? ""),
-              startAt:
-                typeof (raw.event as Record<string, unknown> | undefined)?.startAt === "string"
-                  ? String((raw.event as Record<string, unknown> | undefined)?.startAt)
-                  : undefined,
-              endAt:
-                typeof (raw.event as Record<string, unknown> | undefined)?.endAt === "string"
-                  ? String((raw.event as Record<string, unknown> | undefined)?.endAt)
-                  : undefined,
-              location:
-                typeof (raw.event as Record<string, unknown> | undefined)?.location === "string"
-                  ? String((raw.event as Record<string, unknown> | undefined)?.location)
-                  : undefined,
-            },
-            recipient: {
-              name:
-                typeof (raw.recipient as Record<string, unknown> | undefined)?.name === "string"
-                  ? String((raw.recipient as Record<string, unknown> | undefined)?.name)
-                  : "Attendee",
-            },
-            payload: (raw as Record<string, unknown>).payload,
-            layout: (raw as Record<string, unknown>).layout,
-            template:
-              typeof (raw as Record<string, unknown>).template === "object"
-                ? ((raw as Record<string, unknown>).template as CertificatePayload["template"])
-                : undefined,
-          });
-        } else {
+          res && typeof res === "object" && "data" in res
+            ? (res as { data: Record<string, unknown> }).data
+            : (res as Record<string, unknown>);
+        setCertificate(raw ? parseCertificateDocumentResponse(raw) : null);
+      } catch {
+        if (!cancelled) {
           setCertificate(null);
         }
-      } catch {
-        setCertificate(null);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [certificateId]);
 
   const layout = useMemo(() => parseCertificateLayout(certificate?.layout), [certificate?.layout]);
@@ -252,55 +114,10 @@ export default function CertificatePage() {
     [certificate?.template?.style],
   );
 
-  const tokenValues = useMemo<Record<string, string>>(() => {
-    if (!certificate) return {};
-
-    const toClientAbsoluteUrl = (rawValue: string | null | undefined): string => {
-      const normalized = sanitizeClientFacingUrl(rawValue) ?? String(rawValue ?? "").trim();
-      if (!normalized) return "";
-      if (normalized.startsWith("/")) {
-        if (typeof window === "undefined" || !window.location?.origin) {
-          return normalized;
-        }
-        return `${window.location.origin}${normalized}`;
-      }
-      return normalized;
-    };
-
-    const verificationUrl = toClientAbsoluteUrl(certificate.verifiableCredentialUrl);
-    const certificateUrl = toClientAbsoluteUrl(certificate.certificateUrl);
-    const qrVerificationUrl = toClientAbsoluteUrl(
-      certificate.qrVerificationUrl ?? certificate.verifiableCredentialUrl ?? certificate.certificateUrl,
-    );
-
-    const tokens: Record<string, string> = {
-      participantName: certificate.recipient.name,
-      eventTitle: certificate.event.title,
-      issuedDate: formatDate(certificate.issuedAt),
-      issuedAt: certificate.issuedAt,
-      certificateId: certificate.certificateId,
-      credentialId: certificate.credentialId,
-      ...payloadTokens,
-    };
-
-    tokens.verificationUrl = verificationUrl || tokens.verificationUrl || "";
-    tokens.verifiableCredentialUrl =
-      verificationUrl || tokens.verifiableCredentialUrl || tokens.verificationUrl;
-    tokens.certificateUrl = certificateUrl || tokens.certificateUrl || "";
-    tokens.qrVerificationUrl =
-      qrVerificationUrl ||
-      tokens.qrVerificationUrl ||
-      tokens.verificationUrl ||
-      tokens.verifiableCredentialUrl ||
-      tokens.certificateUrl;
-
-    if (!tokens.qrVerificationUrl) {
-      tokens.qrVerificationUrl =
-        tokens.verificationUrl || tokens.verifiableCredentialUrl || tokens.certificateUrl || "";
-    }
-
-    return tokens;
-  }, [certificate, payloadTokens]);
+  const tokenValues = useMemo<Record<string, string>>(
+    () => (certificate ? buildCertificateTokenValues(certificate, payloadTokens) : {}),
+    [certificate, payloadTokens],
+  );
 
   useEffect(() => {
     if (!layout) return;
@@ -402,130 +219,18 @@ export default function CertificatePage() {
                     }}
                   >
                     <div
-                      className="relative overflow-hidden border bg-white shadow-sm print:shadow-none"
                       style={{
                         width: layout.canvas.width,
                         height: layout.canvas.height,
                         transform: `scale(${canvasScale})`,
                         transformOrigin: "top left",
-                        backgroundColor: layout.canvas.backgroundColor ?? "#ffffff",
-                        backgroundImage: layout.canvas.backgroundAssetKey
-                          ? `url(${resolveAssetUrl(layout.canvas.backgroundAssetKey)})`
-                          : undefined,
-                        backgroundPosition: "center",
-                        backgroundSize: "cover",
                       }}
                     >
-                      {layout.elements
-                        .slice()
-                        .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
-                        .map((element) => {
-                          const style = element.style ?? {};
-                          const fontSize = getStyleNumber(style, "fontSize", 32);
-                          const fontWeight = getStyleNumber(style, "fontWeight", 500);
-                          const textAlign = getStyleString(style, "textAlign", "left");
-                          const color = getStyleString(style, "color", "#0f172a");
-                          const tokenKey =
-                            element.type === "dynamic_text" || element.type === "qr"
-                              ? (element.token ?? "").trim()
-                              : "";
-                          const tokenValue = tokenKey ? tokenValues[tokenKey] : "";
-
-                          const frameStyle: CSSProperties = {
-                            left: element.x,
-                            top: element.y,
-                            width: element.width,
-                            height: element.height,
-                            zIndex: element.zIndex ?? 0,
-                          };
-
-                          if (element.type === "image") {
-                            const assetUrl = resolveAssetUrl(element.assetKey);
-                            return (
-                              <div key={element.id} className="absolute overflow-hidden" style={frameStyle}>
-                                {assetUrl ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={assetUrl}
-                                    alt={buildElementLabel(element)}
-                                    className="h-full w-full object-contain"
-                                  />
-                                ) : null}
-                              </div>
-                            );
-                          }
-
-                          if (element.type === "signature") {
-                            const signatureSlot = layout.signatureSlots.find(
-                              (slot) => slot.key === element.signatureSlotKey,
-                            );
-                            const signatureUrl = resolveAssetUrl(signatureSlot?.assetKey);
-                            return (
-                              <div key={element.id} className="absolute overflow-hidden" style={frameStyle}>
-                                {signatureUrl ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={signatureUrl}
-                                    alt={buildElementLabel(element)}
-                                    className="h-full w-full object-contain"
-                                  />
-                                ) : (
-                                  <div className="flex h-full w-full items-end justify-center p-1 text-center text-xs text-slate-500">
-                                    {signatureSlot?.signerName ?? signatureSlot?.label ?? "Signature"}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          }
-
-                          if (element.type === "qr") {
-                            const qrValue =
-                              tokenValue ||
-                              tokenValues.qrVerificationUrl ||
-                              tokenValues.verificationUrl ||
-                              certificate.verifiableCredentialUrl;
-                            return (
-                              <div
-                                key={element.id}
-                                className="absolute flex items-center justify-center bg-white p-2"
-                                style={frameStyle}
-                              >
-                                <QRCodeSVG value={qrValue} size={Math.max(96, element.width - 12)} />
-                              </div>
-                            );
-                          }
-
-                          const textValue =
-                            element.type === "text"
-                              ? element.content ?? ""
-                              : tokenValue || `{{${tokenKey || "token"}}}`;
-
-                          return (
-                            <div
-                              key={element.id}
-                              className="absolute p-1"
-                              style={{
-                                ...frameStyle,
-                                color,
-                                fontSize,
-                                fontWeight,
-                                textAlign: textAlign as "left" | "center" | "right",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent:
-                                  textAlign === "center"
-                                    ? "center"
-                                    : textAlign === "right"
-                                      ? "flex-end"
-                                      : "flex-start",
-                                whiteSpace: "pre-wrap",
-                                overflowWrap: "anywhere",
-                              }}
-                            >
-                              {textValue}
-                            </div>
-                          );
-                        })}
+                      <CertificateArtboard
+                        className="border bg-white shadow-sm print:shadow-none"
+                        layout={layout}
+                        tokenValues={tokenValues}
+                      />
                     </div>
                   </div>
                 </div>
@@ -578,7 +283,7 @@ export default function CertificatePage() {
               </div>
               <div className="rounded-lg border p-3 text-sm">
                 <p className="text-xs text-muted-foreground">Issued on</p>
-                <p className="font-medium">{formatDateTime(certificate.issuedAt)}</p>
+                <p className="font-medium">{formatCertificateDateTime(certificate.issuedAt)}</p>
               </div>
               {certificate.event.startAt ? (
                 <div className="rounded-lg border p-3 text-sm">
@@ -586,7 +291,7 @@ export default function CertificatePage() {
                     <Calendar className="h-3.5 w-3.5" />
                     Event date
                   </p>
-                  <p className="font-medium">{formatDate(certificate.event.startAt)}</p>
+                  <p className="font-medium">{formatCertificateDate(certificate.event.startAt)}</p>
                 </div>
               ) : null}
               {certificate.event.location ? (

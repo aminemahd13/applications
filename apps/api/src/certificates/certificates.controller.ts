@@ -517,6 +517,16 @@ export class CertificatesPublicController {
 
   @SkipCsrf()
   @SkipThrottle()
+  @Get('render/:token')
+  async getCertificateRenderPayload(@Param('token') token: string) {
+    const data = await this.certificatesService.getCertificateRenderPayload(
+      token,
+    );
+    return { data };
+  }
+
+  @SkipCsrf()
+  @SkipThrottle()
   @Get('assets')
   async resolveCertificateAsset(
     @Res() res: Response,

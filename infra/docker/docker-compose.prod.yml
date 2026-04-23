@@ -78,6 +78,8 @@ services:
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-localhost}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      PUBLIC_APP_BASE_URL: ${PUBLIC_APP_BASE_URL:-}
+      INTERNAL_WEB_BASE_URL: ${INTERNAL_WEB_BASE_URL:-http://web:3000}
       TRUST_PROXY: ${TRUST_PROXY:-true}
       THROTTLE_TTL_MS: ${THROTTLE_TTL_MS:-60000}
       THROTTLE_LIMIT: ${THROTTLE_LIMIT:-1000}
@@ -91,6 +93,7 @@ services:
       SMTP_USER: ${SMTP_USER}
       SMTP_PASS: ${SMTP_PASS}
       SMTP_FROM: ${SMTP_FROM:-noreply@event-platform.com}
+      CERTIFICATE_RENDER_SIGNING_SECRET: ${CERTIFICATE_RENDER_SIGNING_SECRET:-}
       PORT: 3001
 
   web:
