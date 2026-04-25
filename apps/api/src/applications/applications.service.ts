@@ -3795,6 +3795,10 @@ export class ApplicationsService {
     };
   }
 
+  private isConvocationCertificateTypeKey(value: unknown): boolean {
+    return String(value ?? '').trim().toLowerCase() === 'convocation';
+  }
+
   private toApplicationIssuedCertificates(
     rows: Array<{
       id: string;
@@ -3826,8 +3830,11 @@ export class ApplicationsService {
         const isRevoked =
           Boolean(row.revoked_at) || String(row.status ?? '').toUpperCase() === 'REVOKED';
         if (isRevoked) return false;
-        if (!isCheckedIn) return false;
-        return Boolean(row.released_at);
+        if (!row.released_at) return false;
+        if (this.isConvocationCertificateTypeKey(row.certificate_type_key)) {
+          return true;
+        }
+        return isCheckedIn;
       })
       .map((row) => {
       const links = this.getCompletionCredentialLinks(

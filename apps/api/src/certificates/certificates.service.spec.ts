@@ -1,4 +1,8 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ListIssuedCertificatesQuerySchema } from '../../../../packages/shared/dtos/certificates.dto';
 import { CertificatesService } from './certificates.service';
 
@@ -210,6 +214,39 @@ describe('CertificatesService public resolvers', () => {
     expect(result).toBe('https://storage.example.com/signed-pdf-legacy');
   });
 
+  it('returns participant PDF URL for released convocation before check-in', async () => {
+    const { service, prisma, storageService } = createServiceHarness();
+    const storageKey =
+      'events/event-1/certificates/pdf/certificate-convocation.pdf';
+
+    prisma.issued_certificates.findUnique.mockResolvedValue({
+      status: 'ISSUED',
+      certificate_type_key: 'convocation',
+      revoked_at: null,
+      released_at: new Date('2026-04-23T10:00:00.000Z'),
+      pdf_storage_key: storageKey,
+      applications: {
+        attendance_records: {
+          status: 'CONFIRMED',
+          checked_in_at: null,
+        },
+      },
+    });
+    storageService.getPresignedGetUrl.mockResolvedValue(
+      'https://storage.example.com/signed-pdf-convocation',
+    );
+
+    const result = await service.resolveCertificatePdfUrl(
+      'certificate-convocation',
+    );
+
+    expect(storageService.getPresignedGetUrl).toHaveBeenCalledWith(
+      storageKey,
+      3600,
+    );
+    expect(result).toBe('https://storage.example.com/signed-pdf-convocation');
+  });
+
   it('throws 404 for unreleased participant certificate PDF', async () => {
     const { service, prisma } = createServiceHarness();
 
@@ -229,6 +266,67 @@ describe('CertificatesService public resolvers', () => {
     await expect(
       service.resolveCertificatePdfUrl('certificate-2'),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('returns public certificate payload for released convocation before check-in', async () => {
+    const { service, prisma } = createServiceHarness();
+    process.env.PUBLIC_APP_BASE_URL = 'https://participant.example.com';
+
+    const issuedAt = new Date('2026-04-23T10:00:00.000Z');
+    const resultDate = new Date('2026-04-23T08:00:00.000Z');
+    prisma.issued_certificates.findUnique.mockResolvedValue({
+      id: 'issued-convocation-1',
+      event_id: 'event-1',
+      application_id: 'app-1',
+      certificate_id: 'certificate-convocation',
+      credential_id: 'credential-convocation',
+      qr_token: 'qr-convocation',
+      certificate_type_key: 'convocation',
+      certificate_type_label: 'Convocation',
+      credential_signature: 'signature-1',
+      issuer_name: 'Issuer',
+      status: 'ISSUED',
+      revoked_at: null,
+      issued_at: issuedAt,
+      released_at: issuedAt,
+      template_snapshot: {},
+      payload_snapshot: {},
+      pdf_storage_key:
+        'events/event-1/certificates/pdf/certificate-convocation.pdf',
+      render_status: 'DONE',
+      render_error: null,
+      events: {
+        id: 'event-1',
+        title: 'Math Camp',
+        slug: 'math-camp',
+        status: 'published',
+        start_at: resultDate,
+        end_at: resultDate,
+        venue_name: 'Casablanca',
+        venue_address: null,
+      },
+      applications: {
+        id: 'app-1',
+        attendance_records: {
+          status: 'CONFIRMED',
+          checked_in_at: null,
+        },
+        users_applications_applicant_user_idTousers: {
+          applicant_profiles: null,
+        },
+      },
+    });
+
+    const result = await service.getPublicCertificate('certificate-convocation');
+
+    expect(result).not.toBeNull();
+    expect(result?.certificateId).toBe('certificate-convocation');
+    expect(result?.certificateType).toEqual({
+      key: 'convocation',
+      label: 'Convocation',
+    });
+
+    delete process.env.PUBLIC_APP_BASE_URL;
   });
 
   it('resolves staff PDF URL regardless of release state', async () => {
@@ -607,6 +705,110 @@ describe('CertificatesService issued history and queue lifecycle', () => {
     expect(serialized).toContain('"full_name"');
     expect(serialized).toContain('"first_name"');
     expect(serialized).toContain('"last_name"');
+  });
+
+  it('releases convocation certificates before attendee check-in', async () => {
+    const { service, prisma } = createServiceHarness();
+    const issuedAt = new Date('2026-04-23T10:00:00.000Z');
+    const releasedAt = new Date('2026-04-23T12:00:00.000Z');
+    prisma.issued_certificates.findFirst.mockResolvedValue({
+      id: 'issued-1',
+      event_id: 'event-1',
+      application_id: 'app-1',
+      certificate_id: 'certificate-1',
+      credential_id: 'credential-1',
+      certificate_type_key: 'convocation',
+      certificate_type_label: 'Convocation',
+      qr_token: 'qr-token-1',
+      issuer_name: 'Issuer',
+      status: 'ISSUED',
+      issued_at: issuedAt,
+      released_at: null,
+      released_by: null,
+      revoked_at: null,
+      template_snapshot: {
+        name: 'Convocation',
+        versionNumber: 1,
+      },
+      payload_snapshot: {},
+      pdf_storage_key: null,
+      pdf_generated_at: null,
+      render_status: 'DONE',
+      render_error: null,
+      applications: {
+        attendance_records: {
+          status: 'CONFIRMED',
+          checked_in_at: null,
+        },
+      },
+      certificate_templates: {
+        name: 'Convocation',
+      },
+      certificate_template_versions: {
+        version_number: 1,
+      },
+    });
+    prisma.issued_certificates.update.mockResolvedValue({
+      id: 'issued-1',
+      event_id: 'event-1',
+      application_id: 'app-1',
+      certificate_id: 'certificate-1',
+      credential_id: 'credential-1',
+      certificate_type_key: 'convocation',
+      certificate_type_label: 'Convocation',
+      qr_token: 'qr-token-1',
+      issuer_name: 'Issuer',
+      status: 'ISSUED',
+      issued_at: issuedAt,
+      released_at: releasedAt,
+      released_by: 'actor-1',
+      revoked_at: null,
+      template_snapshot: {
+        name: 'Convocation',
+        versionNumber: 1,
+      },
+      payload_snapshot: {},
+      pdf_storage_key: null,
+      pdf_generated_at: null,
+      render_status: 'DONE',
+      render_error: null,
+      certificate_templates: {
+        name: 'Convocation',
+      },
+      certificate_template_versions: {
+        version_number: 1,
+      },
+    });
+
+    const result = await service.releaseIssuedCertificate('event-1', 'issued-1');
+
+    expect(prisma.issued_certificates.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'issued-1' },
+      }),
+    );
+    expect(result.isReleased).toBe(true);
+  });
+
+  it('keeps non-convocation release blocked before attendee check-in', async () => {
+    const { service, prisma } = createServiceHarness();
+    prisma.issued_certificates.findFirst.mockResolvedValue({
+      id: 'issued-1',
+      event_id: 'event-1',
+      application_id: 'app-1',
+      certificate_type_key: 'participation',
+      applications: {
+        attendance_records: {
+          status: 'CONFIRMED',
+          checked_in_at: null,
+        },
+      },
+    });
+
+    await expect(
+      service.releaseIssuedCertificate('event-1', 'issued-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.issued_certificates.update).not.toHaveBeenCalled();
   });
 
   it('hard-deletes revoked certificates and removes their PDF object when present', async () => {

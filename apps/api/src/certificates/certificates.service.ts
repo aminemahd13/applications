@@ -666,10 +666,15 @@ export class CertificatesService implements OnModuleDestroy {
     return String(attendance?.status ?? '').toUpperCase() === 'CHECKED_IN';
   }
 
+  private isConvocationCertificateTypeKey(value: unknown): boolean {
+    return String(value ?? '').trim().toLowerCase() === 'convocation';
+  }
+
   private isParticipantVisibleIssuedCertificateRecord(record: {
     status?: string | null;
     revoked_at?: Date | null;
     released_at?: Date | null;
+    certificate_type_key?: string | null;
     applications?: {
       attendance_records?: {
         status?: string | null;
@@ -681,6 +686,9 @@ export class CertificatesService implements OnModuleDestroy {
     const isIssued = !record.revoked_at && activeStatus !== 'REVOKED';
     if (!isIssued) return false;
     if (!record.released_at) return false;
+    if (this.isConvocationCertificateTypeKey(record.certificate_type_key)) {
+      return true;
+    }
     return this.isCheckedInAttendance(record.applications?.attendance_records);
   }
 
@@ -1991,7 +1999,13 @@ export class CertificatesService implements OnModuleDestroy {
       throw new NotFoundException('Issued certificate not found');
     }
 
-    if (!this.isCheckedInAttendance(record.applications?.attendance_records)) {
+    const requiresCheckinForRelease = !this.isConvocationCertificateTypeKey(
+      record.certificate_type_key,
+    );
+    if (
+      requiresCheckinForRelease &&
+      !this.isCheckedInAttendance(record.applications?.attendance_records)
+    ) {
       throw new BadRequestException(
         'Certificates can only be released after attendee check-in',
       );
@@ -2070,7 +2084,13 @@ export class CertificatesService implements OnModuleDestroy {
         summary.alreadyReleased += 1;
         continue;
       }
-      if (!this.isCheckedInAttendance(row.applications?.attendance_records)) {
+      const requiresCheckinForRelease = !this.isConvocationCertificateTypeKey(
+        row.certificate_type_key,
+      );
+      if (
+        requiresCheckinForRelease &&
+        !this.isCheckedInAttendance(row.applications?.attendance_records)
+      ) {
         summary.skippedNotCheckedIn += 1;
         continue;
       }
