@@ -2,12 +2,15 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { StorageService } from '../common/storage/storage.service';
+import { ClsService } from 'nestjs-cls';
 import {
   CreateEventDto,
+  CloneEventDto,
   UpdateEventDto,
   EventFilterDto,
   PublishStatus,
@@ -39,7 +42,16 @@ export class EventsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storageService: StorageService,
+    private readonly cls: ClsService,
   ) {}
+
+  private getActorIdOrThrow(): string {
+    const actorId = this.cls.get('actorId');
+    if (typeof actorId !== 'string' || actorId.trim().length === 0) {
+      throw new ForbiddenException('Authentication required');
+    }
+    return actorId;
+  }
 
   private parseDateCursor(cursor?: string): Date | null {
     if (!cursor || typeof cursor !== 'string') return null;
@@ -157,6 +169,104 @@ export class EventsService {
   private invalidatePublicCaches() {
     this.publicEventsListCache.clear();
     this.publicEventBySlugCache.clear();
+  }
+
+  private rewriteStorageKey(
+    value: string,
+    assetKeyMap: Map<string, string>,
+  ): string {
+    const directMatch = assetKeyMap.get(value);
+    if (directMatch) return directMatch;
+
+    if (!value.startsWith('/')) {
+      return value;
+    }
+
+    const normalized = value.slice(1);
+    const mapped = assetKeyMap.get(normalized);
+    return mapped ? `/${mapped}` : value;
+  }
+
+  private rewriteStorageKeysInJson(
+    value: unknown,
+    assetKeyMap: Map<string, string>,
+  ): unknown {
+    if (typeof value === 'string') {
+      return this.rewriteStorageKey(value, assetKeyMap);
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => this.rewriteStorageKeysInJson(item, assetKeyMap));
+    }
+
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+
+    const rewritten: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      rewritten[key] = this.rewriteStorageKeysInJson(child, assetKeyMap);
+    }
+    return rewritten;
+  }
+
+  private async copyMicrositeStorageObjects(
+    sourceFiles: Array<{ storage_key: string; mime_type: string }>,
+    sourceEventId: string,
+    targetEventId: string,
+  ): Promise<{ assetKeyMap: Map<string, string>; copiedKeys: string[] }> {
+    const sourcePrefix = `events/${sourceEventId}/microsite/`;
+    const targetPrefix = `events/${targetEventId}/microsite/`;
+    const assetKeyMap = new Map<string, string>();
+    const copiedKeys: string[] = [];
+
+    try {
+      for (const sourceFile of sourceFiles) {
+        const sourceKey = sourceFile.storage_key.trim();
+        if (!sourceKey || !sourceKey.startsWith(sourcePrefix)) {
+          continue;
+        }
+
+        const suffix = sourceKey.slice(sourcePrefix.length);
+        const targetKey = `${targetPrefix}${suffix}`;
+        const body = await this.storageService.getObjectBuffer(sourceKey);
+        await this.storageService.putObjectBuffer(
+          targetKey,
+          body,
+          sourceFile.mime_type || 'application/octet-stream',
+        );
+        assetKeyMap.set(sourceKey, targetKey);
+        copiedKeys.push(targetKey);
+      }
+    } catch (error) {
+      await this.cleanupCopiedStorageObjects(copiedKeys, targetEventId);
+      throw error;
+    }
+
+    return { assetKeyMap, copiedKeys };
+  }
+
+  private async cleanupCopiedStorageObjects(
+    copiedKeys: string[],
+    targetEventId: string,
+  ) {
+    if (copiedKeys.length === 0) {
+      return;
+    }
+
+    const uniqueKeys = Array.from(new Set(copiedKeys));
+    const results = await Promise.allSettled(
+      uniqueKeys.map((key) => this.storageService.deleteObject(key)),
+    );
+    const failedCount = results.filter(
+      (result) => result.status === 'rejected',
+    ).length;
+
+    if (failedCount > 0) {
+      this.logger.warn(
+        `Clone cleanup for event ${targetEventId} failed to delete ${failedCount}/${uniqueKeys.length} storage objects`,
+      );
+    }
   }
 
   /**
@@ -439,6 +549,270 @@ export class EventsService {
 
     this.invalidatePublicCaches();
     return this.toEventResponse(event);
+  }
+
+  async clone(dto: CloneEventDto) {
+    const actorId = this.getActorIdOrThrow();
+
+    const sourceEvent = await this.prisma.events.findUnique({
+      where: { id: dto.sourceEventId },
+    });
+    if (!sourceEvent) {
+      throw new NotFoundException('Source event not found');
+    }
+
+    const existing = await this.prisma.events.findFirst({
+      where: { slug: dto.slug },
+    });
+    if (existing) {
+      throw new ConflictException('Event with this slug already exists');
+    }
+
+    const targetEventId = crypto.randomUUID();
+    const [sourceForms, sourceWorkflowSteps, sourceMicrosite, sourceMicrositeFiles] =
+      await Promise.all([
+        this.prisma.forms.findMany({
+          where: { event_id: dto.sourceEventId },
+          orderBy: { created_at: 'asc' },
+          include: {
+            form_versions: {
+              orderBy: { version_number: 'desc' },
+            },
+          },
+        }),
+        this.prisma.workflow_steps.findMany({
+          where: { event_id: dto.sourceEventId },
+          orderBy: { step_index: 'asc' },
+        }),
+        this.prisma.microsites.findUnique({
+          where: { event_id: dto.sourceEventId },
+          include: {
+            microsite_pages: {
+              orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
+            },
+          },
+        }),
+        this.prisma.file_objects.findMany({
+          where: {
+            event_id: dto.sourceEventId,
+            storage_key: {
+              startsWith: `events/${dto.sourceEventId}/microsite/`,
+            },
+          },
+          orderBy: { created_at: 'asc' },
+          select: {
+            id: true,
+            storage_key: true,
+            original_filename: true,
+            mime_type: true,
+            size_bytes: true,
+            sha256: true,
+            sensitivity: true,
+            virus_scan_status: true,
+            expires_at: true,
+            status: true,
+            media_optimization_status: true,
+            media_optimization_attempts: true,
+            media_optimized_at: true,
+            media_optimization_last_error: true,
+          },
+        }),
+      ]);
+
+    const sourceFormVersionToFormId = new Map<string, string>();
+    for (const form of sourceForms) {
+      for (const version of form.form_versions) {
+        sourceFormVersionToFormId.set(version.id, form.id);
+      }
+    }
+
+    const { assetKeyMap, copiedKeys } = await this.copyMicrositeStorageObjects(
+      sourceMicrositeFiles,
+      dto.sourceEventId,
+      targetEventId,
+    );
+
+    try {
+      const clonedEvent = await this.prisma.$transaction(async (tx) => {
+        const event = await tx.events.create({
+          data: {
+            id: targetEventId,
+            title: dto.title,
+            slug: dto.slug,
+            series_key: sourceEvent.series_key,
+            edition_label: sourceEvent.edition_label,
+            timezone: sourceEvent.timezone,
+            start_at: sourceEvent.start_at,
+            end_at: sourceEvent.end_at,
+            venue_name: sourceEvent.venue_name,
+            venue_address: sourceEvent.venue_address,
+            venue_map_url: sourceEvent.venue_map_url,
+            description: sourceEvent.description,
+            capacity: sourceEvent.capacity,
+            requires_email_verification: sourceEvent.requires_email_verification,
+            format: sourceEvent.format,
+            application_open_at: sourceEvent.application_open_at,
+            application_close_at: sourceEvent.application_close_at,
+            status: 'draft',
+            decision_config: sourceEvent.decision_config,
+            checkin_config: sourceEvent.checkin_config,
+            is_system_site: false,
+          },
+        });
+
+        const sourceFormIdToClonedLatestVersionId = new Map<string, string>();
+
+        for (const sourceForm of sourceForms) {
+          const clonedFormId = crypto.randomUUID();
+          const latestVersion = sourceForm.form_versions[0] ?? null;
+
+          await tx.forms.create({
+            data: {
+              id: clonedFormId,
+              event_id: targetEventId,
+              name: sourceForm.name,
+              draft_schema: latestVersion
+                ? latestVersion.schema
+                : sourceForm.draft_schema,
+              draft_ui: latestVersion ? latestVersion.ui : sourceForm.draft_ui,
+            },
+          });
+
+          if (latestVersion) {
+            const clonedLatestVersionId = crypto.randomUUID();
+            await tx.form_versions.create({
+              data: {
+                id: clonedLatestVersionId,
+                form_id: clonedFormId,
+                version_number: 1,
+                schema: latestVersion.schema,
+                ui: latestVersion.ui,
+                published_by: actorId,
+              },
+            });
+            sourceFormIdToClonedLatestVersionId.set(
+              sourceForm.id,
+              clonedLatestVersionId,
+            );
+          }
+        }
+
+        for (const sourceStep of sourceWorkflowSteps) {
+          let mappedFormVersionId: string | null = null;
+          if (sourceStep.form_version_id) {
+            const sourceFormId = sourceFormVersionToFormId.get(
+              sourceStep.form_version_id,
+            );
+            if (sourceFormId) {
+              mappedFormVersionId =
+                sourceFormIdToClonedLatestVersionId.get(sourceFormId) ?? null;
+            }
+          }
+
+          await tx.workflow_steps.create({
+            data: {
+              id: crypto.randomUUID(),
+              event_id: targetEventId,
+              step_index: sourceStep.step_index,
+              category: sourceStep.category,
+              title: sourceStep.title,
+              instructions_rich: sourceStep.instructions_rich,
+              unlock_policy: sourceStep.unlock_policy,
+              unlock_at: sourceStep.unlock_at,
+              review_required: sourceStep.review_required,
+              reviewer_roles_allowed: sourceStep.reviewer_roles_allowed,
+              reject_behavior: sourceStep.reject_behavior,
+              strict_gating: sourceStep.strict_gating,
+              allow_next_steps_while_revising:
+                sourceStep.allow_next_steps_while_revising,
+              revision_deadline_at: sourceStep.revision_deadline_at,
+              sensitivity_level: sourceStep.sensitivity_level,
+              hidden: sourceStep.hidden,
+              allow_applicant_modification: sourceStep.allow_applicant_modification,
+              modification_scope: sourceStep.modification_scope,
+              deadline_at: sourceStep.deadline_at,
+              max_revision_cycles: sourceStep.max_revision_cycles,
+              form_version_id: mappedFormVersionId,
+            },
+          });
+        }
+
+        if (sourceMicrosite) {
+          const clonedMicrosite = await tx.microsites.create({
+            data: {
+              event_id: targetEventId,
+              settings: this.rewriteStorageKeysInJson(
+                sourceMicrosite.settings,
+                assetKeyMap,
+              ) as any,
+              published_version: 0,
+            },
+          });
+
+          if (sourceMicrosite.microsite_pages.length > 0) {
+            await tx.microsite_pages.createMany({
+              data: sourceMicrosite.microsite_pages.map((page) => ({
+                microsite_id: clonedMicrosite.id,
+                slug: page.slug,
+                title: page.title,
+                position: page.position,
+                blocks: this.rewriteStorageKeysInJson(
+                  page.blocks,
+                  assetKeyMap,
+                ) as any,
+                seo: this.rewriteStorageKeysInJson(page.seo, assetKeyMap) as any,
+                visibility: page.visibility,
+              })),
+            });
+          }
+        }
+
+        const clonedFileRows = sourceMicrositeFiles.flatMap((sourceFile) => {
+          const sourceKey = sourceFile.storage_key.trim();
+          const targetKey = assetKeyMap.get(sourceKey);
+          if (!targetKey) {
+            return [];
+          }
+
+          return [
+            {
+              id: crypto.randomUUID(),
+              event_id: targetEventId,
+              storage_key: targetKey,
+              original_filename: sourceFile.original_filename,
+              mime_type: sourceFile.mime_type,
+              size_bytes: sourceFile.size_bytes,
+              sha256: sourceFile.sha256,
+              sensitivity: sourceFile.sensitivity,
+              virus_scan_status: sourceFile.virus_scan_status,
+              created_by: actorId,
+              expires_at: sourceFile.expires_at,
+              status: sourceFile.status,
+              media_optimization_status: sourceFile.media_optimization_status,
+              media_optimization_attempts:
+                sourceFile.media_optimization_attempts,
+              media_optimized_at: sourceFile.media_optimized_at,
+              media_optimization_last_error:
+                sourceFile.media_optimization_last_error,
+            },
+          ];
+        });
+
+        if (clonedFileRows.length > 0) {
+          await tx.file_objects.createMany({
+            data: clonedFileRows,
+          });
+        }
+
+        return event;
+      });
+
+      this.invalidatePublicCaches();
+      return this.toEventResponse(clonedEvent);
+    } catch (error) {
+      await this.cleanupCopiedStorageObjects(copiedKeys, targetEventId);
+      throw error;
+    }
   }
 
   /**

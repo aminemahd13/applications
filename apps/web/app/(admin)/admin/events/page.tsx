@@ -45,9 +45,21 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { PageHeader, TableSkeleton, ConfirmDialog } from "@/components/shared";
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import {
+  fetchCloneSourceOptions,
+  resolveCreateEventEndpoint,
+  type CloneSourceOption,
+} from "@/lib/event-clone";
 import { toast } from "sonner";
 
 interface EventRow {
@@ -119,6 +131,11 @@ export default function AdminEventsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newSlug, setNewSlug] = useState("");
+  const [cloneSourceId, setCloneSourceId] = useState("");
+  const [cloneSourceOptions, setCloneSourceOptions] = useState<
+    CloneSourceOption[]
+  >([]);
+  const [isLoadingCloneSources, setIsLoadingCloneSources] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
   const [hardDeleteTarget, setHardDeleteTarget] = useState<string | null>(null);
@@ -151,18 +168,55 @@ export default function AdminEventsPage() {
     };
   }, [isAuthenticated, showArchived]);
 
+  useEffect(() => {
+    if (!showCreate || !isAuthenticated) return;
+    let cancelled = false;
+    setIsLoadingCloneSources(true);
+    (async () => {
+      try {
+        const options = await fetchCloneSourceOptions((path) =>
+          apiClient<
+            ApiEvent[] | { data?: ApiEvent[]; events?: ApiEvent[]; meta?: any }
+          >(path),
+        );
+        if (!cancelled) {
+          setCloneSourceOptions(options);
+        }
+      } catch {
+        if (!cancelled) {
+          setCloneSourceOptions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingCloneSources(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showCreate, isAuthenticated]);
+
   async function createEvent() {
     if (!newTitle.trim()) return;
     setIsCreating(true);
     try {
+      const sourceEventId = cloneSourceId.trim() || undefined;
       const eventResponse = await apiClient<ApiEvent | { data?: ApiEvent }>(
-        "/admin/events",
+        resolveCreateEventEndpoint(sourceEventId),
         {
           method: "POST",
-          body: {
-            title: newTitle,
-            slug: newSlug || newTitle.toLowerCase().replace(/\s+/g, "-"),
-          },
+          body: sourceEventId
+            ? {
+                sourceEventId,
+                title: newTitle,
+                slug: newSlug || newTitle.toLowerCase().replace(/\s+/g, "-"),
+              }
+            : {
+                title: newTitle,
+                slug: newSlug || newTitle.toLowerCase().replace(/\s+/g, "-"),
+              },
           csrfToken: csrfToken ?? undefined,
         },
       );
@@ -171,7 +225,8 @@ export default function AdminEventsPage() {
       setShowCreate(false);
       setNewTitle("");
       setNewSlug("");
-      toast.success("Event created!");
+      setCloneSourceId("");
+      toast.success(sourceEventId ? "Event cloned!" : "Event created!");
       router.push(`/admin/events/${event.id}`);
     } catch {
       /* handled */
@@ -465,7 +520,17 @@ export default function AdminEventsPage() {
       </div>
 
       {/* Create event dialog */}
-      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+      <Dialog
+        open={showCreate}
+        onOpenChange={(open) => {
+          setShowCreate(open);
+          if (!open) {
+            setCloneSourceId("");
+            setNewTitle("");
+            setNewSlug("");
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create event</DialogTitle>
@@ -474,6 +539,37 @@ export default function AdminEventsPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-sm">Clone from existing event</Label>
+              <Select
+                value={cloneSourceId || "__scratch__"}
+                onValueChange={(value) =>
+                  setCloneSourceId(value === "__scratch__" ? "" : value)
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Start from scratch (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__scratch__">Start from scratch</SelectItem>
+                  {isLoadingCloneSources ? (
+                    <SelectItem value="__loading__" disabled>
+                      Loading events...
+                    </SelectItem>
+                  ) : cloneSourceOptions.length === 0 ? (
+                    <SelectItem value="__empty__" disabled>
+                      No events available
+                    </SelectItem>
+                  ) : (
+                    cloneSourceOptions.map((event) => (
+                      <SelectItem key={event.id} value={event.id}>
+                        {event.title} ({event.status})
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-2">
               <Label className="text-sm">Title</Label>
               <Input
@@ -496,7 +592,13 @@ export default function AdminEventsPage() {
               Cancel
             </Button>
             <Button onClick={createEvent} disabled={isCreating}>
-              {isCreating ? "Creating..." : "Create event"}
+              {isCreating
+                ? cloneSourceId
+                  ? "Cloning..."
+                  : "Creating..."
+                : cloneSourceId
+                  ? "Clone event"
+                  : "Create event"}
             </Button>
           </DialogFooter>
         </DialogContent>

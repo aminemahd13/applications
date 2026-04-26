@@ -123,6 +123,14 @@ export const CreateEventSchema = z.object({
 
 export type CreateEventDto = z.infer<typeof CreateEventSchema>;
 
+export const CloneEventSchema = z.object({
+    sourceEventId: z.string().uuid(),
+    title: z.string().min(1).max(200),
+    slug: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/),
+});
+
+export type CloneEventDto = z.infer<typeof CloneEventSchema>;
+
 export const UpdateEventSchema = CreateEventSchema.partial().extend({
     description: z.string().optional(),
     venueName: z.string().optional(),

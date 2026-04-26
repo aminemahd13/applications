@@ -26,7 +26,11 @@ describe('EventsService.getOverview', () => {
       },
     };
 
-    service = new EventsService(mockPrisma, { deleteObject: jest.fn() } as any);
+    service = new EventsService(
+      mockPrisma,
+      { deleteObject: jest.fn() } as any,
+      { get: jest.fn() } as any,
+    );
   });
 
   it('throws NotFoundException when event does not exist', async () => {
@@ -161,4 +165,3 @@ describe('EventsService.getOverview', () => {
     expect(overview.pendingReviews).toBe(3);
   });
 });
-

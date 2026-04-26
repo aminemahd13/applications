@@ -15,6 +15,7 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { Permission } from '@event-platform/shared';
 import {
   CreateEventSchema,
+  CloneEventSchema,
   UpdateEventSchema,
   EventFilterSchema,
 } from '@event-platform/shared';
@@ -51,6 +52,22 @@ export class EventsController {
     };
     const dto = CreateEventSchema.parse(normalizedBody);
     const event = await this.eventsService.create(dto);
+    return { data: event };
+  }
+
+  /**
+   * Clone event from an existing event (blueprint flow)
+   */
+  @Post('clone')
+  @RequirePermission(Permission.ADMIN_EVENTS_MANAGE)
+  async clone(@Body() body: Record<string, unknown>) {
+    const title = body.title ?? body.name;
+    const normalizedBody = {
+      ...body,
+      title,
+    };
+    const dto = CloneEventSchema.parse(normalizedBody);
+    const event = await this.eventsService.clone(dto);
     return { data: event };
   }
 
