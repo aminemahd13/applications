@@ -1239,6 +1239,18 @@ export class CertificatesService implements OnModuleDestroy {
   async createTemplate(eventId: string, dto: CreateCertificateTemplateDto) {
     const actorId = this.getActorId();
     const typeKey = dto.typeKey.trim().toLowerCase();
+    const name = dto.name.trim();
+
+    const existing = await (this.prisma as any).certificate_templates.findFirst({
+      where: {
+        event_id: eventId,
+        name: name,
+      },
+    });
+
+    if (existing) {
+      throw new ConflictException(`A certificate template with the name "${name}" already exists for this event.`);
+    }
 
     const created = await this.prisma.$transaction(async (tx) => {
       if (dto.isDefault) {
