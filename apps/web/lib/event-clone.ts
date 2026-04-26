@@ -24,7 +24,7 @@ type EventListResponse =
       };
     };
 
-type ApiClientFn = <T>(path: string) => Promise<T>;
+type ApiClientFn = (path: string) => Promise<EventListResponse>;
 
 export function resolveCreateEventEndpoint(sourceEventId?: string | null): string {
   return sourceEventId ? "/admin/events/clone" : "/admin/events";
@@ -69,9 +69,7 @@ export async function fetchCloneSourceOptions(
 
   while (pageCount < 25) {
     pageCount += 1;
-    const response = await apiClient<EventListResponse>(
-      buildCloneSourceListPath(cursor),
-    );
+    const response = await apiClient(buildCloneSourceListPath(cursor));
     const page = unwrapEventListResponse(response).map(normalizeCloneSource);
     for (const option of page) {
       if (seen.has(option.id)) continue;
