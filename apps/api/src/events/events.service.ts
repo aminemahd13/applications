@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   Logger,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { StorageService } from '../common/storage/storage.service';
 import { ClsService } from 'nestjs-cls';
@@ -51,6 +52,15 @@ export class EventsService {
       throw new ForbiddenException('Authentication required');
     }
     return actorId;
+  }
+
+  private toPrismaJson(
+    value: unknown,
+  ): Prisma.InputJsonValue | Prisma.JsonNullValueInput {
+    if (value === null) {
+      return Prisma.JsonNull;
+    }
+    return value as Prisma.InputJsonValue;
   }
 
   private parseDateCursor(cursor?: string): Date | null {
@@ -654,8 +664,8 @@ export class EventsService {
             application_open_at: sourceEvent.application_open_at,
             application_close_at: sourceEvent.application_close_at,
             status: 'draft',
-            decision_config: sourceEvent.decision_config,
-            checkin_config: sourceEvent.checkin_config,
+            decision_config: this.toPrismaJson(sourceEvent.decision_config),
+            checkin_config: this.toPrismaJson(sourceEvent.checkin_config),
             is_system_site: false,
           },
         });
@@ -671,10 +681,12 @@ export class EventsService {
               id: clonedFormId,
               event_id: targetEventId,
               name: sourceForm.name,
-              draft_schema: latestVersion
-                ? latestVersion.schema
-                : sourceForm.draft_schema,
-              draft_ui: latestVersion ? latestVersion.ui : sourceForm.draft_ui,
+              draft_schema: this.toPrismaJson(
+                latestVersion ? latestVersion.schema : sourceForm.draft_schema,
+              ),
+              draft_ui: this.toPrismaJson(
+                latestVersion ? latestVersion.ui : sourceForm.draft_ui,
+              ),
             },
           });
 
@@ -685,8 +697,8 @@ export class EventsService {
                 id: clonedLatestVersionId,
                 form_id: clonedFormId,
                 version_number: 1,
-                schema: latestVersion.schema,
-                ui: latestVersion.ui,
+                schema: this.toPrismaJson(latestVersion.schema),
+                ui: this.toPrismaJson(latestVersion.ui),
                 published_by: actorId,
               },
             });
@@ -716,11 +728,15 @@ export class EventsService {
               step_index: sourceStep.step_index,
               category: sourceStep.category,
               title: sourceStep.title,
-              instructions_rich: sourceStep.instructions_rich,
+              instructions_rich: this.toPrismaJson(
+                sourceStep.instructions_rich,
+              ),
               unlock_policy: sourceStep.unlock_policy,
               unlock_at: sourceStep.unlock_at,
               review_required: sourceStep.review_required,
-              reviewer_roles_allowed: sourceStep.reviewer_roles_allowed,
+              reviewer_roles_allowed: this.toPrismaJson(
+                sourceStep.reviewer_roles_allowed,
+              ),
               reject_behavior: sourceStep.reject_behavior,
               strict_gating: sourceStep.strict_gating,
               allow_next_steps_while_revising:
