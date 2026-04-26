@@ -197,6 +197,117 @@ export class EventsService {
     return mapped ? `/${mapped}` : value;
   }
 
+  private normalizeStorageKeyReference(value: string): string {
+    return value.startsWith('/') ? value.slice(1) : value;
+  }
+
+  private collectReferencedMicrositeStorageKeys(
+    sourceMicrosite:
+      | {
+          settings: unknown;
+          microsite_pages: Array<{ blocks: unknown; seo: unknown }>;
+        }
+      | null,
+    sourceEventId: string,
+  ): Set<string> {
+    const referencedKeys = new Set<string>();
+    const sourcePrefix = `events/${sourceEventId}/microsite/`;
+
+    const visit = (value: unknown) => {
+      if (typeof value === 'string') {
+        const normalized = this.normalizeStorageKeyReference(value.trim());
+        if (normalized.startsWith(sourcePrefix)) {
+          referencedKeys.add(normalized);
+        }
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          visit(item);
+        }
+        return;
+      }
+
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      for (const child of Object.values(value)) {
+        visit(child);
+      }
+    };
+
+    if (!sourceMicrosite) {
+      return referencedKeys;
+    }
+
+    visit(sourceMicrosite.settings);
+    for (const page of sourceMicrosite.microsite_pages) {
+      visit(page.blocks);
+      visit(page.seo);
+    }
+
+    return referencedKeys;
+  }
+
+  private ensureReferencedMicrositeAssetsHaveFileRows(
+    referencedKeys: Set<string>,
+    sourceFiles: Array<{ storage_key: string }>,
+  ) {
+    if (referencedKeys.size === 0) {
+      return;
+    }
+
+    const availableKeys = new Set(
+      sourceFiles
+        .map((file) => file.storage_key.trim())
+        .filter((key) => key.length > 0),
+    );
+    const missingKeys = Array.from(referencedKeys).filter(
+      (key) => !availableKeys.has(key),
+    );
+
+    if (missingKeys.length > 0) {
+      throw new ConflictException(
+        this.buildMissingMicrositeAssetsMessage(
+          'missing file records',
+          missingKeys,
+        ),
+      );
+    }
+  }
+
+  private isMissingStorageObjectError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+
+    const maybeError = error as {
+      name?: string;
+      Code?: string;
+      code?: string;
+      $metadata?: { httpStatusCode?: number };
+    };
+
+    return (
+      maybeError.name === 'NoSuchKey' ||
+      maybeError.Code === 'NoSuchKey' ||
+      maybeError.code === 'NoSuchKey' ||
+      maybeError.$metadata?.httpStatusCode === 404
+    );
+  }
+
+  private buildMissingMicrositeAssetsMessage(
+    reason: string,
+    keys: string[],
+  ): string {
+    const preview = keys.slice(0, 3).join(', ');
+    const suffix =
+      keys.length > 3 ? ` (+${keys.length - 3} more)` : '';
+    return `Source microsite has ${reason}: ${preview}${suffix}. Repair the source microsite before cloning.`;
+  }
+
   private rewriteStorageKeysInJson(
     value: unknown,
     assetKeyMap: Map<string, string>,
@@ -224,21 +335,23 @@ export class EventsService {
     sourceFiles: Array<{ storage_key: string; mime_type: string }>,
     sourceEventId: string,
     targetEventId: string,
+    requiredSourceKeys: Set<string>,
   ): Promise<{ assetKeyMap: Map<string, string>; copiedKeys: string[] }> {
     const sourcePrefix = `events/${sourceEventId}/microsite/`;
     const targetPrefix = `events/${targetEventId}/microsite/`;
     const assetKeyMap = new Map<string, string>();
     const copiedKeys: string[] = [];
 
-    try {
-      for (const sourceFile of sourceFiles) {
-        const sourceKey = sourceFile.storage_key.trim();
-        if (!sourceKey || !sourceKey.startsWith(sourcePrefix)) {
-          continue;
-        }
+    for (const sourceFile of sourceFiles) {
+      const sourceKey = sourceFile.storage_key.trim();
+      if (!sourceKey || !sourceKey.startsWith(sourcePrefix)) {
+        continue;
+      }
 
-        const suffix = sourceKey.slice(sourcePrefix.length);
-        const targetKey = `${targetPrefix}${suffix}`;
+      const suffix = sourceKey.slice(sourcePrefix.length);
+      const targetKey = `${targetPrefix}${suffix}`;
+
+      try {
         const body = await this.storageService.getObjectBuffer(sourceKey);
         await this.storageService.putObjectBuffer(
           targetKey,
@@ -247,10 +360,27 @@ export class EventsService {
         );
         assetKeyMap.set(sourceKey, targetKey);
         copiedKeys.push(targetKey);
+      } catch (error) {
+        if (this.isMissingStorageObjectError(error)) {
+          if (requiredSourceKeys.has(sourceKey)) {
+            await this.cleanupCopiedStorageObjects(copiedKeys, targetEventId);
+            throw new ConflictException(
+              this.buildMissingMicrositeAssetsMessage(
+                'missing storage objects',
+                [sourceKey],
+              ),
+            );
+          }
+
+          this.logger.warn(
+            `Skipping missing microsite asset during clone for source event ${sourceEventId}: ${sourceKey}`,
+          );
+          continue;
+        }
+
+        await this.cleanupCopiedStorageObjects(copiedKeys, targetEventId);
+        throw error;
       }
-    } catch (error) {
-      await this.cleanupCopiedStorageObjects(copiedKeys, targetEventId);
-      throw error;
     }
 
     return { assetKeyMap, copiedKeys };
@@ -636,10 +766,20 @@ export class EventsService {
       }
     }
 
+    const referencedMicrositeKeys = this.collectReferencedMicrositeStorageKeys(
+      sourceMicrosite,
+      dto.sourceEventId,
+    );
+    this.ensureReferencedMicrositeAssetsHaveFileRows(
+      referencedMicrositeKeys,
+      sourceMicrositeFiles,
+    );
+
     const { assetKeyMap, copiedKeys } = await this.copyMicrositeStorageObjects(
       sourceMicrositeFiles,
       dto.sourceEventId,
       targetEventId,
+      referencedMicrositeKeys,
     );
 
     try {

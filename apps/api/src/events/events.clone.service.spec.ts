@@ -34,6 +34,17 @@ function makeEventRecord(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function makeNoSuchKeyError(key: string) {
+  return {
+    name: 'NoSuchKey',
+    Code: 'NoSuchKey',
+    $metadata: {
+      httpStatusCode: 404,
+    },
+    Key: key,
+  };
+}
+
 function createHarness() {
   const tx = {
     events: { create: jest.fn() },
@@ -465,6 +476,148 @@ describe('EventsService.clone', () => {
     expect(storage.putObjectBuffer).toHaveBeenCalledTimes(1);
     const copiedKey = storage.putObjectBuffer.mock.calls[0][0];
     expect(storage.deleteObject).toHaveBeenCalledWith(copiedKey);
+  });
+
+  it('skips missing unreferenced microsite assets and clones the referenced ones', async () => {
+    const { service, prisma, tx, storage } = createHarness();
+
+    const referencedKey = `events/${SOURCE_EVENT_ID}/microsite/hero.jpg`;
+    const orphanedMissingKey = `events/${SOURCE_EVENT_ID}/microsite/orphaned.jpg`;
+
+    prisma.file_objects.findMany.mockResolvedValue([
+      {
+        id: 'file-a',
+        storage_key: referencedKey,
+        original_filename: 'hero.jpg',
+        mime_type: 'image/jpeg',
+        size_bytes: BigInt(10),
+        sha256: 'sha-a',
+        sensitivity: 'normal',
+        virus_scan_status: 'clean',
+        expires_at: null,
+        status: 'COMMITTED',
+        media_optimization_status: 'DONE',
+        media_optimization_attempts: 0,
+        media_optimized_at: null,
+        media_optimization_last_error: null,
+      },
+      {
+        id: 'file-b',
+        storage_key: orphanedMissingKey,
+        original_filename: 'orphaned.jpg',
+        mime_type: 'image/jpeg',
+        size_bytes: BigInt(20),
+        sha256: 'sha-b',
+        sensitivity: 'normal',
+        virus_scan_status: 'clean',
+        expires_at: null,
+        status: 'COMMITTED',
+        media_optimization_status: 'DONE',
+        media_optimization_attempts: 0,
+        media_optimized_at: null,
+        media_optimization_last_error: null,
+      },
+    ]);
+    prisma.microsites.findUnique.mockResolvedValue({
+      id: 'mic-1',
+      event_id: SOURCE_EVENT_ID,
+      settings: {
+        branding: {
+          heroImageUrl: referencedKey,
+        },
+      },
+      microsite_pages: [],
+    });
+    storage.getObjectBuffer.mockImplementation(async (key: string) => {
+      if (key === orphanedMissingKey) {
+        throw makeNoSuchKeyError(key);
+      }
+      return Buffer.from(`buf:${key}`);
+    });
+
+    await service.clone({
+      sourceEventId: SOURCE_EVENT_ID,
+      title: 'Clone With Drift',
+      slug: 'clone-with-drift',
+    });
+
+    expect(tx.events.create).toHaveBeenCalledTimes(1);
+    expect(tx.file_objects.createMany).toHaveBeenCalledTimes(1);
+    const clonedRows = tx.file_objects.createMany.mock.calls[0][0].data;
+    expect(clonedRows).toHaveLength(1);
+    expect(clonedRows[0].storage_key).toContain('/microsite/hero.jpg');
+    expect(clonedRows[0].storage_key).not.toContain('orphaned.jpg');
+  });
+
+  it('rejects clone when the current microsite references a missing storage object', async () => {
+    const { service, prisma, storage } = createHarness();
+
+    const requiredKey = `events/${SOURCE_EVENT_ID}/microsite/hero.jpg`;
+    const copiedFirstKey = `events/${SOURCE_EVENT_ID}/microsite/logo.jpg`;
+
+    prisma.file_objects.findMany.mockResolvedValue([
+      {
+        id: 'file-a',
+        storage_key: copiedFirstKey,
+        original_filename: 'logo.jpg',
+        mime_type: 'image/jpeg',
+        size_bytes: BigInt(10),
+        sha256: 'sha-a',
+        sensitivity: 'normal',
+        virus_scan_status: 'clean',
+        expires_at: null,
+        status: 'COMMITTED',
+        media_optimization_status: 'DONE',
+        media_optimization_attempts: 0,
+        media_optimized_at: null,
+        media_optimization_last_error: null,
+      },
+      {
+        id: 'file-b',
+        storage_key: requiredKey,
+        original_filename: 'hero.jpg',
+        mime_type: 'image/jpeg',
+        size_bytes: BigInt(20),
+        sha256: 'sha-b',
+        sensitivity: 'normal',
+        virus_scan_status: 'clean',
+        expires_at: null,
+        status: 'COMMITTED',
+        media_optimization_status: 'DONE',
+        media_optimization_attempts: 0,
+        media_optimized_at: null,
+        media_optimization_last_error: null,
+      },
+    ]);
+    prisma.microsites.findUnique.mockResolvedValue({
+      id: 'mic-1',
+      event_id: SOURCE_EVENT_ID,
+      settings: {
+        branding: {
+          heroImageUrl: requiredKey,
+        },
+      },
+      microsite_pages: [],
+    });
+    storage.getObjectBuffer.mockImplementation(async (key: string) => {
+      if (key === requiredKey) {
+        throw makeNoSuchKeyError(key);
+      }
+      return Buffer.from(`buf:${key}`);
+    });
+
+    await expect(
+      service.clone({
+        sourceEventId: SOURCE_EVENT_ID,
+        title: 'Clone Missing Asset',
+        slug: 'clone-missing-asset',
+      }),
+    ).rejects.toThrow(
+      'Source microsite has missing storage objects',
+    );
+
+    expect(storage.deleteObject).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('requires actor identity from CLS context', async () => {
