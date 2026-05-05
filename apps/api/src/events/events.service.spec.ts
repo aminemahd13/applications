@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { EventsService } from './events.service';
 
 describe('EventsService.getOverview', () => {
@@ -163,5 +163,92 @@ describe('EventsService.getOverview', () => {
     expect(overview.submitted).toBe(2);
     expect(overview.inReview).toBe(1);
     expect(overview.pendingReviews).toBe(3);
+  });
+});
+
+describe('EventsService.unarchive', () => {
+  let service: EventsService;
+  let mockPrisma: any;
+
+  beforeEach(() => {
+    mockPrisma = {
+      events: {
+        findUnique: jest.fn(),
+        update: jest.fn(),
+      },
+    };
+
+    service = new EventsService(
+      mockPrisma,
+      { deleteObject: jest.fn() } as any,
+      { get: jest.fn() } as any,
+    );
+  });
+
+  it('throws NotFoundException when event does not exist', async () => {
+    mockPrisma.events.findUnique.mockResolvedValue(null);
+
+    await expect(service.unarchive('missing-event')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(mockPrisma.events.update).not.toHaveBeenCalled();
+  });
+
+  it('throws ConflictException when event is not archived', async () => {
+    mockPrisma.events.findUnique.mockResolvedValue({
+      id: 'event-1',
+      status: 'draft',
+    });
+
+    await expect(service.unarchive('event-1')).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(mockPrisma.events.update).not.toHaveBeenCalled();
+  });
+
+  it('restores archived event back to draft', async () => {
+    const baseEvent = {
+      id: 'event-1',
+      title: 'Sample Event',
+      slug: 'sample-event',
+      series_key: null,
+      edition_label: null,
+      status: 'archived',
+      application_open_at: null,
+      application_close_at: null,
+      timezone: 'UTC',
+      start_at: null,
+      end_at: null,
+      venue_name: null,
+      venue_address: null,
+      venue_map_url: null,
+      description: null,
+      capacity: null,
+      requires_email_verification: false,
+      format: 'in_person',
+      decision_config: {},
+      checkin_config: {},
+      created_at: new Date('2026-01-01T00:00:00.000Z'),
+      updated_at: new Date('2026-01-02T00:00:00.000Z'),
+    };
+
+    mockPrisma.events.findUnique.mockResolvedValue(baseEvent);
+    mockPrisma.events.update.mockResolvedValue({
+      ...baseEvent,
+      status: 'draft',
+      updated_at: new Date('2026-01-03T00:00:00.000Z'),
+    });
+
+    const result = await service.unarchive('event-1');
+
+    expect(mockPrisma.events.update).toHaveBeenCalledWith({
+      where: { id: 'event-1' },
+      data: { status: 'draft' },
+    });
+    expect(result).toMatchObject({
+      id: 'event-1',
+      status: 'draft',
+      slug: 'sample-event',
+    });
   });
 });

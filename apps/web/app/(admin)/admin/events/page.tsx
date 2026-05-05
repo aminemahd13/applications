@@ -8,6 +8,7 @@ import {
   Eye,
   Settings,
   Archive,
+  RotateCcw,
   Trash2,
   BriefcaseBusiness,
   ArrowUpDown,
@@ -138,6 +139,7 @@ export default function AdminEventsPage() {
   const [isLoadingCloneSources, setIsLoadingCloneSources] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
+  const [unarchiveTarget, setUnarchiveTarget] = useState<string | null>(null);
   const [hardDeleteTarget, setHardDeleteTarget] = useState<string | null>(null);
 
   useEffect(() => {
@@ -237,16 +239,61 @@ export default function AdminEventsPage() {
 
   async function archiveEvent(id: string) {
     try {
-      await apiClient(`/admin/events/${id}`, {
-        method: "DELETE",
-        csrfToken: csrfToken ?? undefined,
-      });
-      setEvents((prev) => prev.filter((e) => e.id !== id));
+      const response = await apiClient<ApiEvent | { data?: ApiEvent }>(
+        `/admin/events/${id}/archive`,
+        {
+          method: "POST",
+          csrfToken: csrfToken ?? undefined,
+        },
+      );
+      const updated = normalizeEventRow(unwrapEventResponse(response));
+      setEvents((prev) =>
+        showArchived
+          ? prev.map((event) =>
+              event.id === id
+                ? {
+                    ...event,
+                    status: updated.status,
+                    isPublished: updated.isPublished,
+                  }
+                : event,
+            )
+          : prev.filter((event) => event.id !== id),
+      );
       toast.success("Event archived");
     } catch {
       /* handled */
     } finally {
       setArchiveTarget(null);
+    }
+  }
+
+  async function unarchiveEvent(id: string) {
+    try {
+      const response = await apiClient<ApiEvent | { data?: ApiEvent }>(
+        `/admin/events/${id}/unarchive`,
+        {
+          method: "POST",
+          csrfToken: csrfToken ?? undefined,
+        },
+      );
+      const updated = normalizeEventRow(unwrapEventResponse(response));
+      setEvents((prev) =>
+        prev.map((event) =>
+          event.id === id
+            ? {
+                ...event,
+                status: updated.status,
+                isPublished: updated.isPublished,
+              }
+            : event,
+        ),
+      );
+      toast.success("Event unarchived");
+    } catch {
+      /* handled */
+    } finally {
+      setUnarchiveTarget(null);
     }
   }
 
@@ -364,18 +411,33 @@ export default function AdminEventsPage() {
             >
               <Settings className="h-3.5 w-3.5" />
             </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              title="Archive event"
-              onClick={(e) => {
-                e.stopPropagation();
-                setArchiveTarget(row.original.id);
-              }}
-            >
-              <Archive className="h-3.5 w-3.5" />
-            </Button>
+            {row.original.status === "archived" ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                title="Unarchive event"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setUnarchiveTarget(row.original.id);
+                }}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                title="Archive event"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setArchiveTarget(row.original.id);
+                }}
+              >
+                <Archive className="h-3.5 w-3.5" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -604,6 +666,14 @@ export default function AdminEventsPage() {
         </DialogContent>
       </Dialog>
 
+      <ConfirmDialog
+        open={!!unarchiveTarget}
+        onOpenChange={(v) => !v && setUnarchiveTarget(null)}
+        title="Unarchive event?"
+        description="This will restore the event to draft status."
+        confirmLabel="Unarchive"
+        onConfirm={() => unarchiveTarget && unarchiveEvent(unarchiveTarget)}
+      />
       <ConfirmDialog
         open={!!archiveTarget}
         onOpenChange={(v) => !v && setArchiveTarget(null)}

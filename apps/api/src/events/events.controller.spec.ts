@@ -37,4 +37,16 @@ describe('EventsController', () => {
     ).rejects.toBeInstanceOf(ZodError);
     expect(eventsService.clone).not.toHaveBeenCalled();
   });
+
+  it('forwards unarchive request to service and wraps response', async () => {
+    const eventsService = {
+      unarchive: jest.fn().mockResolvedValue({ id: 'event-1', status: 'draft' }),
+    };
+    const controller = new EventsController(eventsService as any);
+
+    const result = await controller.unarchive('event-1');
+
+    expect(eventsService.unarchive).toHaveBeenCalledWith('event-1');
+    expect(result).toEqual({ data: { id: 'event-1', status: 'draft' } });
+  });
 });

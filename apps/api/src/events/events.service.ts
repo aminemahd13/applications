@@ -1067,6 +1067,25 @@ export class EventsService {
   }
 
   /**
+   * Unarchive event
+   */
+  async unarchive(id: string) {
+    const event = await this.prisma.events.findUnique({ where: { id } });
+    if (!event) throw new NotFoundException('Event not found');
+
+    if (event.status !== 'archived') {
+      throw new ConflictException('Only archived events can be unarchived');
+    }
+
+    const updated = await this.prisma.events.update({
+      where: { id },
+      data: { status: 'draft' },
+    });
+    this.invalidatePublicCaches();
+    return this.toEventResponse(updated);
+  }
+
+  /**
    * Event overview with aggregated stats
    */
   async getOverview(eventId: string) {

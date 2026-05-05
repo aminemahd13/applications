@@ -134,6 +134,16 @@ export class EventsController {
   }
 
   /**
+   * Unarchive event (set status back to DRAFT)
+   */
+  @Post(':eventId/unarchive')
+  @RequirePermission(Permission.ADMIN_EVENTS_MANAGE)
+  async unarchive(@Param('eventId') eventId: string) {
+    const event = await this.eventsService.unarchive(eventId);
+    return { data: event };
+  }
+
+  /**
    * Soft delete event
    */
   @Delete(':eventId')
