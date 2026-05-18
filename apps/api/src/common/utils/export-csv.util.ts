@@ -20,10 +20,13 @@ const DEFAULT_APP_BASE_URL = 'http://localhost:3000';
 function normalizeCsvCellValue(value: unknown): string {
   const raw = value === null || value === undefined ? '' : String(value);
   if (raw.length === 0) return '';
-  if (CSV_FORMULA_PREFIX_PATTERN.test(raw)) {
-    return `'${raw}`;
+  // Collapse embedded newlines so the CSV has exactly one physical line per
+  // record regardless of consumer (Excel, Sheets, wc -l, naive split('\n')).
+  const flattened = raw.replace(/\r\n|\r|\n/g, ' ');
+  if (CSV_FORMULA_PREFIX_PATTERN.test(flattened)) {
+    return `'${flattened}`;
   }
-  return raw;
+  return flattened;
 }
 
 function escapeCsvCell(value: unknown): string {
@@ -39,7 +42,9 @@ export function buildCsvContent(
   const includeBom = options?.includeBom ?? true;
   const headerLine = headers.map((header) => escapeCsvCell(header)).join(',');
   const rowLines = rows.map((row) => row.map((cell) => escapeCsvCell(cell)).join(','));
-  const csv = [headerLine, ...rowLines].join('\n');
+  // RFC 4180 record separator. Required for Excel-on-Windows correctness;
+  // Sheets and Unix tooling accept it transparently.
+  const csv = [headerLine, ...rowLines].join('\r\n');
   return includeBom ? `\ufeff${csv}` : csv;
 }
 

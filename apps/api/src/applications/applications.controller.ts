@@ -12,6 +12,7 @@ import {
   ForbiddenException,
   NotFoundException,
   GoneException,
+  Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApplicationsService } from './applications.service';
@@ -57,6 +58,8 @@ const UpdateApplicationNotesSchema = z.object({
 @Controller('events/:eventId/applications')
 @UseGuards(PermissionsGuard)
 export class ApplicationsController {
+  private readonly logger = new Logger(ApplicationsController.name);
+
   constructor(
     private readonly applicationsService: ApplicationsService,
     private readonly stepStateService: StepStateService,
@@ -176,14 +179,26 @@ export class ApplicationsController {
     @Res() res: Response,
   ) {
     const dto = ApplicationCsvExportQuerySchema.parse(query ?? {});
-    const result =
-      await this.applicationsService.exportEventApplicationsCsv(eventId, dto);
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${result.filename}"`,
-    );
-    res.send(result.csv);
+    const startedAt = Date.now();
+    try {
+      const result =
+        await this.applicationsService.exportEventApplicationsCsv(eventId, dto);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${result.filename}"`,
+      );
+      res.send(result.csv);
+      this.logger.log(
+        `Applications CSV export OK event=${eventId} selectedIds=${dto.applicationIds?.length ?? 0} bytes=${Buffer.byteLength(result.csv, 'utf8')} elapsedMs=${Date.now() - startedAt}`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Applications CSV export FAILED event=${eventId} selectedIds=${dto.applicationIds?.length ?? 0} elapsedMs=${Date.now() - startedAt}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+      throw err;
+    }
   }
 
   /**
@@ -197,16 +212,28 @@ export class ApplicationsController {
     @Res() res: Response,
   ) {
     const dto = ApplicationCsvExportBodySchema.parse(body ?? {});
-    const result = await this.applicationsService.exportEventApplicationsCsv(
-      eventId,
-      dto,
-    );
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${result.filename}"`,
-    );
-    res.send(result.csv);
+    const startedAt = Date.now();
+    try {
+      const result = await this.applicationsService.exportEventApplicationsCsv(
+        eventId,
+        dto,
+      );
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${result.filename}"`,
+      );
+      res.send(result.csv);
+      this.logger.log(
+        `Applications CSV export OK event=${eventId} selectedIds=${dto.applicationIds?.length ?? 0} bytes=${Buffer.byteLength(result.csv, 'utf8')} elapsedMs=${Date.now() - startedAt}`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Applications CSV export FAILED event=${eventId} selectedIds=${dto.applicationIds?.length ?? 0} elapsedMs=${Date.now() - startedAt}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+      throw err;
+    }
   }
 
   /**

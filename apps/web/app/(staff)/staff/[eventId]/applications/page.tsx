@@ -2220,6 +2220,15 @@ export default function ApplicationsListPage() {
 
     setShowExportDialog(false);
     setIsExporting(true);
+    // Matches the web proxy's PROXY_UPSTREAM_EXPORT_TIMEOUT_MS so the browser
+    // gives up at the same boundary the upstream does, surfacing a real timeout
+    // toast instead of a generic "Export failed" when the API runs long.
+    const APPLICATION_EXPORT_TIMEOUT_MS = 180_000;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(
+      () => controller.abort(),
+      APPLICATION_EXPORT_TIMEOUT_MS,
+    );
     try {
       const body = buildApplicationExportRequest({
         applicationIds: selectedIds,
@@ -2240,9 +2249,23 @@ export default function ApplicationsListPage() {
           credentials: "include",
           headers,
           body: JSON.stringify(body),
+          signal: controller.signal,
         },
       );
-      if (!res.ok) throw new Error("Export failed");
+      if (!res.ok) {
+        let detail = "";
+        try {
+          detail = (await res.text()).slice(0, 200);
+        } catch {
+          // Body already consumed or unreadable; status alone is enough.
+        }
+        if (detail) {
+          console.error(
+            `Applications CSV export failed (${res.status} ${res.statusText}): ${detail}`,
+          );
+        }
+        throw new Error(`HTTP ${res.status} ${res.statusText}`.trim());
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -2260,13 +2283,22 @@ export default function ApplicationsListPage() {
       } else {
         toast.success("Applications CSV downloaded.");
       }
-    } catch {
-      if (exportScope === "selected") {
-        toast.error("Could not export selected applications");
+    } catch (err) {
+      const isAbort =
+        err instanceof DOMException && err.name === "AbortError";
+      const scopeLabel =
+        exportScope === "selected" ? "selected applications" : "applications";
+      let message: string;
+      if (isAbort) {
+        message = `Export of ${scopeLabel} timed out after ${Math.round(APPLICATION_EXPORT_TIMEOUT_MS / 1000)}s. Try selecting fewer applications or contact an admin.`;
+      } else if (err instanceof Error && err.message) {
+        message = `Could not export ${scopeLabel}: ${err.message}`;
       } else {
-        toast.error("Could not export applications.");
+        message = `Could not export ${scopeLabel}.`;
       }
+      toast.error(message);
     } finally {
+      window.clearTimeout(timeoutId);
       setIsExporting(false);
     }
   }

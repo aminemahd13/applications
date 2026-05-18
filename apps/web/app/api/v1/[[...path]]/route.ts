@@ -69,9 +69,9 @@ const PROXY_UPSTREAM_FAILURE_BACKOFF_MS = Math.max(
 );
 const upstreamCooldownUntil = new Map<string, number>();
 
-function resolveUpstreamTimeoutMs(path: string[]): number {
+export function resolveUpstreamTimeoutMs(path: string[]): number {
   const normalizedPath = `/${path.join("/")}`;
-  if (normalizedPath.endsWith("/files/export")) {
+  if (normalizedPath.endsWith("/export")) {
     return PROXY_UPSTREAM_EXPORT_TIMEOUT_MS;
   }
   return PROXY_UPSTREAM_TIMEOUT_MS;

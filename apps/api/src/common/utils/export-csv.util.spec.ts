@@ -1,4 +1,8 @@
-import { resolveAppBaseUrl, resolvePublicAppBaseUrl } from './export-csv.util';
+import {
+  buildCsvContent,
+  resolveAppBaseUrl,
+  resolvePublicAppBaseUrl,
+} from './export-csv.util';
 
 describe('resolveAppBaseUrl', () => {
   it('prefers PUBLIC_APP_BASE_URL when valid', () => {
@@ -132,6 +136,73 @@ describe('resolvePublicAppBaseUrl', () => {
           { errorContext: 'certificate links' },
         ),
       ).toThrow('Set PUBLIC_APP_BASE_URL to the public HTTPS origin');
+    }
+  });
+});
+
+describe('buildCsvContent', () => {
+  const BOM = '﻿';
+
+  it('emits one physical line per row plus header, using CRLF', () => {
+    const csv = buildCsvContent(
+      ['name', 'age'],
+      [
+        ['Ada', 36],
+        ['Linus', 54],
+      ],
+    );
+    const body = csv.startsWith(BOM) ? csv.slice(1) : csv;
+    const lines = body.split('\r\n');
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toBe('"name","age"');
+    expect(lines[1]).toBe('"Ada","36"');
+    expect(lines[2]).toBe('"Linus","54"');
+  });
+
+  it('includes a UTF-8 BOM by default and can suppress it', () => {
+    const withBom = buildCsvContent(['h'], [['v']]);
+    const withoutBom = buildCsvContent(['h'], [['v']], { includeBom: false });
+    expect(withBom.startsWith(BOM)).toBe(true);
+    expect(withoutBom.startsWith(BOM)).toBe(false);
+  });
+
+  describe.each([
+    ['LF', 'first\nsecond'],
+    ['CR', 'first\rsecond'],
+    ['CRLF', 'first\r\nsecond'],
+    ['mixed', 'a\nb\rc\r\nd'],
+  ])('with %s newlines embedded in a cell', (_label, value) => {
+    it('flattens to a single space and keeps row count stable', () => {
+      const csv = buildCsvContent(
+        ['note'],
+        [[value], ['after']],
+      );
+      const body = csv.startsWith(BOM) ? csv.slice(1) : csv;
+      const lines = body.split('\r\n');
+      expect(lines).toHaveLength(3);
+      // The cell value should be present without any \r or \n inside it.
+      expect(lines[1]).not.toMatch(/[\r\n]/);
+      // wc -l style count: total \n occurrences equals lines - 1.
+      const newlineCount = (csv.match(/\n/g) ?? []).length;
+      expect(newlineCount).toBe(2);
+    });
+  });
+
+  it('escapes embedded quotes by doubling', () => {
+    const csv = buildCsvContent(['q'], [['a"b']]);
+    const body = csv.startsWith(BOM) ? csv.slice(1) : csv;
+    expect(body.split('\r\n')[1]).toBe('"a""b"');
+  });
+
+  it('prefixes formula-injection candidates with a single quote', () => {
+    const csv = buildCsvContent(
+      ['cell'],
+      [['=SUM(A1)'], ['+1'], ['-1'], ['@cmd']],
+    );
+    const body = csv.startsWith(BOM) ? csv.slice(1) : csv;
+    const lines = body.split('\r\n').slice(1);
+    for (const line of lines) {
+      expect(line.startsWith("\"'")).toBe(true);
     }
   });
 });

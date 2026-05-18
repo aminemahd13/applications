@@ -1584,6 +1584,76 @@ describe('ApplicationsService CSV export', () => {
       service.exportEventApplicationsCsv('missing-event'),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
+
+  it('emits one physical line per application even when fields contain newlines', async () => {
+    const { service, mockPrisma } = createService();
+    // Multi-line institution name and pipe-joined links with embedded newlines
+    // exercise the cell-flattening path: a naive CSV builder would emit extra
+    // physical lines and break wc -l / text-editor row counts.
+    mockPrisma.applications.findMany.mockResolvedValueOnce([
+      {
+        id: 'app-1',
+        event_id: 'event-1',
+        applicant_user_id: 'user-1',
+        decision_status: 'PENDING',
+        decision_published_at: null,
+        decision_draft: null,
+        tags: ['line\nbreak\nin\ntag'],
+        created_at: new Date('2026-02-20T10:00:00.000Z'),
+        updated_at: new Date('2026-03-01T09:00:00.000Z'),
+        users_applications_applicant_user_idTousers: {
+          id: 'user-1',
+          email: 'user@example.com',
+          applicant_profiles: {
+            full_name: 'Multi\nLine Name',
+            first_name: 'Multi',
+            last_name: 'Line',
+            date_of_birth: null,
+            phone: '+212600000000',
+            education_level: 'Master',
+            institution: 'Université\r\nMohammed V\rSouissi',
+            city: 'Rabat',
+            country: 'MA',
+            links: ['https://a.example\n', '\nhttps://b.example'],
+          },
+        },
+        application_step_states: [],
+        attendance_records: null,
+      },
+      {
+        id: 'app-2',
+        event_id: 'event-1',
+        applicant_user_id: 'user-2',
+        decision_status: 'ACCEPTED',
+        decision_published_at: null,
+        decision_draft: null,
+        tags: [],
+        created_at: new Date('2026-02-21T10:00:00.000Z'),
+        updated_at: new Date('2026-03-02T09:00:00.000Z'),
+        users_applications_applicant_user_idTousers: {
+          id: 'user-2',
+          email: 'second@example.com',
+          applicant_profiles: null,
+        },
+        application_step_states: [],
+        attendance_records: null,
+      },
+    ]);
+
+    const result = await service.exportEventApplicationsCsv('event-1');
+
+    const body = result.csv.startsWith('﻿')
+      ? result.csv.slice(1)
+      : result.csv;
+    const lines = body.split('\r\n');
+    // 1 header + 2 application rows = exactly 3 physical lines.
+    expect(lines).toHaveLength(3);
+    for (const line of lines) {
+      expect(line).not.toMatch(/[\r\n]/);
+    }
+    // No stray LF anywhere either — wc -l on the file returns rows + 1.
+    expect((result.csv.match(/\n/g) ?? []).length).toBe(2);
+  });
 });
 
 describe('ApplicationsService boolean query semantics', () => {
