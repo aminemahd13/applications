@@ -207,17 +207,23 @@ export function AuthProvider({
 
   /** Logout */
   const logout = useCallback(async () => {
+    let serverLogoutFailed = false;
     try {
-      await fetch(`${API_URL}/auth/logout`, {
+      const response = await fetch(`${API_URL}/auth/logout`, {
         method: "POST",
         credentials: "include",
         headers: {
           ...(state.csrfToken ? { "X-CSRF-Token": state.csrfToken } : {}),
         },
       });
-    } catch {
-      /* swallow */
+      if (!response.ok) {
+        serverLogoutFailed = true;
+      }
+    } catch (err) {
+      serverLogoutFailed = true;
+      console.warn("[auth] logout request failed:", err);
     }
+    // Always clear local state — the user wanted out, the UI must reflect that.
     setState({
       user: null,
       csrfToken: null,
@@ -225,7 +231,14 @@ export function AuthProvider({
       isAuthenticated: false,
     });
     await fetchCsrf();
-  }, [state.csrfToken, fetchCsrf]);
+    if (serverLogoutFailed) {
+      toast.error(
+        t(
+          "Could not reach the server to end your session. If you're on a shared device, clear your browser cookies.",
+        ),
+      );
+    }
+  }, [state.csrfToken, fetchCsrf, t]);
 
   /** Refresh user data */
   const refreshUser = useCallback(async () => {

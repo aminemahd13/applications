@@ -667,49 +667,72 @@ export class CheckinService {
     // Requirement says "Prevent double check-in (unless override)".
     // We'll return status specifically.
 
-    let checkinStatus = 'SUCCESS';
-    let failReason: string | undefined;
+    // Atomically transition CONFIRMED -> CHECKED_IN, then write the audit log
+    // with the resolved outcome. Doing the read + transition + log in one
+    // transaction + relying on updateMany's predicate to serialize concurrent
+    // scans means two near-simultaneous scans cannot both record SUCCESS.
+    const { checkinStatus, failReason, checkinRecord, successCheckedInAt } =
+      await this.prisma.$transaction(async (tx) => {
+        const transitionTime = new Date();
+        const transition = await tx.attendance_records.updateMany({
+          where: { application_id: applicationId, status: 'CONFIRMED' },
+          data: {
+            status: 'CHECKED_IN',
+            checked_in_at: transitionTime,
+            checked_in_by: staffUserId,
+          },
+        });
 
-    if (app.attendance_records?.status === 'CHECKED_IN') {
-      checkinStatus = 'ALREADY_CHECKED_IN';
-      failReason = 'Already checked in';
-    } else if (app.attendance_records?.status !== 'CONFIRMED') {
-      // Should be impossible if decision is accepted logic held, but valid check
-      checkinStatus = 'INVALID_STATUS';
-      failReason = `Status is ${app.attendance_records?.status}`;
-    }
+        let resolvedStatus: string;
+        let resolvedFailReason: string | undefined;
+        let resolvedCheckedInAt: Date | null = null;
 
-    // Log the attempt
-    const checkinRecord = await this.prisma.checkin_records.create({
-      data: {
-        id: crypto.randomUUID(),
-        event_id: eventId,
-        application_id: applicationId,
-        staff_user_id: staffUserId,
-        result: checkinStatus,
-        fail_reason: failReason,
-        raw_token_fingerprint: jti, // Store JTI as fingerprint
-      },
-    });
+        if (transition.count === 1) {
+          resolvedStatus = 'SUCCESS';
+          resolvedCheckedInAt = transitionTime;
+        } else {
+          // Couldn't transition — the row's current status isn't CONFIRMED.
+          // Re-read inside the transaction to report accurately.
+          const current = await tx.attendance_records.findUnique({
+            where: { application_id: applicationId },
+            select: { status: true },
+          });
+          if (current?.status === 'CHECKED_IN') {
+            resolvedStatus = 'ALREADY_CHECKED_IN';
+            resolvedFailReason = 'Already checked in';
+          } else {
+            resolvedStatus = 'INVALID_STATUS';
+            resolvedFailReason = `Status is ${current?.status}`;
+          }
+        }
 
-    if (checkinStatus === 'SUCCESS') {
-      // Update attendance record
-      const checkedInAt = new Date();
-      await this.prisma.attendance_records.update({
-        where: { application_id: applicationId },
-        data: {
-          status: 'CHECKED_IN',
-          checked_in_at: checkedInAt,
-          checked_in_by: staffUserId,
-        },
+        const record = await tx.checkin_records.create({
+          data: {
+            id: crypto.randomUUID(),
+            event_id: eventId,
+            application_id: applicationId,
+            staff_user_id: staffUserId,
+            result: resolvedStatus,
+            fail_reason: resolvedFailReason,
+            raw_token_fingerprint: jti, // Store JTI as fingerprint
+          },
+        });
+
+        return {
+          checkinStatus: resolvedStatus,
+          failReason: resolvedFailReason,
+          checkinRecord: record,
+          successCheckedInAt: resolvedCheckedInAt,
+        };
       });
 
-      if (autoIssueCompletionCredential) {
+    if (checkinStatus === 'SUCCESS') {
+      if (autoIssueCompletionCredential && successCheckedInAt) {
         try {
           await this.applicationsService.issueCompletionCredential(
             eventId,
             applicationId,
-            { checkedInAt },
+            { checkedInAt: successCheckedInAt },
           );
         } catch {
           // Best-effort: keep check-in successful even if credential issuance fails.

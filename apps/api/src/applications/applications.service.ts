@@ -2855,13 +2855,24 @@ export class ApplicationsService {
 
     const now = new Date();
 
-    // Update in DB
-    await this.prisma.applications.updateMany({
-      where: { id: { in: toPublish.map((a) => a.id) } },
-      data: { decision_published_at: now, updated_at: now },
-    });
+    // Atomically mark applications as published AND create the corresponding
+    // notification messages. Previously the updateMany ran outside the
+    // transaction that wrapped message creation, so a mid-flight failure could
+    // leave applications marked published with no decision notification.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.applications.updateMany({
+        where: { id: { in: toPublish.map((a) => a.id) } },
+        data: { decision_published_at: now, updated_at: now },
+      });
 
-    await this.createDecisionPublishNotifications(event, toPublish, actorId, now);
+      await this.createDecisionPublishNotifications(
+        tx,
+        event,
+        toPublish,
+        actorId,
+        now,
+      );
+    });
 
     // Trigger unlock logic in bounded parallel batches.
     const recomputeBatchSize = 25;
@@ -2878,6 +2889,7 @@ export class ApplicationsService {
   }
 
   private async createDecisionPublishNotifications(
+    tx: Prisma.TransactionClient,
     event: { id: string; title: string },
     applications: Array<{
       id: string;
@@ -2929,33 +2941,31 @@ export class ApplicationsService {
       };
     });
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.messages.createMany({
-        data: messages.map((message) => ({
-          id: message.id,
-          event_id: message.event_id,
-          created_by: message.created_by,
-          type: message.type,
-          title: message.title,
-          body_rich: message.body_rich,
-          body_text: message.body_text,
-          action_buttons: message.action_buttons,
-          resolved_recipient_count: message.resolved_recipient_count,
-          resolved_at: message.resolved_at,
-          status: message.status,
-        })),
-      });
+    await tx.messages.createMany({
+      data: messages.map((message) => ({
+        id: message.id,
+        event_id: message.event_id,
+        created_by: message.created_by,
+        type: message.type,
+        title: message.title,
+        body_rich: message.body_rich,
+        body_text: message.body_text,
+        action_buttons: message.action_buttons,
+        resolved_recipient_count: message.resolved_recipient_count,
+        resolved_at: message.resolved_at,
+        status: message.status,
+      })),
+    });
 
-      await tx.message_recipients.createMany({
-        data: messages.map((message) => ({
-          id: crypto.randomUUID(),
-          message_id: message.id,
-          recipient_user_id: message.recipientUserId,
-          delivery_inbox_status: 'DELIVERED',
-          delivery_email_status: EmailDeliveryStatus.QUEUED,
-        })),
-        skipDuplicates: true,
-      });
+    await tx.message_recipients.createMany({
+      data: messages.map((message) => ({
+        id: crypto.randomUUID(),
+        message_id: message.id,
+        recipient_user_id: message.recipientUserId,
+        delivery_inbox_status: 'DELIVERED',
+        delivery_email_status: EmailDeliveryStatus.QUEUED,
+      })),
+      skipDuplicates: true,
     });
   }
 
@@ -4270,24 +4280,34 @@ export class ApplicationsService {
     });
 
     const now = new Date();
-    const record = existing
-      ? await (this.prisma as any).completion_credentials.update({
-          where: { application_id: applicationId },
-          data: {
-            event_id: eventId,
-            credential_signature: signature,
-            issued_at: issuedAt,
-            revoked_at: null,
-            updated_at: now,
-          },
-          select: {
-            certificate_id: true,
-            credential_id: true,
-            issued_at: true,
-            revoked_at: true,
-          },
-        })
-      : await (this.prisma as any).completion_credentials.create({
+    const credentialSelect = {
+      certificate_id: true,
+      credential_id: true,
+      issued_at: true,
+      revoked_at: true,
+    } as const;
+
+    let record: {
+      certificate_id: string;
+      credential_id: string;
+      issued_at: Date;
+      revoked_at: Date | null;
+    } | null;
+    if (existing) {
+      record = await (this.prisma as any).completion_credentials.update({
+        where: { application_id: applicationId },
+        data: {
+          event_id: eventId,
+          credential_signature: signature,
+          issued_at: issuedAt,
+          revoked_at: null,
+          updated_at: now,
+        },
+        select: credentialSelect,
+      });
+    } else {
+      try {
+        record = await (this.prisma as any).completion_credentials.create({
           data: {
             application_id: applicationId,
             event_id: eventId,
@@ -4299,13 +4319,24 @@ export class ApplicationsService {
             created_at: now,
             updated_at: now,
           },
-          select: {
-            certificate_id: true,
-            credential_id: true,
-            issued_at: true,
-            revoked_at: true,
-          },
+          select: credentialSelect,
         });
+      } catch (err) {
+        // application_id is the primary key on completion_credentials (see
+        // packages/db/prisma/schema.prisma:172). Two concurrent callers that
+        // both saw existing=null can race here; the loser hits P2002. Yield
+        // to the winning row instead of surfacing a 500.
+        if ((err as { code?: string } | null)?.code === 'P2002') {
+          record = await (this.prisma as any).completion_credentials.findUnique({
+            where: { application_id: applicationId },
+            select: credentialSelect,
+          });
+          if (!record) throw err;
+        } else {
+          throw err;
+        }
+      }
+    }
 
     const credential = this.toCompletionCredential(record);
     if (!credential) {

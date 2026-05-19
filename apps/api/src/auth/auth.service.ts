@@ -207,6 +207,19 @@ export class AuthService {
     };
   }
 
+  // Memoized argon2 hash used to equalize login response timing for unknown
+  // emails. Without this, the unknown-email branch returns ~100 ms faster than
+  // the known-email-wrong-password branch (one full argon2.verify), enabling
+  // timing-based account enumeration.
+  private dummyHashPromise?: Promise<string>;
+
+  private getDummyHash(): Promise<string> {
+    if (!this.dummyHashPromise) {
+      this.dummyHashPromise = argon2.hash('dummy-for-timing-equalization');
+    }
+    return this.dummyHashPromise;
+  }
+
   async validateUser(email: string, pass: string): Promise<any> {
     const user = await this.prisma.users.findUnique({ where: { email } });
     if (user && !user.is_disabled) {
@@ -215,7 +228,13 @@ export class AuthService {
         const { password_hash, ...result } = user;
         return result;
       }
+      return null;
     }
+    // Run argon2.verify against a dummy hash so the response latency matches
+    // the known-email path. The boolean result is discarded.
+    await argon2
+      .verify(await this.getDummyHash(), pass)
+      .catch(() => false);
     return null;
   }
 

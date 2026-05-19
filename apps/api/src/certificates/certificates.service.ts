@@ -1760,72 +1760,105 @@ export class CertificatesService implements OnModuleDestroy {
         ? String(existingActive.pdf_storage_key ?? '').trim() || null
         : null;
 
-    const created = await this.prisma.$transaction(async (tx) => {
+    const txResult = await this.prisma.$transaction(async (tx) => {
       if (existingActive && input.reissueIfExists) {
         await (tx as any).issued_certificates.delete({
           where: { id: existingActive.id },
         });
       }
 
-      const issued = await (tx as any).issued_certificates.create({
-        data: {
-          id: crypto.randomUUID(),
-          event_id: eventId,
-          application_id: application.id,
-          template_id: template.id,
-          template_version_id: templateVersion.id,
-          certificate_type_key: template.type_key,
-          certificate_type_label: certificateTypeLabel,
-          certificate_id: certificateId,
-          credential_id: credentialId,
-          credential_signature: signature,
-          qr_token: signedQr.token,
-          qr_key_id: signedQr.kid,
-          issuer_name: issuerName,
-          status: 'ISSUED',
-          issued_at: issuedAt,
-          released_at: null,
-          released_by: null,
-          template_snapshot: templateSnapshot,
-          payload_snapshot: payloadSnapshot,
-          render_status: 'PENDING',
-          render_error: null,
-          created_at: new Date(),
-          updated_at: new Date(),
-        },
-      });
-
-      await (tx as any).certificate_render_jobs.create({
-        data: {
-          id: crypto.randomUUID(),
-          event_id: eventId,
-          issued_certificate_id: issued.id,
-          status: 'PENDING',
-          attempts: 0,
-          max_attempts: Math.max(
-            Number(process.env.CERTIFICATE_RENDER_MAX_ATTEMPTS ?? 5),
-            1,
-          ),
-          next_retry_at: new Date(),
-          created_at: new Date(),
-          updated_at: new Date(),
-        },
-      });
-
-      return (tx as any).issued_certificates.findUnique({
-        where: { id: issued.id },
-        include: {
-          certificate_templates: {
-            select: { name: true },
+      try {
+        const issued = await (tx as any).issued_certificates.create({
+          data: {
+            id: crypto.randomUUID(),
+            event_id: eventId,
+            application_id: application.id,
+            template_id: template.id,
+            template_version_id: templateVersion.id,
+            certificate_type_key: template.type_key,
+            certificate_type_label: certificateTypeLabel,
+            certificate_id: certificateId,
+            credential_id: credentialId,
+            credential_signature: signature,
+            qr_token: signedQr.token,
+            qr_key_id: signedQr.kid,
+            issuer_name: issuerName,
+            status: 'ISSUED',
+            issued_at: issuedAt,
+            released_at: null,
+            released_by: null,
+            template_snapshot: templateSnapshot,
+            payload_snapshot: payloadSnapshot,
+            render_status: 'PENDING',
+            render_error: null,
+            created_at: new Date(),
+            updated_at: new Date(),
           },
-          certificate_template_versions: {
-            select: { version_number: true },
-          },
-        },
         });
+
+        await (tx as any).certificate_render_jobs.create({
+          data: {
+            id: crypto.randomUUID(),
+            event_id: eventId,
+            issued_certificate_id: issued.id,
+            status: 'PENDING',
+            attempts: 0,
+            max_attempts: Math.max(
+              Number(process.env.CERTIFICATE_RENDER_MAX_ATTEMPTS ?? 5),
+              1,
+            ),
+            next_retry_at: new Date(),
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+
+        const certificate = await (tx as any).issued_certificates.findUnique({
+          where: { id: issued.id },
+          include: {
+            certificate_templates: {
+              select: { name: true },
+            },
+            certificate_template_versions: {
+              select: { version_number: true },
+            },
+          },
+        });
+        return { certificate, created: true as const };
+      } catch (err) {
+        // A partial unique index `issued_cert_app_type_active_uq` enforces one
+        // active row per (application_id, certificate_type_key) at the DB
+        // level (see packages/db/scripts/2026-05-19-issued-certificates-active-unique.sql).
+        // Two concurrent issuances that both saw existingActive=null can race
+        // here; the loser hits P2002. Yield to the winning active row.
+        if ((err as { code?: string } | null)?.code === 'P2002') {
+          const winner = await (tx as any).issued_certificates.findFirst({
+            where: {
+              application_id: application.id,
+              certificate_type_key: template.type_key,
+              revoked_at: null,
+            },
+            include: {
+              certificate_templates: {
+                select: { name: true },
+              },
+              certificate_template_versions: {
+                select: { version_number: true },
+              },
+            },
+          });
+          if (!winner) throw err;
+          return { certificate: winner, created: false as const };
+        }
+        throw err;
+      }
     });
 
-    if (deletedExistingPdfStorageKey && existingActive) {
+    // Only clean up the prior PDF when we actually replaced it. If we lost the
+    // race (created=false), the row we returned is the concurrent caller's
+    // freshly-issued one — the existing PDF (if any) is now stale for OUR
+    // request but valid for the winner.
+    if (txResult.created && deletedExistingPdfStorageKey && existingActive) {
       await this.deleteIssuedCertificatePdfObjectIfPresent({
         id: existingActive.id,
         event_id: existingActive.event_id,
@@ -1835,8 +1868,8 @@ export class CertificatesService implements OnModuleDestroy {
     }
 
     return {
-      certificate: this.mapIssuedCertificateRow(created),
-      created: true,
+      certificate: this.mapIssuedCertificateRow(txResult.certificate),
+      created: txResult.created,
     };
   }
 

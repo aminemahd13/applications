@@ -89,6 +89,9 @@ export class AuthController {
     // Prevent caching of CSRF tokens
     res.setHeader('Cache-Control', 'no-store');
     res.cookie('csrf_token', session.csrfToken, {
+      // Intentional: double-submit cookie. Frontend reads this via JS and
+      // echoes it back as X-CSRF-Token, so httpOnly MUST be false. SameSite=Lax
+      // and Secure (in prod) provide the actual CSRF protection.
       httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
@@ -121,8 +124,13 @@ export class AuthController {
         await this.emailVerificationService.requestVerification(
           signupResult.id,
         );
-      } catch {
+      } catch (err) {
         // Keep signup successful even if email delivery is rate-limited or fails.
+        // Log so ops can detect a degraded email pipeline without failing signup.
+        console.warn(
+          '[auth/signup] verification email send failed:',
+          err,
+        );
       }
     }
 
@@ -150,6 +158,9 @@ export class AuthController {
     } = (await this.authService.login(result.data, req)) as any;
 
     res.cookie('csrf_token', csrfToken, {
+      // Intentional: double-submit cookie. Frontend reads this via JS and
+      // echoes it back as X-CSRF-Token, so httpOnly MUST be false. SameSite=Lax
+      // and Secure (in prod) provide the actual CSRF protection.
       httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
