@@ -33,7 +33,6 @@ export default function AdminEventLayout({ children }: { children: React.ReactNo
   const eventId = params.eventId as string;
   const [event, setEvent] = useState<EventInfo | null>(null);
   const [pendingReviews, setPendingReviews] = useState(0);
-  const [unreadMessages, setUnreadMessages] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -75,29 +74,6 @@ export default function AdminEventLayout({ children }: { children: React.ReactNo
     };
   }, [eventId, isLoading, user?.isGlobalAdmin]);
 
-  // Sidebar badge: event-scoped unread inbox.
-  useEffect(() => {
-    if (isLoading || !user?.isGlobalAdmin) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await apiClient<{ data?: Array<{ id: string }> }>(
-          `/me/inbox?limit=100&unreadOnly=true&eventId=${encodeURIComponent(
-            eventId,
-          )}`,
-        );
-        if (!cancelled) {
-          setUnreadMessages(res?.data?.length ?? 0);
-        }
-      } catch {
-        /* silent */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [eventId, isLoading, user?.isGlobalAdmin]);
-
   if (isLoading || !user?.isGlobalAdmin) return null;
 
   const base = `/admin/events/${eventId}`;
@@ -125,7 +101,6 @@ export default function AdminEventLayout({ children }: { children: React.ReactNo
           label: "Messages",
           href: `${base}/messages`,
           icon: MessageSquare,
-          badge: unreadMessages > 0 ? unreadMessages : undefined,
         },
         { label: "Metrics", href: `${base}/metrics`, icon: BarChart3 },
         { label: "Check-in", href: `${base}/checkin`, icon: ScanLine },
