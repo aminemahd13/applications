@@ -30,16 +30,19 @@ export function StatsBlock({ block }: { block: Extract<Block, { type: 'STATS' }>
           content={heading as string}
           mode="inline"
           as="h2"
-          className="microsite-display text-center text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+          className="microsite-display text-display-lg text-center text-[var(--mm-text)]"
         />
       )}
-      <div className="grid grid-cols-2 gap-8 text-center md:grid-cols-4 md:divide-x md:divide-[var(--mm-border)]">
+      <div className="grid grid-cols-2 gap-y-10 gap-x-6 text-center md:grid-cols-4 md:gap-y-0 md:divide-x md:divide-[var(--mm-border)]">
         {items.map((stat: StatItem, idx: number) => (
-          <div key={idx} className="flex flex-col items-center px-4">
-            <span className="mb-2 bg-gradient-to-br from-[var(--mm-accent)] to-[var(--mm-accent-2)] bg-clip-text text-4xl font-semibold tracking-tight text-transparent md:text-5xl">
+          <div
+            key={idx}
+            className="group flex flex-col items-center gap-3 px-4 transition-transform duration-300 md:hover:-translate-y-0.5"
+          >
+            <span className="font-display bg-gradient-to-br from-[var(--mm-accent)] to-[var(--mm-accent-2)] bg-clip-text text-5xl font-semibold tracking-[-0.02em] text-transparent md:text-6xl">
               <MarkdownText content={`${stat.value ?? ""}${stat.suffix ?? ""}`} mode="inline" as="span" />
             </span>
-            <span className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--mm-text-muted)]">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--mm-text-muted)]">
               <MarkdownText content={stat.label} mode="inline" as="span" />
             </span>
           </div>

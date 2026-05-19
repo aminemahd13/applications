@@ -33,18 +33,20 @@ export function ImageBlock({ block }: { block: Extract<Block, { type: "IMAGE" }>
       }}
       containerClassName="flex flex-col items-center"
     >
-      <figure className="w-full max-w-4xl rounded-[1.8rem] border border-[var(--mm-border)] bg-[var(--mm-surface)] p-4 shadow-[0_22px_56px_rgba(15,23,42,0.1)] md:p-5">
-        <img
-          src={src}
-          alt={alt}
-          className="h-auto w-full rounded-xl shadow-sm"
-          loading="lazy"
-        />
+      <figure className="w-full max-w-4xl">
+        <div className="overflow-hidden rounded-2xl border border-[var(--mm-border)] bg-[var(--mm-surface)] shadow-editorial">
+          <img
+            src={src}
+            alt={alt}
+            className="block h-auto w-full"
+            loading="lazy"
+          />
+        </div>
         {caption && (
           <MarkdownText
             content={caption}
             as="figcaption"
-            className="mt-3 text-center text-sm text-[var(--mm-text-muted)]"
+            className="mt-4 text-center text-sm italic leading-relaxed text-[var(--mm-text-muted)] max-w-2xl mx-auto"
           />
         )}
       </figure>

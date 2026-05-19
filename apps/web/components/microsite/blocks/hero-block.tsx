@@ -278,8 +278,8 @@ export function HeroBlock({
               {heading && (
                 <h1
                   className={cn(
-                    "microsite-display mm-fade-up text-4xl font-bold tracking-[0.03em] opacity-0 md:text-5xl",
-                    heroLayout === "split" ? "max-w-[18ch] md:leading-[1.05]" : "text-center md:leading-[3rem]",
+                    "microsite-display mm-fade-up text-display-xl opacity-0",
+                    heroLayout === "split" ? "max-w-[18ch]" : "text-center",
                   )}
                   style={{ animationDelay: "0.25s", animationFillMode: "forwards" }}
                 >
@@ -292,7 +292,7 @@ export function HeroBlock({
               {subtitle && (
                 <p
                   className={cn(
-                    "mm-fade-up max-w-3xl text-base text-[var(--mm-text-muted)] opacity-0 md:text-lg",
+                    "mm-fade-up max-w-3xl text-lg leading-relaxed text-[var(--mm-text-muted)] opacity-0 md:text-xl",
                     heroLayout === "split" ? "text-left" : "mx-auto text-center",
                   )}
                   style={{ animationDelay: "0.28s", animationFillMode: "forwards" }}

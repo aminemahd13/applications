@@ -11,41 +11,51 @@ export default function AuthLayout({
 }) {
   return (
     <div className="min-h-screen flex">
-      {/* Left: Branding panel */}
+      {/* Left: editorial brand panel */}
       <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-primary">
-        {/* Animated gradient background */}
-        <div className="absolute inset-0 bg-gradient-to-br from-primary via-primary/90 to-primary/70" />
-        <div className="absolute inset-0 opacity-10">
-          <div className="absolute top-1/4 left-1/4 h-64 w-64 rounded-full bg-white/20 blur-3xl animate-pulse" />
-          <div className="absolute bottom-1/3 right-1/4 h-96 w-96 rounded-full bg-white/10 blur-3xl animate-pulse [animation-delay:1s]" />
+        {/* Calmer gradient — single soft wash, no animated blobs competing
+            with the typography. */}
+        <div className="absolute inset-0 bg-gradient-to-br from-primary via-primary to-primary/85" />
+        <div
+          className="absolute inset-0 opacity-[0.08]"
+          aria-hidden="true"
+        >
+          <div className="absolute -top-32 -left-24 h-[28rem] w-[28rem] rounded-full bg-white blur-[120px]" />
+          <div className="absolute -bottom-40 -right-24 h-[32rem] w-[32rem] rounded-full bg-white blur-[140px]" />
         </div>
 
-        <div className="relative z-10 flex flex-col justify-center px-12 text-primary-foreground">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 backdrop-blur font-bold text-xl">
+        <div className="relative z-10 flex flex-col justify-center px-12 xl:px-20 text-primary-foreground max-w-2xl">
+          <div className="flex items-center gap-3 mb-12">
+            <div className="font-display flex h-11 w-11 items-center justify-center rounded-xl bg-white/15 backdrop-blur font-semibold text-xl tracking-tight">
               M
             </div>
-            <span className="text-2xl font-bold">Math&Maroc</span>
+            <span className="font-display text-xl font-semibold tracking-tight">
+              Math&Maroc
+            </span>
           </div>
-          <h1 className="text-4xl font-bold leading-tight mb-4">
-            Unlocking the scientific <br/> 
-            potential of Moroccan youth
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary-foreground/70 mb-5">
+            Event platform
+          </p>
+          <h1 className="text-display-lg text-primary-foreground mb-6">
+            Unlocking the scientific potential of Moroccan youth.
           </h1>
-          <p className="text-lg text-primary-foreground/80 max-w-md">
+          <p className="text-base lg:text-lg text-primary-foreground/80 leading-relaxed max-w-lg">
             Apply to competitions, training camps, and academic programs.
             Track your applications and connect with the community.
           </p>
         </div>
       </div>
 
-      {/* Right: Form area */}
+      {/* Right: form area */}
       <div className="flex-1 flex flex-col">
         <div className="flex items-center justify-between p-4">
-          <div className="lg:hidden flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
+          <div className="lg:hidden flex items-center gap-2.5">
+            <div className="font-display flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground text-base font-semibold tracking-tight">
               M
             </div>
-            <span className="font-semibold">Math&Maroc</span>
+            <span className="font-display font-semibold tracking-tight">
+              Math&Maroc
+            </span>
           </div>
           <div className="ml-auto">
             <ThemeToggle />

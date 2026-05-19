@@ -1,8 +1,21 @@
 import type { Metadata } from "next";
+import { Inter, Inter_Tight } from "next/font/google";
 import { Providers } from "@/components/providers";
 import { PublicPlatformSettings } from "@/components/providers/platform-settings-provider";
 import { apiClient } from "@/lib/api";
 import "./globals.css";
+
+const fontBody = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+const fontDisplay = Inter_Tight({
+  subsets: ["latin"],
+  variable: "--font-inter-tight",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: {
@@ -53,7 +66,7 @@ export default async function RootLayout({
       lang="en"
       suppressHydrationWarning
       translate="no"
-      className="notranslate"
+      className={`notranslate ${fontBody.variable} ${fontDisplay.variable}`}
     >
       <body className="antialiased notranslate">
         <Providers settings={settings}>{children}</Providers>

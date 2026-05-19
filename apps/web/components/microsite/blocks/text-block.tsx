@@ -41,13 +41,18 @@ export function TextBlock({
         backgroundClass: "bg-transparent",
       }}
     >
-      <div className={cn("max-w-3xl space-y-4 md:space-y-5", wrapperAlignClass)}>
+      <div
+        className={cn(
+          "mm-measure-wide space-y-5 md:space-y-6",
+          wrapperAlignClass,
+        )}
+      >
         {(heading || isPreview) && (
           <MarkdownText
             content={heading || "Text block heading"}
             mode="inline"
             as="h2"
-            className="microsite-display text-3xl font-semibold text-[var(--mm-text)] md:text-5xl"
+            className="microsite-display text-display-md text-[var(--mm-text)]"
           />
         )}
         {(text || isPreview) && (
@@ -56,18 +61,19 @@ export function TextBlock({
               text ||
               "Add your narrative text from the block editor. This section renders without card styling."
             }
-            className="text-base leading-relaxed text-[var(--mm-text-muted)] md:text-lg"
+            className="text-base leading-relaxed text-[var(--mm-text-muted)] md:text-lg md:leading-[1.7] [&>p:first-of-type]:text-lg md:[&>p:first-of-type]:text-xl [&>p:first-of-type]:text-[var(--mm-text)]"
           />
         )}
         {ctaLabel && ctaHref && (
-          <div className="pt-1">
+          <div className="pt-2">
             <Link
               href={ctaHref}
               target={isExternalHref(ctaHref) ? "_blank" : undefined}
               rel={isExternalHref(ctaHref) ? "noopener noreferrer" : undefined}
-              className="mm-primary-button inline-flex h-10 items-center px-5 text-sm font-semibold"
+              className="mm-primary-button inline-flex h-11 items-center gap-2 px-6 text-sm font-semibold"
             >
               <MarkdownText content={ctaLabel} mode="inline" as="span" />
+              <span aria-hidden="true">→</span>
             </Link>
           </div>
         )}

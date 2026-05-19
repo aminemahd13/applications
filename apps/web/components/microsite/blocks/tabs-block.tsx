@@ -27,26 +27,34 @@ export function TabsBlock({ block }: TabsBlockProps) {
         backgroundClass: "bg-transparent",
       }}
     >
-      {/* Tab Headers */}
-      <div className="mb-8 flex overflow-x-auto border-b border-[var(--mm-border)]">
-        {tabs.map((tab, idx) => (
-          <button
-            key={idx}
-            onClick={() => setActiveTab(idx)}
-            className={cn(
-              "px-6 py-3 text-sm font-medium whitespace-nowrap transition-colors border-b-2 -mb-px",
-              activeTab === idx
-                ? "border-[var(--mm-accent)] text-[var(--mm-accent)]"
-                : "border-transparent text-[var(--mm-text-muted)] hover:text-[var(--mm-text)]"
-            )}
-          >
-            <MarkdownText content={tab.label} mode="inline" as="span" />
-          </button>
-        ))}
+      {/* Tab Headers — editorial pill row with active-state shadow. */}
+      <div
+        role="tablist"
+        className="mb-8 inline-flex max-w-full overflow-x-auto rounded-full border border-[var(--mm-border)] bg-[var(--mm-soft)] p-1"
+      >
+        {tabs.map((tab, idx) => {
+          const isActive = activeTab === idx;
+          return (
+            <button
+              key={idx}
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => setActiveTab(idx)}
+              className={cn(
+                "rounded-full px-5 py-2 text-sm font-medium whitespace-nowrap transition-all",
+                isActive
+                  ? "bg-[var(--mm-surface)] text-[var(--mm-text)] shadow-sm"
+                  : "text-[var(--mm-text-muted)] hover:text-[var(--mm-text)]",
+              )}
+            >
+              <MarkdownText content={tab.label} mode="inline" as="span" />
+            </button>
+          );
+        })}
       </div>
 
       {/* Tab Content */}
-      <div className="rounded-2xl border border-[var(--mm-border)] bg-[var(--mm-surface)] p-6 prose prose-zinc max-w-none md:p-8">
+      <div className="rounded-2xl border border-[var(--mm-border)] bg-[var(--mm-surface)] p-6 prose prose-zinc dark:prose-invert max-w-none md:p-10 md:prose-lg">
         <MarkdownText content={tabs[activeTab].content} />
       </div>
     </BlockSection>

@@ -4,6 +4,8 @@ import { type LucideIcon } from "lucide-react";
 
 interface PageHeaderProps {
   title: string;
+  /** Optional uppercase label rendered above the title — e.g. "Event · Math&Maroc 2026". */
+  eyebrow?: string;
   description?: string;
   actions?: Array<{
     label: string;
@@ -18,6 +20,7 @@ interface PageHeaderProps {
 
 export function PageHeader({
   title,
+  eyebrow,
   description,
   actions,
   className,
@@ -26,18 +29,25 @@ export function PageHeader({
   return (
     <div
       className={cn(
-        "flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between",
+        "flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-6",
         className
       )}
     >
-      <div className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+      <div className="min-w-0 space-y-2">
+        {eyebrow && (
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            {eyebrow}
+          </p>
+        )}
+        <h1 className="text-display-md text-foreground break-words">{title}</h1>
         {description && (
-          <p className="text-sm text-muted-foreground">{description}</p>
+          <p className="text-sm text-muted-foreground mm-measure">
+            {description}
+          </p>
         )}
       </div>
       {(actions || children) && (
-        <div className="flex items-center gap-2 mt-2 sm:mt-0">
+        <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:shrink-0">
           {actions?.map((action) => {
             const Icon = action.icon;
             return (

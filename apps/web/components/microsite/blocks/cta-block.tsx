@@ -74,23 +74,23 @@ export function CtaBlock({
         align: "center",
         backgroundClass: "bg-transparent",
       }}
-      containerClassName="mm-pattern-cta custom-shadow w-full p-10 md:w-1/2 flex flex-col items-center gap-6 text-white"
+      containerClassName="mm-pattern-cta custom-shadow w-full p-10 md:p-14 md:w-1/2 flex flex-col items-center gap-7 text-center text-white"
     >
       {heading && (
         <MarkdownText
           content={heading}
           mode="inline"
           as="h2"
-          className="microsite-display text-3xl font-semibold md:text-5xl"
+          className="microsite-display text-display-md md:text-display-lg"
         />
       )}
       {description && (
         <MarkdownText
           content={description}
-          className="max-w-2xl text-base leading-relaxed text-white/90 md:text-lg"
+          className="max-w-2xl text-base leading-relaxed text-white/85 md:text-lg md:leading-[1.7]"
         />
       )}
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center justify-center gap-4 pt-1">
         {buttonLabel && (
           <FeedbackLink
             href={buttonHref}
@@ -101,6 +101,7 @@ export function CtaBlock({
             <span className="mm-ring-button-inner">
               <Scroll className="h-5 w-5" />
               <MarkdownText content={buttonLabel} mode="inline" as="span" />
+              <span aria-hidden="true" className="-mr-1 transition-transform group-hover:translate-x-0.5">→</span>
             </span>
           </FeedbackLink>
         )}

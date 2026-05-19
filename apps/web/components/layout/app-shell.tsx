@@ -202,16 +202,16 @@ export function AppShell({
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
-              <div className="flex items-center gap-2 px-2 py-1.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
+              <div className="flex items-center gap-2.5 px-2 py-1.5">
+                <div className="font-display flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground text-base font-semibold tracking-tight">
                   M
                 </div>
                 <div className="flex flex-col gap-0.5 leading-none group-data-[collapsible=icon]:hidden">
-                  <span className="font-semibold text-sm">
+                  <span className="font-display font-semibold text-sm tracking-tight">
                     {translateHeaderTitle ? t(headerTitle) : headerTitle}
                   </span>
                   {headerSubtitle && (
-                    <span className="text-xs text-muted-foreground truncate max-w-[160px]">
+                    <span className="text-xs text-muted-foreground truncate max-w-[180px]">
                       {translateHeaderSubtitle ? t(headerSubtitle) : headerSubtitle}
                     </span>
                   )}

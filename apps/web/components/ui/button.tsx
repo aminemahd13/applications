@@ -25,6 +25,10 @@ const buttonVariants = cva(
         xs: "h-6 gap-1 rounded-md px-2 text-xs has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",
         sm: "h-8 rounded-md gap-1.5 px-3 has-[>svg]:px-2.5",
         lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
+        /* `display` is the editorial CTA size for hero / marketing surfaces.
+           Pair with an arrow icon: <Button size="display">Apply <ArrowRight /></Button> */
+        display:
+          "h-12 rounded-lg px-6 text-base gap-2.5 tracking-tight has-[>svg]:px-5 [&_svg:not([class*='size-'])]:size-5",
         icon: "size-9",
         "icon-xs": "size-6 rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-8",

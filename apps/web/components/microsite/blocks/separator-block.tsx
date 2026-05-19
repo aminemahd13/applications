@@ -97,11 +97,11 @@ export function SeparatorBlock({ block }: { block: Extract<Block, { type: "SEPAR
     >
       <div className={cn("mx-auto", WIDTH_CLASS[width])}>
         {label ? (
-          <div className="flex items-center gap-3 md:gap-4">
+          <div className="flex items-center gap-4 md:gap-6">
             <div className="min-w-0 flex-1">
               <SeparatorLine variant={variant} thickness={thickness} />
             </div>
-            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--mm-text-muted)]">
+            <span className="font-display shrink-0 text-xs font-semibold uppercase tracking-[0.22em] text-[var(--mm-text-muted)]">
               <MarkdownText content={label} mode="inline" as="span" />
             </span>
             <div className="min-w-0 flex-1">

@@ -2,7 +2,7 @@
 
 import { createContext, useContext } from "react";
 import { usePathname } from "next/navigation";
-import { AlertTriangle } from "lucide-react";
+import { EmptyState } from "@/components/shared/empty-state";
 
 export interface PublicPlatformSettings {
   platformName: string;
@@ -50,20 +50,17 @@ export function PlatformSettingsProvider({
 
   if (isMaintenanceMode && !isExcludedRoute) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4 text-center">
-        <div className="mb-4 rounded-full bg-yellow-500/10 p-4">
-          <AlertTriangle className="h-10 w-10 text-yellow-500" />
-        </div>
-        <h1 className="mb-2 text-2xl font-bold tracking-tight">
-          Under Maintenance
-        </h1>
-        <p className="max-w-[500px] text-muted-foreground">
-          We are currently performing scheduled maintenance to improve our
-          platform. Please check back soon.
-        </p>
-        <div className="mt-8 text-sm text-muted-foreground">
-            {settings.platformName}
-        </div>
+      <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
+        <EmptyState
+          tone="maintenance"
+          title="Under maintenance"
+          description="We are currently performing scheduled maintenance to improve our platform. Please check back soon."
+          footer={
+            <div className="text-xs text-muted-foreground">
+              {settings.platformName}
+            </div>
+          }
+        />
       </div>
     );
   }

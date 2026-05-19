@@ -6,8 +6,17 @@
 
 @theme inline {
   /* --- Typography --- */
-  --font-sans: var(--font-geist-sans);
+  /* Body type: Inter (loaded via next/font in apps/web/app/layout.tsx).
+     Display type: Inter Tight for headings and marketing surfaces.
+     System fallback preserved for the brief moment before web fonts swap in. */
+  --font-sans: var(--font-inter), "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-inter-tight), var(--font-inter), "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono);
+
+  /* --- Section rhythm (editorial scale) --- */
+  --mm-section-gap-sm: 4rem;   /* 64px  — mobile-default vertical breathing room */
+  --mm-section-gap-md: 6rem;   /* 96px  — tablet/desktop default for marketing */
+  --mm-section-gap-lg: 8rem;   /* 128px — hero/landing emphasis */
 
   /* --- Semantic color tokens --- */
   --color-background: var(--background);
@@ -66,7 +75,8 @@
 
 /* ===== LIGHT MODE ===== */
 :root {
-  --font-geist-sans: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  /* Note: --font-inter and --font-inter-tight are injected by next/font on <html>
+     (see apps/web/app/layout.tsx). Mono stays on the system stack. */
   --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --radius: 0.75rem;
 
@@ -202,9 +212,12 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Typography scale (per spec: 8pt grid) */
+  /* Typography scale (per spec: 8pt grid). h1 picks up the display family so
+     page titles feel weightier; h2/h3 stay on the body family to keep
+     rendered markdown calm. */
   h1 {
-    @apply text-[2rem] leading-[2.5rem] font-bold tracking-tight;
+    font-family: var(--font-display);
+    @apply text-[2rem] leading-[2.5rem] font-semibold tracking-tight;
   }
   h2 {
     @apply text-[1.5rem] leading-[2rem] font-semibold tracking-tight;
@@ -232,6 +245,65 @@
   .shadow-soft-lg {
     box-shadow: 0 10px 15px -3px oklch(0 0 0 / 0.08), 0 4px 6px -4px oklch(0 0 0 / 0.04);
   }
+  /* Editorial: subtle, large blur, low spread — for marketing surfaces only. */
+  .shadow-editorial {
+    box-shadow:
+      0 1px 2px 0 oklch(0 0 0 / 0.04),
+      0 8px 24px -8px oklch(0 0 0 / 0.04),
+      0 24px 48px -16px oklch(0 0 0 / 0.06);
+  }
+
+  /* Display type — explicit utilities for marketing headings.
+     Use these instead of <h1>/<h2> when you want the editorial scale. */
+  .text-display-xl {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    font-size: clamp(2.5rem, 6vw, 4rem);   /* 40-64px */
+    line-height: 1.05;
+  }
+  .text-display-lg {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-size: clamp(2rem, 4.5vw, 3rem);   /* 32-48px */
+    line-height: 1.1;
+  }
+  .text-display-md {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    font-size: clamp(1.625rem, 3.5vw, 2.25rem); /* 26-36px */
+    line-height: 1.15;
+  }
+  .font-display { font-family: var(--font-display); }
+
+  /* Marketing section rhythm. .mm-section gives a single block the canonical
+     vertical breathing room — narrower on mobile, generous on desktop. */
+  .mm-section {
+    padding-top: var(--mm-section-gap-sm);
+    padding-bottom: var(--mm-section-gap-sm);
+  }
+  @media (min-width: 768px) {
+    .mm-section {
+      padding-top: var(--mm-section-gap-md);
+      padding-bottom: var(--mm-section-gap-md);
+    }
+  }
+  .mm-section-lg {
+    padding-top: var(--mm-section-gap-md);
+    padding-bottom: var(--mm-section-gap-md);
+  }
+  @media (min-width: 768px) {
+    .mm-section-lg {
+      padding-top: var(--mm-section-gap-lg);
+      padding-bottom: var(--mm-section-gap-lg);
+    }
+  }
+
+  /* Editorial prose measure — caps the reading width for long-form text blocks. */
+  .mm-measure { max-width: 65ch; }
+  .mm-measure-wide { max-width: 75ch; }
 
   /* Status badge utilities */
   .status-draft { background-color: var(--muted); color: var(--muted-foreground); }
