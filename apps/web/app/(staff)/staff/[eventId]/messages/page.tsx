@@ -38,11 +38,20 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
   PageHeader,
   EmptyState,
   CardSkeleton,
   AudienceBuilder,
 } from "@/components/shared";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { apiClient } from "@/lib/api";
 import {
   emailDeliveryProgressPercent,
@@ -178,6 +187,7 @@ export default function MessagesPage() {
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [pendingDeleteMessageId, setPendingDeleteMessageId] = useState<string | null>(null);
 
   // Compose dialog
   const [showCompose, setShowCompose] = useState(false);
@@ -437,12 +447,7 @@ export default function MessagesPage() {
     }
   }
 
-  async function deleteMessage(messageId: string) {
-    if (!canDeleteMessages) return;
-    if (!window.confirm("Delete this message? This action cannot be undone.")) {
-      return;
-    }
-
+  async function performDeleteMessage(messageId: string) {
     try {
       await apiClient(`/events/${eventId}/messages/${messageId}`, {
         method: "DELETE",
@@ -458,6 +463,11 @@ export default function MessagesPage() {
     } catch {
       /* handled */
     }
+  }
+
+  function deleteMessage(messageId: string) {
+    if (!canDeleteMessages) return;
+    setPendingDeleteMessageId(messageId);
   }
 
   const announcements = messages.filter((m) => m.type === "ANNOUNCEMENT");
@@ -674,17 +684,21 @@ export default function MessagesPage() {
           </DialogContent>
         </Dialog>
 
-        {/* Compose dialog */}
-        <Dialog open={showCompose} onOpenChange={setShowCompose}>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Compose message</DialogTitle>
-              <DialogDescription>
+        {/* Compose sheet — slides in from the right with more room for the
+            audience builder + body than a centered dialog. */}
+        <Sheet open={showCompose} onOpenChange={setShowCompose}>
+          <SheetContent
+            side="right"
+            className="flex w-full flex-col gap-0 p-0 sm:max-w-xl md:max-w-2xl"
+          >
+            <SheetHeader className="border-b">
+              <SheetTitle>Compose message</SheetTitle>
+              <SheetDescription>
                 Send an announcement or direct message to applicants.
-              </DialogDescription>
-            </DialogHeader>
+              </SheetDescription>
+            </SheetHeader>
 
-            <div className="space-y-4">
+            <div className="flex-1 space-y-4 overflow-y-auto p-4">
               <div className="space-y-2">
                 <Label className="text-sm">Type</Label>
                 <Select
@@ -775,7 +789,7 @@ export default function MessagesPage() {
               </div>
             </div>
 
-            <DialogFooter>
+            <SheetFooter className="flex-row justify-end gap-2 border-t">
               <Button variant="outline" onClick={() => setShowCompose(false)}>
                 Cancel
               </Button>
@@ -787,9 +801,25 @@ export default function MessagesPage() {
                 )}
                 Send
               </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+            </SheetFooter>
+          </SheetContent>
+        </Sheet>
+
+        <ConfirmDialog
+          open={pendingDeleteMessageId !== null}
+          onOpenChange={(open) => {
+            if (!open) setPendingDeleteMessageId(null);
+          }}
+          title="Delete this message?"
+          description="This action cannot be undone."
+          confirmLabel="Delete"
+          variant="destructive"
+          onConfirm={() => {
+            const id = pendingDeleteMessageId;
+            setPendingDeleteMessageId(null);
+            if (id) void performDeleteMessage(id);
+          }}
+        />
       </div>
     </>
   );

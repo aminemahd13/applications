@@ -15,6 +15,7 @@ import {
   uploadMicrositeAsset,
   type MicrositeMediaItem,
 } from "@/lib/microsite-media";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { toast } from "sonner";
 
 type MediaKind = "all" | "image" | "video";
@@ -62,6 +63,8 @@ export function MediaLibraryDialog({
   const [previewItem, setPreviewItem] = useState<MicrositeMediaItem | null>(null);
   const [typeFilter, setTypeFilter] = useState<MediaKind>(kind === "all" ? "all" : kind);
   const [sortMode, setSortMode] = useState<SortMode>("newest");
+  const [pendingDeleteItem, setPendingDeleteItem] =
+    useState<MicrositeMediaItem | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const filtered = useMemo(() => {
@@ -180,6 +183,7 @@ export function MediaLibraryDialog({
   const previewIsVideo = previewItem ? previewItem.mimeType.startsWith("video/") : false;
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[98vw] max-w-[98vw] sm:max-w-[98vw] xl:max-w-[110rem]">
         <DialogHeader>
@@ -344,10 +348,7 @@ export function MediaLibraryDialog({
                           variant="outline"
                           className="h-7 w-7 text-destructive hover:text-destructive"
                           disabled={Boolean(deletingId)}
-                          onClick={() => {
-                            if (!window.confirm("Delete this media file? This cannot be undone.")) return;
-                            void handleDelete(item);
-                          }}
+                          onClick={() => setPendingDeleteItem(item)}
                         >
                           {deletingId === item.id ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -421,5 +422,22 @@ export function MediaLibraryDialog({
         </div>
       </DialogContent>
     </Dialog>
+
+    <ConfirmDialog
+      open={pendingDeleteItem !== null}
+      onOpenChange={(o) => {
+        if (!o) setPendingDeleteItem(null);
+      }}
+      title="Delete this media file?"
+      description="This cannot be undone."
+      confirmLabel="Delete"
+      variant="destructive"
+      onConfirm={() => {
+        const item = pendingDeleteItem;
+        setPendingDeleteItem(null);
+        if (item) void handleDelete(item);
+      }}
+    />
+    </>
   );
 }

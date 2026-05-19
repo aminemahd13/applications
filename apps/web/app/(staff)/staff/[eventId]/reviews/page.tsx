@@ -5,8 +5,6 @@ import { useParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   CheckCircle2,
-  XCircle,
-  AlertTriangle,
   ChevronLeft,
   ChevronRight,
   Filter,
@@ -23,10 +21,7 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -42,24 +37,29 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  PageHeader,
-  EmptyState,
-  CardSkeleton,
-} from "@/components/shared";
+import { PageHeader, EmptyState, CardSkeleton } from "@/components/shared";
 import { apiClient } from "@/lib/api";
 import { useAuth, usePermissions } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { renderAnswerValue } from "@/lib/render-answer-value";
 import { getRequiredFieldKeySet } from "@/lib/file-answer-utils";
 import { Badge } from "@/components/ui/badge";
-import { Permission } from "@event-platform/shared";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { formatRelative, formatExactTimestamp } from "@/lib/relative-time";
+import { Permission, type ReviewQueueStats } from "@event-platform/shared";
 import {
   appendUniqueQueueItems,
   normalizeReviewQueueResponse,
   shouldAutoLoadNext,
   type ReviewQueueResponse,
 } from "@/lib/review-queue-pagination";
+import { QueueStatsBar } from "./queue-stats-bar";
+import { VerdictWorkspace, type VerdictDraft } from "./verdict-workspace";
 
 interface ReviewItem {
   id: string;
@@ -199,10 +199,10 @@ function extractRequestFieldOptions(
   return options;
 }
 
-type ReviewVerdict = "APPROVE" | "REJECT" | "REQUEST_INFO";
 type QueueStatusFilter = "all" | "pending" | "needs_info" | "resubmitted";
 type QueueOwnershipFilter = "any" | "me" | "unassigned";
 const QUEUE_PAGE_LIMIT = 50;
+const AUTO_ADVANCE_STORAGE_PREFIX = "reviewer-auto-advance:";
 
 export default function ReviewsPage() {
   const params = useParams();
@@ -212,6 +212,7 @@ export default function ReviewsPage() {
 
   const [queue, setQueue] = useState<ReviewItem[]>([]);
   const [stepOptions, setStepOptions] = useState<StepOption[]>([]);
+  const [stats, setStats] = useState<ReviewQueueStats | null>(null);
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
   const [selectedViewId, setSelectedViewId] = useState<string>("none");
   const [isLoading, setIsLoading] = useState(true);
@@ -228,17 +229,8 @@ export default function ReviewsPage() {
   const [saveViewName, setSaveViewName] = useState("");
   const [saveAsDefault, setSaveAsDefault] = useState(false);
   const [isSavingView, setIsSavingView] = useState(false);
-
-  // Review dialog state
-  const [showReviewDialog, setShowReviewDialog] = useState(false);
-  const [reviewVerdict, setReviewVerdict] = useState<ReviewVerdict | null>(null);
-  const [reviewComment, setReviewComment] = useState("");
-  const [requestInfoFieldIds, setRequestInfoFieldIds] = useState<string[]>([]);
-  const [requestInfoDeadline, setRequestInfoDeadline] = useState("");
-  const [requestInfoNotifyApplicant, setRequestInfoNotifyApplicant] =
-    useState(true);
-  const [requestInfoSendEmail, setRequestInfoSendEmail] = useState(false);
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const [autoAdvance, setAutoAdvanceState] = useState(false);
   const queueRequestVersionRef = useRef(0);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(false);
@@ -281,10 +273,14 @@ export default function ReviewsPage() {
     }
   }, [eventId, selectedViewId]);
 
-  const loadStepOptions = useCallback(async () => {
-    const res = await apiClient<any>(`/events/${eventId}/review-queue/stats`);
-    const rows = Array.isArray(res?.data?.byStep) ? res.data.byStep : [];
-    const options: StepOption[] = rows.map((row: any) => ({
+  const loadStats = useCallback(async () => {
+    const res = await apiClient<{ data?: ReviewQueueStats }>(
+      `/events/${eventId}/review-queue/stats`,
+    );
+    const data = res?.data ?? null;
+    setStats(data);
+    const rows = Array.isArray(data?.byStep) ? data.byStep : [];
+    const options: StepOption[] = rows.map((row) => ({
       id: String(row.stepId ?? ""),
       title: String(row.stepTitle ?? "Step"),
     }));
@@ -365,14 +361,43 @@ export default function ReviewsPage() {
   useEffect(() => {
     (async () => {
       try {
-        await Promise.all([loadSavedViews(), loadStepOptions()]);
+        await Promise.all([loadSavedViews(), loadStats()]);
       } catch {
         /* handled */
       } finally {
         setIsLoading(false);
       }
     })();
-  }, [loadSavedViews, loadStepOptions]);
+  }, [loadSavedViews, loadStats]);
+
+  // Persist the auto-advance preference per-event. Default OFF on first visit.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const stored = window.localStorage.getItem(
+        `${AUTO_ADVANCE_STORAGE_PREFIX}${eventId}`,
+      );
+      setAutoAdvanceState(stored === "1");
+    } catch {
+      /* storage blocked — leave default OFF */
+    }
+  }, [eventId]);
+
+  const setAutoAdvance = useCallback(
+    (value: boolean) => {
+      setAutoAdvanceState(value);
+      if (typeof window === "undefined") return;
+      try {
+        window.localStorage.setItem(
+          `${AUTO_ADVANCE_STORAGE_PREFIX}${eventId}`,
+          value ? "1" : "0",
+        );
+      } catch {
+        /* storage blocked — preference applies for this tab only */
+      }
+    },
+    [eventId],
+  );
 
   useEffect(() => {
     if (isLoading) return;
@@ -465,24 +490,8 @@ export default function ReviewsPage() {
     setTagFilter((view.filters.tags ?? []).join(", "));
   }
 
-  function openReviewDialog(verdict: ReviewVerdict) {
-    if (!canActOnCurrentItem) {
-      toast.error(
-        "Claim this queue item before reviewing, or use organizer/admin access.",
-      );
-      return;
-    }
-    setReviewVerdict(verdict);
-    setReviewComment("");
-    setRequestInfoFieldIds([]);
-    setRequestInfoDeadline("");
-    setRequestInfoNotifyApplicant(canSendMessages);
-    setRequestInfoSendEmail(false);
-    setShowReviewDialog(true);
-  }
-
-  async function submitReview() {
-    if (!current || !reviewVerdict) return;
+  async function submitReview(draft: VerdictDraft) {
+    if (!current) return;
     if (!canActOnCurrentItem) {
       toast.error(
         "Claim this queue item before reviewing, or use organizer/admin access.",
@@ -497,10 +506,10 @@ export default function ReviewsPage() {
     setIsSubmittingReview(true);
     try {
       const selectedTargetFieldIds =
-        reviewVerdict === "REQUEST_INFO"
+        draft.outcome === "REQUEST_INFO"
           ? Array.from(
               new Set(
-                requestInfoFieldIds.filter((fieldId) =>
+                draft.requestInfoFieldIds.filter((fieldId) =>
                   requestFieldIdSet.has(fieldId),
                 ),
               ),
@@ -511,26 +520,26 @@ export default function ReviewsPage() {
         {
           method: "POST",
           body: {
-            outcome: reviewVerdict,
-            messageToApplicant: reviewComment || undefined,
+            outcome: draft.outcome,
+            messageToApplicant: draft.comment || undefined,
             targetFieldIds:
-              reviewVerdict === "REQUEST_INFO" &&
+              draft.outcome === "REQUEST_INFO" &&
               selectedTargetFieldIds.length > 0
                 ? selectedTargetFieldIds
                 : undefined,
-            deadline: requestInfoDeadline || undefined,
+            deadline: draft.requestInfoDeadline || undefined,
           },
           csrfToken: csrfToken ?? undefined,
         },
       );
 
       if (
-        reviewVerdict === "REQUEST_INFO" &&
-        requestInfoNotifyApplicant &&
+        draft.outcome === "REQUEST_INFO" &&
+        draft.requestInfoNotifyApplicant &&
         canSendMessages
       ) {
         const fallbackMessage =
-          reviewComment.trim() ||
+          draft.comment.trim() ||
           `Please review and update the requested fields for ${current.stepTitle}.`;
         try {
           await apiClient(`/events/${eventId}/messages`, {
@@ -550,7 +559,7 @@ export default function ReviewsPage() {
               recipientFilter: {
                 applicationIds: [current.applicationId],
               },
-              sendEmail: requestInfoSendEmail,
+              sendEmail: draft.requestInfoSendEmail,
             },
             csrfToken: csrfToken ?? undefined,
           });
@@ -560,9 +569,9 @@ export default function ReviewsPage() {
       }
 
       toast.success(
-        reviewVerdict === "APPROVE"
+        draft.outcome === "APPROVE"
           ? "Step approved"
-          : reviewVerdict === "REJECT"
+          : draft.outcome === "REJECT"
             ? "Step rejected"
             : "Revision requested",
       );
@@ -576,11 +585,16 @@ export default function ReviewsPage() {
         if (nextLength <= 0) return 0;
         return Math.min(prev, nextLength - 1);
       });
+      // Refresh queue counts after every successful verdict so the stats bar
+      // (and the staff sidebar badge in PR B1) stay in sync.
+      void loadStats();
+      if (autoAdvance) {
+        void goNext();
+      }
     } catch {
       /* handled */
     } finally {
       setIsSubmittingReview(false);
-      setShowReviewDialog(false);
     }
   }
 
@@ -628,6 +642,7 @@ export default function ReviewsPage() {
         if (nextLength <= 0) return 0;
         return Math.min(prev, nextLength - 1);
       });
+      void loadStats();
       toast.success("Queue item claimed.");
     } catch {
       /* handled */
@@ -681,6 +696,7 @@ export default function ReviewsPage() {
         if (nextLength <= 0) return 0;
         return Math.min(prev, nextLength - 1);
       });
+      void loadStats();
       toast.success("Queue item released to shared pool.");
     } catch {
       /* handled */
@@ -713,6 +729,13 @@ export default function ReviewsPage() {
     }
   }
 
+  const nextPreview = useMemo(() => {
+    const next = queue[currentIndex + 1];
+    if (!next) return null;
+    const title = next.applicantName ?? next.applicantEmail;
+    return { title, subtitle: next.stepTitle };
+  }, [queue, currentIndex]);
+
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -725,8 +748,15 @@ export default function ReviewsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        eyebrow="Event · Reviews"
         title="Review Queue"
         description={`${queue.length}${hasMore ? "+" : ""} submissions awaiting review`}
+      />
+
+      <QueueStatsBar
+        stats={stats}
+        loading={isLoading}
+        scope={ownershipFilter === "me" ? "me" : "any"}
       />
 
       <div className="grid gap-3 lg:grid-cols-6">
@@ -884,15 +914,29 @@ export default function ReviewsPage() {
                         )}
                       {current.queueMode === "direct" &&
                         current.assignmentExpiresAt && (
-                          <Badge
-                            variant={current.isOverdue ? "destructive" : "outline"}
-                          >
-                            {current.isOverdue
-                              ? "Assignment overdue"
-                              : `Expires ${new Date(
+                          <TooltipProvider delayDuration={200}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant={
+                                    current.isOverdue
+                                      ? "destructive"
+                                      : "outline"
+                                  }
+                                  className="cursor-default"
+                                >
+                                  {current.isOverdue
+                                    ? `Overdue by ${formatRelative(current.assignmentExpiresAt).replace(/^overdue by /, "")}`
+                                    : `Expires ${formatRelative(current.assignmentExpiresAt)}`}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {formatExactTimestamp(
                                   current.assignmentExpiresAt,
-                                ).toLocaleString("en-GB")}`}
-                          </Badge>
+                                )}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
                         )}
                       {(current.tags ?? []).slice(0, 4).map((tag) => (
                         <Badge
@@ -975,68 +1019,21 @@ export default function ReviewsPage() {
           </div>
 
           <div className="space-y-4 lg:col-span-2">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm">Review actions</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="rounded-md border border-border/60 p-3">
-                  {current.queueMode === "shared" ? (
-                    <Button
-                      className="w-full justify-start"
-                      variant="outline"
-                      onClick={claimCurrentItem}
-                    >
-                      Claim
-                    </Button>
-                  ) : isCurrentAssignedToActor ? (
-                    <Button
-                      className="w-full justify-start"
-                      variant="ghost"
-                      onClick={releaseCurrentItem}
-                    >
-                      Release to shared
-                    </Button>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">
-                      This item is directly assigned to another reviewer.
-                    </p>
-                  )}
-                </div>
-                <Button
-                  className="w-full justify-start"
-                  variant="outline"
-                  onClick={() => openReviewDialog("APPROVE")}
-                  disabled={!canActOnCurrentItem}
-                >
-                  <CheckCircle2 className="mr-2 h-4 w-4 text-success" />
-                  Approve
-                </Button>
-                <Button
-                  className="w-full justify-start"
-                  variant="outline"
-                  onClick={() => openReviewDialog("REQUEST_INFO")}
-                  disabled={!canActOnCurrentItem}
-                >
-                  <AlertTriangle className="mr-2 h-4 w-4 text-warning" />
-                  Request revision
-                </Button>
-                <Button
-                  className="w-full justify-start"
-                  variant="outline"
-                  onClick={() => openReviewDialog("REJECT")}
-                  disabled={!canActOnCurrentItem}
-                >
-                  <XCircle className="mr-2 h-4 w-4 text-destructive" />
-                  Reject
-                </Button>
-                {!canActOnCurrentItem && (
-                  <p className="text-xs text-muted-foreground">
-                    Claim this item to unlock review decisions.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
+            <VerdictWorkspace
+              currentItemId={current.id}
+              currentQueueMode={current.queueMode}
+              canActOnCurrentItem={canActOnCurrentItem}
+              isCurrentAssignedToActor={isCurrentAssignedToActor}
+              canSendMessages={canSendMessages}
+              requestFieldOptions={requestFieldOptions}
+              onClaim={claimCurrentItem}
+              onRelease={releaseCurrentItem}
+              onSubmit={submitReview}
+              isSubmittingReview={isSubmittingReview}
+              autoAdvance={autoAdvance}
+              setAutoAdvance={setAutoAdvance}
+              nextPreview={nextPreview}
+            />
           </div>
         </div>
       ) : null}
@@ -1082,186 +1079,6 @@ export default function ReviewsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showReviewDialog} onOpenChange={setShowReviewDialog}>
-        <DialogContent className="w-[calc(100vw-2rem)] max-w-lg overflow-x-hidden">
-          <DialogHeader>
-            <DialogTitle>
-              {reviewVerdict === "APPROVE"
-                ? "Approve submission"
-                : reviewVerdict === "REJECT"
-                  ? "Reject submission"
-                  : "Request revision"}
-            </DialogTitle>
-            <DialogDescription>
-              {reviewVerdict === "REQUEST_INFO"
-                ? "Specify fields that need revision and an optional deadline."
-                : "Add an optional comment."}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label className="text-sm">
-                {reviewVerdict === "REQUEST_INFO"
-                  ? "Message to applicant"
-                  : "Comment (optional)"}
-              </Label>
-              <Textarea
-                value={reviewComment}
-                onChange={(e) => setReviewComment(e.target.value)}
-                placeholder={
-                  reviewVerdict === "REQUEST_INFO"
-                    ? "Explain what needs to be updated..."
-                    : "Add a review comment..."
-                }
-                rows={3}
-              />
-            </div>
-            {reviewVerdict === "REQUEST_INFO" && (
-              <>
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Label className="text-sm">Fields to revise</Label>
-                    {requestFieldOptions.length > 0 && (
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            setRequestInfoFieldIds(
-                              requestFieldOptions.map((field) => field.id),
-                            )
-                          }
-                        >
-                          Select all
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setRequestInfoFieldIds([])}
-                        >
-                          Clear
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                  <div className="max-h-48 space-y-2 overflow-y-auto overflow-x-hidden rounded-lg border border-muted/40 p-3">
-                    {requestFieldOptions.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">
-                        No fields available for this step. Leave this empty to
-                        request a full-step revision.
-                      </p>
-                    ) : (
-                      requestFieldOptions.map((field) => (
-                        <label
-                          key={field.id}
-                          className="flex min-w-0 items-start gap-2 text-sm"
-                        >
-                          <Checkbox
-                            className="shrink-0"
-                            checked={requestInfoFieldIds.includes(field.id)}
-                            onCheckedChange={(checked) => {
-                              const isChecked = checked === true;
-                              setRequestInfoFieldIds((prev) =>
-                                isChecked
-                                  ? Array.from(new Set([...prev, field.id]))
-                                  : prev.filter((id) => id !== field.id),
-                              );
-                            }}
-                          />
-                          <span className="min-w-0 break-words">
-                            {field.label}
-                            {field.section && (
-                              <span className="block break-words text-xs text-muted-foreground">
-                                {field.section}
-                              </span>
-                            )}
-                          </span>
-                        </label>
-                      ))
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Leave empty to request a full-step revision.
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-sm">Deadline (optional)</Label>
-                  <Input
-                    type="date"
-                    value={requestInfoDeadline}
-                    onChange={(e) => setRequestInfoDeadline(e.target.value)}
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <Label className="text-sm">Notify applicant</Label>
-                    <p className="text-xs text-muted-foreground break-words">
-                      Send an inbox message with a direct link to the step.
-                    </p>
-                  </div>
-                  <Switch
-                    className="shrink-0"
-                    checked={requestInfoNotifyApplicant}
-                    onCheckedChange={(checked) => {
-                      const enabled = Boolean(checked);
-                      setRequestInfoNotifyApplicant(enabled);
-                      if (!enabled) {
-                        setRequestInfoSendEmail(false);
-                      }
-                    }}
-                    disabled={!canSendMessages}
-                  />
-                </div>
-                {requestInfoNotifyApplicant && (
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <Label className="text-sm">Also send email</Label>
-                      <p className="text-xs text-muted-foreground break-words">
-                        Deliver the revision request via email.
-                      </p>
-                    </div>
-                    <Switch
-                      className="shrink-0"
-                      checked={requestInfoSendEmail}
-                      onCheckedChange={(checked) =>
-                        setRequestInfoSendEmail(Boolean(checked))
-                      }
-                      disabled={!canSendMessages}
-                    />
-                  </div>
-                )}
-                {!canSendMessages && (
-                  <p className="text-xs text-muted-foreground">
-                    You do not have permission to send applicant messages.
-                  </p>
-                )}
-              </>
-            )}
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowReviewDialog(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={submitReview}
-              disabled={isSubmittingReview}
-              variant={reviewVerdict === "REJECT" ? "destructive" : "default"}
-            >
-              {isSubmittingReview && (
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              )}
-              {reviewVerdict === "APPROVE"
-                ? "Approve"
-                : reviewVerdict === "REJECT"
-                  ? "Reject"
-                  : "Request revision"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

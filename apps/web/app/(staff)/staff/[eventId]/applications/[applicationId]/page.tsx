@@ -848,6 +848,9 @@ export default function ApplicationDetailPage() {
   const [isClearingNotes, setIsClearingNotes] = useState(false);
   const [isUnpublishing, setIsUnpublishing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [pendingDeleteNeedsInfoId, setPendingDeleteNeedsInfoId] = useState<
+    string | null
+  >(null);
   const [isDeletingApplication, setIsDeletingApplication] = useState(false);
 
   // Messages state
@@ -1656,11 +1659,7 @@ export default function ApplicationDetailPage() {
     }
   }
 
-  async function deleteNeedsInfo(needsInfoId: string) {
-    if (!canDeleteNeedsInfo) return;
-    if (!window.confirm("Delete this needs-info request?")) {
-      return;
-    }
+  async function performDeleteNeedsInfo(needsInfoId: string) {
     try {
       await apiClient(`/events/${eventId}/needs-info/${needsInfoId}`, {
         method: "DELETE",
@@ -1672,6 +1671,11 @@ export default function ApplicationDetailPage() {
     } catch {
       /* handled */
     }
+  }
+
+  function deleteNeedsInfo(needsInfoId: string) {
+    if (!canDeleteNeedsInfo) return;
+    setPendingDeleteNeedsInfoId(needsInfoId);
   }
 
   function openFieldPatchEditor(
@@ -3410,6 +3414,21 @@ export default function ApplicationDetailPage() {
         confirmLabel="Publish"
         onConfirm={publishDecision}
         variant="destructive"
+      />
+
+      <ConfirmDialog
+        open={pendingDeleteNeedsInfoId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteNeedsInfoId(null);
+        }}
+        title="Delete this needs-info request?"
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={() => {
+          const id = pendingDeleteNeedsInfoId;
+          setPendingDeleteNeedsInfoId(null);
+          if (id) void performDeleteNeedsInfo(id);
+        }}
       />
     </motion.div>
   );

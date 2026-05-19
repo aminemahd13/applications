@@ -30,6 +30,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { PageHeader, EmptyState, CardSkeleton } from "@/components/shared";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { apiClient } from "@/lib/api";
 import {
   emailDeliveryProgressPercent,
@@ -232,6 +233,9 @@ export default function AdminAnnouncementsPage() {
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [pendingDeleteAnnouncementId, setPendingDeleteAnnouncementId] = useState<
+    string | null
+  >(null);
 
   // Compose
   const [showCompose, setShowCompose] = useState(false);
@@ -423,8 +427,7 @@ export default function AdminAnnouncementsPage() {
     }
   }
 
-  async function deleteAnnouncement(id: string) {
-    if (!window.confirm("Delete this announcement? This action cannot be undone.")) return;
+  async function performDeleteAnnouncement(id: string) {
     try {
       await apiClient(`/admin/announcements/${id}`, {
         method: "DELETE",
@@ -438,6 +441,10 @@ export default function AdminAnnouncementsPage() {
     } catch {
       toast.error("Could not delete announcement");
     }
+  }
+
+  function deleteAnnouncement(id: string) {
+    setPendingDeleteAnnouncementId(id);
   }
 
   const fullBody = resolveMessageBody(announcementDetail?.bodyText, announcementDetail?.bodyRich);
@@ -826,6 +833,22 @@ export default function AdminAnnouncementsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={pendingDeleteAnnouncementId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteAnnouncementId(null);
+        }}
+        title="Delete this announcement?"
+        description="This action cannot be undone."
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={() => {
+          const id = pendingDeleteAnnouncementId;
+          setPendingDeleteAnnouncementId(null);
+          if (id) void performDeleteAnnouncement(id);
+        }}
+      />
     </div>
   );
 }

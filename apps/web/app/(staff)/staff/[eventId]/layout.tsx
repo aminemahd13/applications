@@ -39,6 +39,8 @@ export default function StaffLayout({
   const pathname = usePathname();
   const eventId = params.eventId as string;
   const [event, setEvent] = useState<EventInfo | null>(null);
+  const [pendingReviews, setPendingReviews] = useState(0);
+  const [unreadMessages, setUnreadMessages] = useState(0);
   const { hasPermission } = usePermissions(eventId);
 
   // Redirect non-staff, non-admin users away from staff pages
@@ -80,6 +82,52 @@ export default function StaffLayout({
     })();
   }, [eventId, hasPermission]);
 
+  // Surface unread review backlog as a sidebar badge for reviewers.
+  useEffect(() => {
+    if (!hasPermission("event.step.review")) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiClient<{
+          data?: { totals?: { pendingReview?: number } };
+        }>(`/events/${eventId}/review-queue/stats`);
+        if (!cancelled) {
+          setPendingReviews(res?.data?.totals?.pendingReview ?? 0);
+        }
+      } catch {
+        /* silent — badge stays at 0 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [eventId, hasPermission, pathname]);
+
+  // Event-scoped unread inbox count for the Messages tab. The /me/inbox
+  // endpoint accepts `eventId` (see InboxQuerySchema in
+  // packages/shared/dtos/messages.dto.ts).
+  useEffect(() => {
+    if (!hasPermission("event.messages.read")) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiClient<{ data?: Array<{ id: string }> }>(
+          `/me/inbox?limit=100&unreadOnly=true&eventId=${encodeURIComponent(
+            eventId,
+          )}`,
+        );
+        if (!cancelled) {
+          setUnreadMessages(res?.data?.length ?? 0);
+        }
+      } catch {
+        /* silent */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [eventId, hasPermission, pathname]);
+
   const base = `/staff/${eventId}`;
   const canManageMicrosite =
     hasPermission("event.microsite.manage") ||
@@ -101,6 +149,7 @@ export default function StaffLayout({
           label: "Reviews",
           href: `${base}/reviews`,
           icon: ClipboardCheck,
+          badge: pendingReviews > 0 ? pendingReviews : undefined,
           visible: hasPermission("event.step.review"),
         },
         {
@@ -113,6 +162,7 @@ export default function StaffLayout({
           label: "Messages",
           href: `${base}/messages`,
           icon: MessageSquare,
+          badge: unreadMessages > 0 ? unreadMessages : undefined,
           visible: hasPermission("event.messages.read"),
         },
         {
