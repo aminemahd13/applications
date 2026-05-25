@@ -50,8 +50,10 @@ export class EventArchivalService {
       );
     }
 
-    if (event.is_system_site && body.archive) {
-      throw new ConflictException('Cannot archive a System Site');
+    if (event.is_system_site && (body.archive || destructive)) {
+      throw new ConflictException(
+        'Cannot archive, delete, or purge data for a System Site',
+      );
     }
 
     // 1) Status — archive (if requested and not already archived)
@@ -102,6 +104,47 @@ export class EventArchivalService {
       event: { id: eventId, status: updatedStatus },
       microsite: { policyApplied: body.micrositePolicy, publishedVersion },
       job,
+    };
+  }
+
+  async getCloseImpact(eventId: string): Promise<{
+    applications: number;
+    files: number;
+    fileBytes: number;
+    submissionVersions: number;
+    drafts: number;
+    issuedCertificates: number;
+  }> {
+    const event = await this.prisma.events.findUnique({
+      where: { id: eventId },
+      select: { id: true },
+    });
+    if (!event) throw new NotFoundException('Event not found');
+
+    const [applications, files, fileBytesAgg, submissionVersions, drafts, issuedCertificates] =
+      await Promise.all([
+        this.prisma.applications.count({ where: { event_id: eventId } }),
+        this.prisma.file_objects.count({ where: { event_id: eventId } }),
+        this.prisma.file_objects.aggregate({
+          where: { event_id: eventId },
+          _sum: { size_bytes: true },
+        }),
+        this.prisma.step_submission_versions.count({
+          where: { applications: { event_id: eventId } },
+        }),
+        this.prisma.step_drafts.count({
+          where: { applications: { event_id: eventId } },
+        }),
+        this.prisma.issued_certificates.count({ where: { event_id: eventId } }),
+      ]);
+
+    return {
+      applications,
+      files,
+      fileBytes: Number(fileBytesAgg._sum.size_bytes ?? 0n),
+      submissionVersions,
+      drafts,
+      issuedCertificates,
     };
   }
 

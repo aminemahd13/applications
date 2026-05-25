@@ -88,6 +88,14 @@ export default function SettingsPage() {
     exists: boolean;
     publishedVersion: number;
   }>({ exists: false, publishedVersion: 0 });
+  const [latestJob, setLatestJob] = useState<{
+    status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+    purgePolicy: "NONE" | "PURGE_FILES_AND_ANSWERS";
+    requestedAt: string;
+    completedAt: string | null;
+    filesDeleted: number;
+    filesTotal: number;
+  } | null>(null);
   const [closeOpen, setCloseOpen] = useState(false);
 
   const loadEvent = useCallback(async () => {
@@ -118,6 +126,35 @@ export default function SettingsPage() {
       });
     } catch (err) {
       console.error("Failed to load event settings:", err);
+    }
+  }, [eventId]);
+
+  const loadLatestJob = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/v1/admin/events/${eventId}/archival-job/latest`,
+        { credentials: "include" },
+      );
+      if (!res.ok) {
+        setLatestJob(null);
+        return;
+      }
+      const payload = await res.json();
+      const job = payload?.data;
+      if (!job) {
+        setLatestJob(null);
+        return;
+      }
+      setLatestJob({
+        status: job.status,
+        purgePolicy: job.purgePolicy,
+        requestedAt: job.requestedAt,
+        completedAt: job.completedAt,
+        filesDeleted: job.filesDeleted ?? 0,
+        filesTotal: job.filesTotal ?? 0,
+      });
+    } catch {
+      setLatestJob(null);
     }
   }, [eventId]);
 
@@ -153,6 +190,10 @@ export default function SettingsPage() {
   useEffect(() => {
     void loadMicrosite();
   }, [loadMicrosite]);
+
+  useEffect(() => {
+    void loadLatestJob();
+  }, [loadLatestJob]);
 
   async function handleSave() {
     if (!settings) return;
@@ -365,17 +406,58 @@ export default function SettingsPage() {
                 stay QR-verifiable.
               </p>
             </div>
-            {rawStatus === "archived" && (
-              <Badge variant="secondary">Archived</Badge>
-            )}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {rawStatus === "archived" && (
+                <Badge variant="secondary">Archived</Badge>
+              )}
+              {micrositeInfo.exists ? (
+                <Badge variant={micrositeInfo.publishedVersion > 0 ? "secondary" : "outline"}>
+                  {micrositeInfo.publishedVersion > 0
+                    ? `Microsite v${micrositeInfo.publishedVersion}`
+                    : "Microsite unpublished"}
+                </Badge>
+              ) : (
+                <Badge variant="outline">No microsite</Badge>
+              )}
+              {latestJob && latestJob.purgePolicy === "PURGE_FILES_AND_ANSWERS" && (
+                <Badge
+                  variant={
+                    latestJob.status === "COMPLETED"
+                      ? "secondary"
+                      : latestJob.status === "FAILED"
+                        ? "destructive"
+                        : "default"
+                  }
+                >
+                  {latestJob.status === "COMPLETED"
+                    ? "Data purged"
+                    : latestJob.status === "FAILED"
+                      ? "Purge failed"
+                      : `Purging ${latestJob.filesDeleted}/${latestJob.filesTotal || "?"}`}
+                </Badge>
+              )}
+            </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          {latestJob && (
+            <p className="text-xs text-muted-foreground tabular-nums">
+              Last close action requested{" "}
+              {new Date(latestJob.requestedAt).toLocaleString("en-GB")}
+              {latestJob.completedAt
+                ? ` · completed ${new Date(latestJob.completedAt).toLocaleString("en-GB")}`
+                : ""}
+            </p>
+          )}
           <Button
             variant="outline"
             onClick={() => setCloseOpen(true)}
           >
-            Open close-event wizard
+            {latestJob && (latestJob.status === "PENDING" || latestJob.status === "RUNNING")
+              ? "View close progress"
+              : rawStatus === "archived"
+                ? "Manage closed event"
+                : "Open close-event wizard"}
           </Button>
         </CardContent>
       </Card>
@@ -394,6 +476,7 @@ export default function SettingsPage() {
         onCompleted={() => {
           void loadEvent();
           void loadMicrosite();
+          void loadLatestJob();
         }}
       />
     </div>

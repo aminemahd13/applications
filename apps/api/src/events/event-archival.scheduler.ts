@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { ClsService } from 'nestjs-cls';
 import { ArchivalJobStatus, PurgePolicy } from '@event-platform/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { StorageService } from '../common/storage/storage.service';
@@ -14,6 +15,7 @@ export class EventArchivalScheduler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly cls: ClsService,
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -27,7 +29,13 @@ export class EventArchivalScheduler {
       });
       if (!job) return;
 
-      await this.processJob(job.id, job.event_id);
+      // Set the audit-log actor to whoever requested this archival job so
+      // the file/submission purge writes are attributable in audit_logs
+      // instead of showing actor_user_id=null for background work.
+      await this.cls.run(async () => {
+        this.cls.set('actorId', job.requested_by_user_id);
+        await this.processJob(job.id, job.event_id);
+      });
     } catch (error) {
       this.logger.error(
         'Archival sweep failed',

@@ -42,6 +42,13 @@ export class EventArchivalController {
     return { data: job };
   }
 
+  @Get('events/:eventId/close-impact')
+  @RequirePermission(Permission.ADMIN_EVENTS_MANAGE)
+  async getCloseImpact(@Param('eventId') eventId: string) {
+    const data = await this.service.getCloseImpact(eventId);
+    return { data };
+  }
+
   @Get('users/:userId/applications')
   @RequirePermission(Permission.ADMIN_SEARCH_GLOBAL)
   async getUserApplications(@Param('userId') userId: string) {

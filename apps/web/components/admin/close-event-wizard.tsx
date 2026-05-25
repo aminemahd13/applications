@@ -83,6 +83,14 @@ export function CloseEventWizard({
   const [submitting, setSubmitting] = useState(false);
   const [job, setJob] = useState<ArchivalJob | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
+  const [impact, setImpact] = useState<{
+    applications: number;
+    files: number;
+    fileBytes: number;
+    submissionVersions: number;
+    drafts: number;
+    issuedCertificates: number;
+  } | null>(null);
 
   const isAlreadyArchived = event.status === "archived";
 
@@ -102,18 +110,36 @@ export function CloseEventWizard({
     setConfirmSlug("");
     setJob(null);
     setPollError(null);
+    setImpact(null);
 
     let cancelled = false;
     (async () => {
       try {
-        const res = await apiClient<{ data: ArchivalJob | null }>(
-          `/admin/events/${event.id}/archival-job/latest`,
-        );
+        const [jobRes, impactRes] = await Promise.allSettled([
+          apiClient<{ data: ArchivalJob | null }>(
+            `/admin/events/${event.id}/archival-job/latest`,
+          ),
+          apiClient<{
+            data: {
+              applications: number;
+              files: number;
+              fileBytes: number;
+              submissionVersions: number;
+              drafts: number;
+              issuedCertificates: number;
+            };
+          }>(`/admin/events/${event.id}/close-impact`),
+        ]);
         if (cancelled) return;
-        const latest = res.data ?? null;
-        if (latest && (latest.status === "PENDING" || latest.status === "RUNNING")) {
-          setJob(latest);
-          setStep("progress");
+        if (jobRes.status === "fulfilled") {
+          const latest = jobRes.value.data ?? null;
+          if (latest && (latest.status === "PENDING" || latest.status === "RUNNING")) {
+            setJob(latest);
+            setStep("progress");
+          }
+        }
+        if (impactRes.status === "fulfilled") {
+          setImpact(impactRes.value.data ?? null);
         }
       } catch {
         /* ignore — fresh wizard is fine if probe fails */
@@ -167,9 +193,10 @@ export function CloseEventWizard({
         // No purge job — flow is done synchronously.
         onCompleted?.();
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to close event";
-      toast.error(message);
+    } catch {
+      // apiClient already surfaces a toast on error; nothing to add here.
+      // We deliberately don't change the wizard step on failure so the
+      // admin can adjust their choices and re-submit.
     } finally {
       setSubmitting(false);
     }
@@ -288,6 +315,20 @@ export function CloseEventWizard({
 
         {step === "data" && (
           <div className="space-y-4">
+            {impact && (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground tabular-nums">
+                Scope: <strong className="text-foreground">{impact.applications}</strong> application
+                {impact.applications === 1 ? "" : "s"} ·{" "}
+                <strong className="text-foreground">{impact.files}</strong> file
+                {impact.files === 1 ? "" : "s"} (
+                {formatBytes(impact.fileBytes)}) ·{" "}
+                <strong className="text-foreground">{impact.submissionVersions}</strong>{" "}
+                submission{impact.submissionVersions === 1 ? "" : "s"} ·{" "}
+                <strong className="text-foreground">{impact.drafts}</strong> draft
+                {impact.drafts === 1 ? "" : "s"}. Certificates issued (
+                {impact.issuedCertificates}) are always kept.
+              </div>
+            )}
             <RadioGroup
               value={purgePolicy}
               onValueChange={(v) => setPurgePolicy(v as PurgePolicy)}
@@ -334,7 +375,9 @@ export function CloseEventWizard({
                 value={
                   purgePolicy === "NONE"
                     ? "Keep all"
-                    : "Purge files + raw answers"
+                    : impact
+                      ? `Purge ${impact.files} file${impact.files === 1 ? "" : "s"} (${formatBytes(impact.fileBytes)}) + ${impact.submissionVersions} submission${impact.submissionVersions === 1 ? "" : "s"}`
+                      : "Purge files + raw answers"
                 }
                 emphasis={purgePolicy !== "NONE"}
               />
@@ -497,6 +540,18 @@ export function CloseEventWizard({
       </DialogContent>
     </Dialog>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 function ChoiceCard({
