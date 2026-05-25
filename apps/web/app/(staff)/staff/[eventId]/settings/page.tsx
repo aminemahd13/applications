@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Save, Loader2, Calendar, MapPin, Users, Globe, ClipboardCheck, QrCode } from "lucide-react";
+import { Save, Loader2, Calendar, MapPin, Users, Globe, ClipboardCheck, QrCode, ArchiveX } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +10,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
 import { PageHeader, FormSkeleton } from "@/components/shared";
+import { CloseEventWizard } from "@/components/admin/close-event-wizard";
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
@@ -81,39 +83,76 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<EventSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [rawStatus, setRawStatus] = useState<string>("draft");
+  const [micrositeInfo, setMicrositeInfo] = useState<{
+    exists: boolean;
+    publishedVersion: number;
+  }>({ exists: false, publishedVersion: 0 });
+  const [closeOpen, setCloseOpen] = useState(false);
+
+  const loadEvent = useCallback(async () => {
+    try {
+      const res = await apiClient<any>(`/admin/events/${eventId}`);
+      const raw: any = res?.data ?? res;
+      setRawStatus(String(raw.status ?? "draft").toLowerCase());
+      setSettings({
+        name: raw.title ?? raw.name ?? "",
+        slug: raw.slug ?? "",
+        description: raw.description ?? "",
+        location: raw.venueName ?? raw.location ?? "",
+        startDate: toLocalDateTimeInput(raw.startAt ?? raw.startDate),
+        endDate: toLocalDateTimeInput(raw.endAt ?? raw.endDate),
+        applicationDeadline: toLocalDateTimeInput(
+          raw.applicationsCloseAt ??
+            raw.applicationCloseAt ??
+            raw.applicationDeadline
+        ),
+        applicationsOpenAt: toLocalDateTimeInput(
+          raw.applicationsOpenAt ?? raw.applicationOpenAt
+        ),
+        capacity: raw.capacity,
+        isPublished: raw.status === "PUBLISHED" || raw.status === "published" || raw.isPublished === true,
+        requiresEmailVerification: raw.requiresEmailVerification ?? false,
+        decisionConfig: raw.decisionConfig ?? {},
+        checkinConfig: normalizeCheckinConfig(raw.checkinConfig ?? {}),
+      });
+    } catch (err) {
+      console.error("Failed to load event settings:", err);
+    }
+  }, [eventId]);
+
+  // Probe microsite via raw fetch — apiClient auto-toasts on non-OK and
+  // users without EVENT_MICROSITE_MANAGE_SETTINGS legitimately see 403 here.
+  const loadMicrosite = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/v1/admin/events/${eventId}/microsite`, {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        setMicrositeInfo({ exists: false, publishedVersion: 0 });
+        return;
+      }
+      const payload = await res.json();
+      const ms = payload?.data ?? payload;
+      setMicrositeInfo({
+        exists: !!ms,
+        publishedVersion: ms?.publishedVersion ?? ms?.published_version ?? 0,
+      });
+    } catch {
+      setMicrositeInfo({ exists: false, publishedVersion: 0 });
+    }
+  }, [eventId]);
 
   useEffect(() => {
     (async () => {
-      try {
-        const res = await apiClient<any>(`/admin/events/${eventId}`);
-        const raw: any = res?.data ?? res;
-        setSettings({
-          name: raw.title ?? raw.name ?? "",
-          slug: raw.slug ?? "",
-          description: raw.description ?? "",
-          location: raw.venueName ?? raw.location ?? "",
-          startDate: toLocalDateTimeInput(raw.startAt ?? raw.startDate),
-          endDate: toLocalDateTimeInput(raw.endAt ?? raw.endDate),
-          applicationDeadline: toLocalDateTimeInput(
-            raw.applicationsCloseAt ??
-              raw.applicationCloseAt ??
-              raw.applicationDeadline
-          ),
-          applicationsOpenAt: toLocalDateTimeInput(
-            raw.applicationsOpenAt ?? raw.applicationOpenAt
-          ),
-          capacity: raw.capacity,
-          isPublished: raw.status === "PUBLISHED" || raw.status === "published" || raw.isPublished === true,
-          requiresEmailVerification: raw.requiresEmailVerification ?? false,
-          decisionConfig: raw.decisionConfig ?? {},
-          checkinConfig: normalizeCheckinConfig(raw.checkinConfig ?? {}),
-        });
-      } catch (err) {
-        console.error("Failed to load event settings:", err);
-      }
-      finally { setIsLoading(false); }
+      await loadEvent();
+      setIsLoading(false);
     })();
-  }, [eventId]);
+  }, [loadEvent]);
+
+  useEffect(() => {
+    void loadMicrosite();
+  }, [loadMicrosite]);
 
   async function handleSave() {
     if (!settings) return;
@@ -311,6 +350,52 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      <Card className="border-destructive/30">
+        <CardHeader>
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <CardTitle className="text-base flex items-center gap-2">
+                <ArchiveX className="h-4 w-4 text-destructive" />
+                Close event
+              </CardTitle>
+              <p className="text-xs text-muted-foreground max-w-prose">
+                Run when the event is over. Archive it, decide what to do with
+                the microsite, and optionally purge applicant data. Certificates
+                stay QR-verifiable.
+              </p>
+            </div>
+            {rawStatus === "archived" && (
+              <Badge variant="secondary">Archived</Badge>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          <Button
+            variant="outline"
+            onClick={() => setCloseOpen(true)}
+          >
+            Open close-event wizard
+          </Button>
+        </CardContent>
+      </Card>
+
+      <CloseEventWizard
+        open={closeOpen}
+        onOpenChange={setCloseOpen}
+        event={{
+          id: eventId,
+          slug: settings.slug,
+          title: settings.name,
+          status: rawStatus,
+          micrositeExists: micrositeInfo.exists,
+          micrositePublishedVersion: micrositeInfo.publishedVersion,
+        }}
+        onCompleted={() => {
+          void loadEvent();
+          void loadMicrosite();
+        }}
+      />
     </div>
   );
 }

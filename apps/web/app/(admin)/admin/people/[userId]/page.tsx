@@ -23,6 +23,7 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog, PageHeader } from "@/components/shared";
+import { ApplicationsHistoryTab } from "@/components/admin/applications-history-tab";
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
@@ -829,6 +830,8 @@ export default function AdminUserDetailPage() {
               )}
             </CardContent>
           </Card>
+
+          <ApplicationsHistoryTab userId={user.id} />
         </div>
       </div>
 

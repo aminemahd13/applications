@@ -50,7 +50,7 @@ model admin_change_patches {
 }
 
 model applicant_profiles {
-  user_id         String   @id @db.Uuid
+  user_id         String    @id @db.Uuid
   full_name       String?
   first_name      String?
   last_name       String?
@@ -104,7 +104,7 @@ model applications {
   events                                         events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   attendance_records                             attendance_records?
   completion_credentials                         completion_credentials?
-  issued_certificates                           issued_certificates[]
+  issued_certificates                            issued_certificates[]
   checkin_records                                checkin_records[]
   needs_info_requests                            needs_info_requests[]
   step_drafts                                    step_drafts[]
@@ -169,38 +169,38 @@ model checkin_records {
 }
 
 model completion_credentials {
-  application_id        String    @id @db.Uuid
-  event_id              String    @db.Uuid
-  certificate_id        String    @unique @db.Uuid
-  credential_id         String    @unique @db.Uuid
-  credential_signature  String
-  issued_at             DateTime  @db.Timestamptz(6)
-  revoked_at            DateTime? @db.Timestamptz(6)
-  created_at            DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at            DateTime  @default(now()) @db.Timestamptz(6)
-  applications          applications @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  events                events      @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  application_id       String       @id @db.Uuid
+  event_id             String       @db.Uuid
+  certificate_id       String       @unique @db.Uuid
+  credential_id        String       @unique @db.Uuid
+  credential_signature String
+  issued_at            DateTime     @db.Timestamptz(6)
+  revoked_at           DateTime?    @db.Timestamptz(6)
+  created_at           DateTime     @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime     @default(now()) @db.Timestamptz(6)
+  applications         applications @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  events               events       @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([event_id, issued_at], map: "cc_event_issued_idx")
 }
 
 model event_role_assignments {
-  id                   String    @id @db.Uuid
-  event_id             String    @db.Uuid
-  user_id              String    @db.Uuid
-  role                 String
-  overrides            Json      @default("{}")
-  access_start_at      DateTime? @db.Timestamptz(6)
-  access_end_at        DateTime? @db.Timestamptz(6)
-  invite_status        String?   @default("NONE")
-  invite_failure_reason String?
-  invite_last_sent_at  DateTime? @db.Timestamptz(6)
+  id                     String    @id @db.Uuid
+  event_id               String    @db.Uuid
+  user_id                String    @db.Uuid
+  role                   String
+  overrides              Json      @default("{}")
+  access_start_at        DateTime? @db.Timestamptz(6)
+  access_end_at          DateTime? @db.Timestamptz(6)
+  invite_status          String?   @default("NONE")
+  invite_failure_reason  String?
+  invite_last_sent_at    DateTime? @db.Timestamptz(6)
   invite_last_attempt_at DateTime? @db.Timestamptz(6)
   invite_last_expires_at DateTime? @db.Timestamptz(6)
-  invite_resend_count  Int       @default(0)
-  created_at           DateTime  @default(now()) @db.Timestamptz(6)
-  events               events    @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users                users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  invite_resend_count    Int       @default(0)
+  created_at             DateTime  @default(now()) @db.Timestamptz(6)
+  events                 events    @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                  users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([event_id, user_id, role])
   @@index([user_id], map: "era_user_idx")
@@ -210,54 +210,77 @@ model event_role_assignments {
 }
 
 model events {
-  id                     String                   @id @db.Uuid
-  series_key             String?
-  edition_label          String?
-  title                  String
-  slug                   String                   @unique
-  timezone               String
-  start_at               DateTime?                @db.Timestamptz(6)
-  end_at                 DateTime?                @db.Timestamptz(6)
-  venue_name             String?
-  venue_address          String?
-  venue_map_url          String?
-  description            String?
-  capacity               Int?
-  requires_email_verification Boolean                @default(false)
-  format                 String
-  application_open_at    DateTime?                @db.Timestamptz(6)
-  application_close_at   DateTime?                @db.Timestamptz(6)
-  status                 String                   @default("draft")
-  decision_config        Json                     @default("{}")
-  checkin_config         Json                     @default("{}")
-  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
-  updated_at             DateTime                 @default(now()) @db.Timestamptz(6)
-  is_system_site         Boolean                  @default(false)
-  applications           applications[]
-  audit_logs             audit_logs[]
-  checkin_records        checkin_records[]
-  certificate_templates  certificate_templates[]
-  certificate_render_jobs certificate_render_jobs[]
+  id                          String                        @id @db.Uuid
+  series_key                  String?
+  edition_label               String?
+  title                       String
+  slug                        String                        @unique
+  timezone                    String
+  start_at                    DateTime?                     @db.Timestamptz(6)
+  end_at                      DateTime?                     @db.Timestamptz(6)
+  venue_name                  String?
+  venue_address               String?
+  venue_map_url               String?
+  description                 String?
+  capacity                    Int?
+  requires_email_verification Boolean                       @default(false)
+  format                      String
+  application_open_at         DateTime?                     @db.Timestamptz(6)
+  application_close_at        DateTime?                     @db.Timestamptz(6)
+  status                      String                        @default("draft")
+  decision_config             Json                          @default("{}")
+  checkin_config              Json                          @default("{}")
+  created_at                  DateTime                      @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime                      @default(now()) @db.Timestamptz(6)
+  is_system_site              Boolean                       @default(false)
+  applications                applications[]
+  audit_logs                  audit_logs[]
+  checkin_records             checkin_records[]
+  certificate_templates       certificate_templates[]
+  certificate_render_jobs     certificate_render_jobs[]
   certificate_pdf_export_jobs certificate_pdf_export_jobs[]
-  issued_certificates    issued_certificates[]
-  completion_credentials completion_credentials[]
-  decision_templates     decision_templates[]
-  event_role_assignments event_role_assignments[]
-  field_file_export_jobs field_file_export_jobs[]
-  file_objects           file_objects[]
-  forms                  forms[]
-  messages               messages[]
-  microsites             microsites?
-  review_queue_saved_views review_queue_saved_views[]
-  review_assignment_previews review_assignment_previews[]
-  review_assignment_runs     review_assignment_runs[]
-  review_queue_items         review_queue_items[]
-  workflow_steps         workflow_steps[]
+  issued_certificates         issued_certificates[]
+  completion_credentials      completion_credentials[]
+  decision_templates          decision_templates[]
+  event_archival_jobs         event_archival_jobs[]
+  event_role_assignments      event_role_assignments[]
+  field_file_export_jobs      field_file_export_jobs[]
+  file_objects                file_objects[]
+  forms                       forms[]
+  messages                    messages[]
+  microsites                  microsites?
+  review_queue_saved_views    review_queue_saved_views[]
+  review_assignment_previews  review_assignment_previews[]
+  review_assignment_runs      review_assignment_runs[]
+  review_queue_items          review_queue_items[]
+  workflow_steps              workflow_steps[]
 
   @@index([application_open_at, application_close_at], map: "events_open_close_idx")
   @@index([status])
   @@index([status, created_at(sort: Desc)], map: "events_status_created_idx")
   @@index([is_system_site])
+}
+
+model event_archival_jobs {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  event_id             String    @db.Uuid
+  requested_by_user_id String    @db.Uuid
+  requested_at         DateTime  @default(now()) @db.Timestamptz(6)
+  started_at           DateTime? @db.Timestamptz(6)
+  completed_at         DateTime? @db.Timestamptz(6)
+  status               String    @default("PENDING")
+  microsite_policy     String
+  purge_policy         String
+  files_total          Int       @default(0)
+  files_deleted        Int       @default(0)
+  submissions_total    Int       @default(0)
+  submissions_purged   Int       @default(0)
+  error_message        String?
+  events               events    @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                users     @relation(fields: [requested_by_user_id], references: [id], onUpdate: NoAction)
+
+  @@index([status, requested_at], map: "event_archival_jobs_status_idx")
+  @@index([event_id, requested_at(sort: Desc)], map: "event_archival_jobs_event_idx")
 }
 
 model field_verifications {
@@ -279,54 +302,54 @@ model field_verifications {
 }
 
 model file_objects {
-  id                  String                @id @db.Uuid
-  event_id            String                @db.Uuid
-  storage_key         String
-  original_filename   String
-  mime_type           String
-  size_bytes          BigInt
-  sha256              String?
-  sensitivity         String                @default("normal")
-  virus_scan_status   String                @default("pending")
-  created_by          String                @db.Uuid
-  created_at          DateTime              @default(now()) @db.Timestamptz(6)
-  expires_at          DateTime?             @db.Timestamptz(6)
-  status              String                @default("STAGED")
-  media_optimization_status     String      @default("DONE")
-  media_optimization_attempts   Int         @default(0)
-  media_optimized_at            DateTime?   @db.Timestamptz(6)
+  id                            String                @id @db.Uuid
+  event_id                      String                @db.Uuid
+  storage_key                   String
+  original_filename             String
+  mime_type                     String
+  size_bytes                    BigInt
+  sha256                        String?
+  sensitivity                   String                @default("normal")
+  virus_scan_status             String                @default("pending")
+  created_by                    String                @db.Uuid
+  created_at                    DateTime              @default(now()) @db.Timestamptz(6)
+  expires_at                    DateTime?             @db.Timestamptz(6)
+  status                        String                @default("STAGED")
+  media_optimization_status     String                @default("DONE")
+  media_optimization_attempts   Int                   @default(0)
+  media_optimized_at            DateTime?             @db.Timestamptz(6)
   media_optimization_last_error String?
-  field_verifications field_verifications[]
-  users               users                 @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  events              events                @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  field_verifications           field_verifications[]
+  users                         users                 @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  events                        events                @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([event_id, created_at], map: "fo_event_created_idx")
 }
 
 model field_file_export_jobs {
-  id                  String        @id @db.Uuid
-  event_id            String        @db.Uuid
-  step_id             String        @db.Uuid
+  id                  String         @id @db.Uuid
+  event_id            String         @db.Uuid
+  step_id             String         @db.Uuid
   field_id            String
-  requester_user_id   String        @db.Uuid
-  application_ids     Json          @default("[]")
-  permission_snapshot Json          @default("{}")
-  status              String        @default("PENDING")
-  attempts            Int           @default(0)
-  max_attempts        Int           @default(3)
-  next_retry_at       DateTime      @default(now()) @db.Timestamptz(6)
-  locked_at           DateTime?     @db.Timestamptz(6)
+  requester_user_id   String         @db.Uuid
+  application_ids     Json           @default("[]")
+  permission_snapshot Json           @default("{}")
+  status              String         @default("PENDING")
+  attempts            Int            @default(0)
+  max_attempts        Int            @default(3)
+  next_retry_at       DateTime       @default(now()) @db.Timestamptz(6)
+  locked_at           DateTime?      @db.Timestamptz(6)
   locked_by           String?
   error_message       String?
   output_storage_key  String?
   output_filename     String?
   output_size_bytes   BigInt?
-  completed_at        DateTime?     @db.Timestamptz(6)
-  created_at          DateTime      @default(now()) @db.Timestamptz(6)
-  updated_at          DateTime      @default(now()) @db.Timestamptz(6)
-  events              events        @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  completed_at        DateTime?      @db.Timestamptz(6)
+  created_at          DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime       @default(now()) @db.Timestamptz(6)
+  events              events         @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   workflow_steps      workflow_steps @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users               users         @relation("field_file_export_jobs_requester_user_idTousers", fields: [requester_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users               users          @relation("field_file_export_jobs_requester_user_idTousers", fields: [requester_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([status, next_retry_at], map: "ffej_status_retry_idx")
   @@index([event_id, requester_user_id, created_at(sort: Desc)], map: "ffej_event_requester_created_idx")
@@ -493,74 +516,75 @@ model step_submission_versions {
 }
 
 model users {
-  id                                                    String                      @id @db.Uuid
-  email                                                 String                      @unique @db.Citext
-  password_hash                                         String
-  email_verified_at                                     DateTime?                   @db.Timestamptz(6)
-  is_disabled                                           Boolean                     @default(false)
-  created_at                                            DateTime                    @default(now()) @db.Timestamptz(6)
-  updated_at                                            DateTime                    @default(now()) @db.Timestamptz(6)
-  is_global_admin                                       Boolean                     @default(false)
-  admin_change_patches                                  admin_change_patches[]
-  applicant_profiles                                    applicant_profiles?
-  applications_applications_applicant_user_idTousers    applications[]              @relation("applications_applicant_user_idTousers")
-  applications_applications_assigned_reviewer_idTousers applications[]              @relation("applications_assigned_reviewer_idTousers")
-  attendance_records                                    attendance_records[]
-  audit_logs                                            audit_logs[]
-  checkin_records                                       checkin_records[]
-  decision_templates_decision_templates_created_byTousers decision_templates[]      @relation("decision_templates_created_byTousers")
-  decision_templates_decision_templates_updated_byTousers decision_templates[]      @relation("decision_templates_updated_byTousers")
-  certificate_templates_certificate_templates_created_byTousers certificate_templates[] @relation("certificate_templates_created_byTousers")
-  certificate_templates_certificate_templates_updated_byTousers certificate_templates[] @relation("certificate_templates_updated_byTousers")
-  certificate_template_versions_certificate_template_versions_created_byTousers certificate_template_versions[] @relation("certificate_template_versions_created_byTousers")
-  email_verification_tokens                             email_verification_tokens[]
-  event_role_assignments                                event_role_assignments[]
-  field_verifications                                   field_verifications[]
-  field_file_export_jobs_field_file_export_jobs_requester_user_idTousers field_file_export_jobs[] @relation("field_file_export_jobs_requester_user_idTousers")
-  certificate_pdf_export_jobs_certificate_pdf_export_jobs_requester_user_idTousers certificate_pdf_export_jobs[] @relation("certificate_pdf_export_jobs_requester_user_idTousers")
-  file_objects                                          file_objects[]
-  form_versions                                         form_versions[]
-  message_recipients                                    message_recipients[]
-  messages                                              messages[]
-  microsite_page_versions                               microsite_page_versions[]
-  microsite_versions                                    microsite_versions[]
-  needs_info_requests                                   needs_info_requests[]
-  password_reset_tokens                                 password_reset_tokens[]
-  review_queue_saved_views                              review_queue_saved_views[]
-  review_assignment_previews                            review_assignment_previews[]
-  review_assignment_runs                                review_assignment_runs[]
-  review_queue_items_review_queue_items_assigned_reviewer_idTousers review_queue_items[] @relation("review_queue_items_assigned_reviewer_idTousers")
-  review_queue_items_review_queue_items_completed_byTousers         review_queue_items[] @relation("review_queue_items_completed_byTousers")
-  review_records                                        review_records[]
-  step_submission_versions                              step_submission_versions[]
+  id                                                                               String                          @id @db.Uuid
+  email                                                                            String                          @unique @db.Citext
+  password_hash                                                                    String
+  email_verified_at                                                                DateTime?                       @db.Timestamptz(6)
+  is_disabled                                                                      Boolean                         @default(false)
+  created_at                                                                       DateTime                        @default(now()) @db.Timestamptz(6)
+  updated_at                                                                       DateTime                        @default(now()) @db.Timestamptz(6)
+  is_global_admin                                                                  Boolean                         @default(false)
+  admin_change_patches                                                             admin_change_patches[]
+  applicant_profiles                                                               applicant_profiles?
+  applications_applications_applicant_user_idTousers                               applications[]                  @relation("applications_applicant_user_idTousers")
+  applications_applications_assigned_reviewer_idTousers                            applications[]                  @relation("applications_assigned_reviewer_idTousers")
+  attendance_records                                                               attendance_records[]
+  audit_logs                                                                       audit_logs[]
+  checkin_records                                                                  checkin_records[]
+  decision_templates_decision_templates_created_byTousers                          decision_templates[]            @relation("decision_templates_created_byTousers")
+  decision_templates_decision_templates_updated_byTousers                          decision_templates[]            @relation("decision_templates_updated_byTousers")
+  certificate_templates_certificate_templates_created_byTousers                    certificate_templates[]         @relation("certificate_templates_created_byTousers")
+  certificate_templates_certificate_templates_updated_byTousers                    certificate_templates[]         @relation("certificate_templates_updated_byTousers")
+  certificate_template_versions_certificate_template_versions_created_byTousers    certificate_template_versions[] @relation("certificate_template_versions_created_byTousers")
+  email_verification_tokens                                                        email_verification_tokens[]
+  event_role_assignments                                                           event_role_assignments[]
+  field_verifications                                                              field_verifications[]
+  field_file_export_jobs_field_file_export_jobs_requester_user_idTousers           field_file_export_jobs[]        @relation("field_file_export_jobs_requester_user_idTousers")
+  certificate_pdf_export_jobs_certificate_pdf_export_jobs_requester_user_idTousers certificate_pdf_export_jobs[]   @relation("certificate_pdf_export_jobs_requester_user_idTousers")
+  file_objects                                                                     file_objects[]
+  form_versions                                                                    form_versions[]
+  message_recipients                                                               message_recipients[]
+  messages                                                                         messages[]
+  microsite_page_versions                                                          microsite_page_versions[]
+  microsite_versions                                                               microsite_versions[]
+  needs_info_requests                                                              needs_info_requests[]
+  password_reset_tokens                                                            password_reset_tokens[]
+  review_queue_saved_views                                                         review_queue_saved_views[]
+  review_assignment_previews                                                       review_assignment_previews[]
+  review_assignment_runs                                                           review_assignment_runs[]
+  review_queue_items_review_queue_items_assigned_reviewer_idTousers                review_queue_items[]            @relation("review_queue_items_assigned_reviewer_idTousers")
+  review_queue_items_review_queue_items_completed_byTousers                        review_queue_items[]            @relation("review_queue_items_completed_byTousers")
+  review_records                                                                   review_records[]
+  step_submission_versions                                                         step_submission_versions[]
+  event_archival_jobs                                                              event_archival_jobs[]
 }
 
 model certificate_templates {
-  id                           String                          @id @db.Uuid
-  event_id                     String                          @db.Uuid
-  name                         String
-  type_key                     String
-  type_label                   String
-  description                  String?
-  is_active                    Boolean                         @default(true)
-  is_default                   Boolean                         @default(false)
-  archived_at                  DateTime?                       @db.Timestamptz(6)
-  active_version_id            String?                         @db.Uuid
-  metadata                     Json                            @default("{}")
-  layout_schema_version        Int                             @default(2)
-  draft_layout_json            Json                            @default("{}")
-  draft_revision               Int                             @default(0)
-  draft_updated_at             DateTime?                       @db.Timestamptz(6)
-  created_by                   String                          @db.Uuid
-  updated_by                   String?                         @db.Uuid
-  created_at                   DateTime                        @default(now()) @db.Timestamptz(6)
-  updated_at                   DateTime                        @default(now()) @db.Timestamptz(6)
-  certificate_template_versions certificate_template_versions[]
-  certificate_template_versions_active certificate_template_versions? @relation("certificate_templates_active_version", fields: [active_version_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  issued_certificates          issued_certificates[]
-  events                       events                          @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users_certificate_templates_created_byTousers users         @relation("certificate_templates_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users_certificate_templates_updated_byTousers users?        @relation("certificate_templates_updated_byTousers", fields: [updated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                                            String                          @id @db.Uuid
+  event_id                                      String                          @db.Uuid
+  name                                          String
+  type_key                                      String
+  type_label                                    String
+  description                                   String?
+  is_active                                     Boolean                         @default(true)
+  is_default                                    Boolean                         @default(false)
+  archived_at                                   DateTime?                       @db.Timestamptz(6)
+  active_version_id                             String?                         @db.Uuid
+  metadata                                      Json                            @default("{}")
+  layout_schema_version                         Int                             @default(2)
+  draft_layout_json                             Json                            @default("{}")
+  draft_revision                                Int                             @default(0)
+  draft_updated_at                              DateTime?                       @db.Timestamptz(6)
+  created_by                                    String                          @db.Uuid
+  updated_by                                    String?                         @db.Uuid
+  created_at                                    DateTime                        @default(now()) @db.Timestamptz(6)
+  updated_at                                    DateTime                        @default(now()) @db.Timestamptz(6)
+  certificate_template_versions                 certificate_template_versions[]
+  certificate_template_versions_active          certificate_template_versions?  @relation("certificate_templates_active_version", fields: [active_version_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  issued_certificates                           issued_certificates[]
+  events                                        events                          @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_certificate_templates_created_byTousers users                           @relation("certificate_templates_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_certificate_templates_updated_byTousers users?                          @relation("certificate_templates_updated_byTousers", fields: [updated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([event_id, name], map: "cert_tpl_event_name_uq")
   @@index([event_id, type_key, is_active], map: "cert_tpl_event_type_active_idx")
@@ -570,53 +594,53 @@ model certificate_templates {
 }
 
 model certificate_template_versions {
-  id                           String                @id @db.Uuid
-  template_id                  String                @db.Uuid
-  version_number               Int
-  layout_json                  Json
-  created_by                   String                @db.Uuid
-  created_at                   DateTime              @default(now()) @db.Timestamptz(6)
-  certificate_templates        certificate_templates @relation(fields: [template_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  certificate_templates_active certificate_templates[] @relation("certificate_templates_active_version")
-  users_certificate_template_versions_created_byTousers users @relation("certificate_template_versions_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  issued_certificates          issued_certificates[]
+  id                                                    String                  @id @db.Uuid
+  template_id                                           String                  @db.Uuid
+  version_number                                        Int
+  layout_json                                           Json
+  created_by                                            String                  @db.Uuid
+  created_at                                            DateTime                @default(now()) @db.Timestamptz(6)
+  certificate_templates                                 certificate_templates   @relation(fields: [template_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  certificate_templates_active                          certificate_templates[] @relation("certificate_templates_active_version")
+  users_certificate_template_versions_created_byTousers users                   @relation("certificate_template_versions_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  issued_certificates                                   issued_certificates[]
 
   @@unique([template_id, version_number], map: "cert_tpl_ver_template_version_uq")
   @@index([template_id, created_at(sort: Desc)], map: "cert_tpl_ver_template_created_idx")
 }
 
 model issued_certificates {
-  id                           String                        @id @db.Uuid
-  event_id                     String                        @db.Uuid
-  application_id               String                        @db.Uuid
-  template_id                  String?                       @db.Uuid
-  template_version_id          String?                       @db.Uuid
-  certificate_type_key         String
-  certificate_type_label       String
-  certificate_id               String                        @unique @db.Uuid
-  credential_id                String                        @unique @db.Uuid
-  credential_signature         String
-  qr_token                     String
-  qr_key_id                    String
-  issuer_name                  String
-  status                       String                        @default("ISSUED")
-  issued_at                    DateTime                      @db.Timestamptz(6)
-  released_at                  DateTime?                     @db.Timestamptz(6)
-  released_by                  String?                       @db.Uuid
-  revoked_at                   DateTime?                     @db.Timestamptz(6)
-  template_snapshot            Json                          @default("{}")
-  payload_snapshot             Json                          @default("{}")
-  pdf_storage_key              String?
-  pdf_generated_at             DateTime?                     @db.Timestamptz(6)
-  render_status                String                        @default("PENDING")
-  render_error                 String?
-  created_at                   DateTime                      @default(now()) @db.Timestamptz(6)
-  updated_at                   DateTime                      @default(now()) @db.Timestamptz(6)
-  applications                 applications                  @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  events                       events                        @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  certificate_templates        certificate_templates?        @relation(fields: [template_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  id                            String                         @id @db.Uuid
+  event_id                      String                         @db.Uuid
+  application_id                String                         @db.Uuid
+  template_id                   String?                        @db.Uuid
+  template_version_id           String?                        @db.Uuid
+  certificate_type_key          String
+  certificate_type_label        String
+  certificate_id                String                         @unique @db.Uuid
+  credential_id                 String                         @unique @db.Uuid
+  credential_signature          String
+  qr_token                      String
+  qr_key_id                     String
+  issuer_name                   String
+  status                        String                         @default("ISSUED")
+  issued_at                     DateTime                       @db.Timestamptz(6)
+  released_at                   DateTime?                      @db.Timestamptz(6)
+  released_by                   String?                        @db.Uuid
+  revoked_at                    DateTime?                      @db.Timestamptz(6)
+  template_snapshot             Json                           @default("{}")
+  payload_snapshot              Json                           @default("{}")
+  pdf_storage_key               String?
+  pdf_generated_at              DateTime?                      @db.Timestamptz(6)
+  render_status                 String                         @default("PENDING")
+  render_error                  String?
+  created_at                    DateTime                       @default(now()) @db.Timestamptz(6)
+  updated_at                    DateTime                       @default(now()) @db.Timestamptz(6)
+  applications                  applications                   @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  events                        events                         @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  certificate_templates         certificate_templates?         @relation(fields: [template_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
   certificate_template_versions certificate_template_versions? @relation(fields: [template_version_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  certificate_render_jobs      certificate_render_jobs[]
+  certificate_render_jobs       certificate_render_jobs[]
 
   @@index([event_id, issued_at(sort: Desc)], map: "issued_cert_event_issued_idx")
   @@index([application_id, certificate_type_key], map: "issued_cert_app_type_idx")
@@ -626,21 +650,21 @@ model issued_certificates {
 }
 
 model certificate_render_jobs {
-  id                           String             @id @db.Uuid
-  event_id                     String             @db.Uuid
-  issued_certificate_id        String             @db.Uuid
-  status                       String             @default("PENDING")
-  attempts                     Int                @default(0)
-  max_attempts                 Int                @default(5)
-  next_retry_at                DateTime           @default(now()) @db.Timestamptz(6)
-  locked_at                    DateTime?          @db.Timestamptz(6)
-  locked_by                    String?
-  error_message                String?
-  completed_at                 DateTime?          @db.Timestamptz(6)
-  created_at                   DateTime           @default(now()) @db.Timestamptz(6)
-  updated_at                   DateTime           @default(now()) @db.Timestamptz(6)
-  events                       events             @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  issued_certificates          issued_certificates @relation(fields: [issued_certificate_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                    String              @id @db.Uuid
+  event_id              String              @db.Uuid
+  issued_certificate_id String              @db.Uuid
+  status                String              @default("PENDING")
+  attempts              Int                 @default(0)
+  max_attempts          Int                 @default(5)
+  next_retry_at         DateTime            @default(now()) @db.Timestamptz(6)
+  locked_at             DateTime?           @db.Timestamptz(6)
+  locked_by             String?
+  error_message         String?
+  completed_at          DateTime?           @db.Timestamptz(6)
+  created_at            DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime            @default(now()) @db.Timestamptz(6)
+  events                events              @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  issued_certificates   issued_certificates @relation(fields: [issued_certificate_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([status, next_retry_at], map: "cert_render_jobs_status_retry_idx")
   @@index([event_id, created_at(sort: Desc)], map: "cert_render_jobs_event_created_idx")
@@ -648,25 +672,25 @@ model certificate_render_jobs {
 }
 
 model certificate_pdf_export_jobs {
-  id                    String              @id @db.Uuid
-  event_id              String              @db.Uuid
-  requester_user_id     String              @db.Uuid
-  issued_certificate_ids Json               @default("[]")
-  status                String              @default("PENDING")
-  attempts              Int                 @default(0)
-  max_attempts          Int                 @default(120)
-  next_retry_at         DateTime            @default(now()) @db.Timestamptz(6)
-  locked_at             DateTime?           @db.Timestamptz(6)
-  locked_by             String?
-  error_message         String?
-  output_storage_key    String?
-  output_filename       String?
-  output_size_bytes     BigInt?
-  completed_at          DateTime?           @db.Timestamptz(6)
-  created_at            DateTime            @default(now()) @db.Timestamptz(6)
-  updated_at            DateTime            @default(now()) @db.Timestamptz(6)
-  events                events              @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users                 users               @relation("certificate_pdf_export_jobs_requester_user_idTousers", fields: [requester_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                     String    @id @db.Uuid
+  event_id               String    @db.Uuid
+  requester_user_id      String    @db.Uuid
+  issued_certificate_ids Json      @default("[]")
+  status                 String    @default("PENDING")
+  attempts               Int       @default(0)
+  max_attempts           Int       @default(120)
+  next_retry_at          DateTime  @default(now()) @db.Timestamptz(6)
+  locked_at              DateTime? @db.Timestamptz(6)
+  locked_by              String?
+  error_message          String?
+  output_storage_key     String?
+  output_filename        String?
+  output_size_bytes      BigInt?
+  completed_at           DateTime? @db.Timestamptz(6)
+  created_at             DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime  @default(now()) @db.Timestamptz(6)
+  events                 events    @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                  users     @relation("certificate_pdf_export_jobs_requester_user_idTousers", fields: [requester_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([status, next_retry_at], map: "cert_pdf_export_jobs_status_retry_idx")
   @@index([event_id, requester_user_id, created_at(sort: Desc)], map: "cert_pdf_export_jobs_event_requester_created_idx")
@@ -689,24 +713,24 @@ model review_queue_saved_views {
 }
 
 model review_queue_items {
-  id                                                                     String                   @id @db.Uuid
-  event_id                                                               String                   @db.Uuid
-  application_id                                                         String                   @db.Uuid
-  step_id                                                                String                   @db.Uuid
-  submission_version_id                                                  String                   @unique(map: "rqi_submission_version_uq") @db.Uuid
-  assigned_reviewer_id                                                   String?                  @db.Uuid
-  queue_mode                                                             String                   @default("shared")
-  assignment_expires_at                                                  DateTime?                @db.Timestamptz(6)
-  completed_at                                                           DateTime?                @db.Timestamptz(6)
-  completed_by                                                           String?                  @db.Uuid
-  created_at                                                             DateTime                 @default(now()) @db.Timestamptz(6)
-  updated_at                                                             DateTime                 @default(now()) @db.Timestamptz(6)
-  applications                                                           applications             @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  events                                                                 events                   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  step_submission_versions                                               step_submission_versions @relation(fields: [submission_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users_review_queue_items_assigned_reviewer_idTousers                  users?                   @relation("review_queue_items_assigned_reviewer_idTousers", fields: [assigned_reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users_review_queue_items_completed_byTousers                          users?                   @relation("review_queue_items_completed_byTousers", fields: [completed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  workflow_steps                                                         workflow_steps           @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                                                   String                   @id @db.Uuid
+  event_id                                             String                   @db.Uuid
+  application_id                                       String                   @db.Uuid
+  step_id                                              String                   @db.Uuid
+  submission_version_id                                String                   @unique(map: "rqi_submission_version_uq") @db.Uuid
+  assigned_reviewer_id                                 String?                  @db.Uuid
+  queue_mode                                           String                   @default("shared")
+  assignment_expires_at                                DateTime?                @db.Timestamptz(6)
+  completed_at                                         DateTime?                @db.Timestamptz(6)
+  completed_by                                         String?                  @db.Uuid
+  created_at                                           DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at                                           DateTime                 @default(now()) @db.Timestamptz(6)
+  applications                                         applications             @relation(fields: [application_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  events                                               events                   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  step_submission_versions                             step_submission_versions @relation(fields: [submission_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_review_queue_items_assigned_reviewer_idTousers users?                   @relation("review_queue_items_assigned_reviewer_idTousers", fields: [assigned_reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_review_queue_items_completed_byTousers         users?                   @relation("review_queue_items_completed_byTousers", fields: [completed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  workflow_steps                                       workflow_steps           @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([event_id, completed_at], map: "rqi_event_completed_idx")
   @@index([event_id, assigned_reviewer_id, completed_at], map: "rqi_event_assigned_completed_idx")
@@ -715,18 +739,18 @@ model review_queue_items {
 }
 
 model review_assignment_previews {
-  id                 String   @id @db.Uuid
-  event_id           String   @db.Uuid
-  created_by         String   @db.Uuid
-  request_payload    Json     @default("{}")
-  snapshot_payload   Json     @default("{}")
-  scope_fingerprint  String
-  expires_at         DateTime @db.Timestamptz(6)
-  applied_at         DateTime? @db.Timestamptz(6)
-  created_at         DateTime @default(now()) @db.Timestamptz(6)
-  updated_at         DateTime @default(now()) @db.Timestamptz(6)
-  events             events   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users              users    @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                     String                   @id @db.Uuid
+  event_id               String                   @db.Uuid
+  created_by             String                   @db.Uuid
+  request_payload        Json                     @default("{}")
+  snapshot_payload       Json                     @default("{}")
+  scope_fingerprint      String
+  expires_at             DateTime                 @db.Timestamptz(6)
+  applied_at             DateTime?                @db.Timestamptz(6)
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  events                 events                   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                  users                    @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   review_assignment_runs review_assignment_runs[]
 
   @@index([event_id, expires_at], map: "rap_event_expires_idx")
@@ -734,36 +758,36 @@ model review_assignment_previews {
 }
 
 model review_assignment_runs {
-  id            String                     @id @db.Uuid
-  event_id      String                     @db.Uuid
-  preview_id    String                     @db.Uuid
-  created_by    String                     @db.Uuid
-  idempotency_key String
-  result_payload Json                      @default("{}")
-  created_at    DateTime                   @default(now()) @db.Timestamptz(6)
-  events        events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                         String                     @id @db.Uuid
+  event_id                   String                     @db.Uuid
+  preview_id                 String                     @db.Uuid
+  created_by                 String                     @db.Uuid
+  idempotency_key            String
+  result_payload             Json                       @default("{}")
+  created_at                 DateTime                   @default(now()) @db.Timestamptz(6)
+  events                     events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   review_assignment_previews review_assignment_previews @relation(fields: [preview_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users         users                      @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users                      users                      @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([event_id, idempotency_key], map: "rar_event_idempotency_uq")
   @@index([event_id, created_at(sort: Desc)], map: "rar_event_created_idx")
 }
 
 model decision_templates {
-  id                                          String   @id @db.Uuid
-  event_id                                    String   @db.Uuid
-  name                                        String
-  status                                      String
-  subject_template                            String
-  body_template                               String
-  is_active                                   Boolean  @default(true)
-  created_by                                  String   @db.Uuid
-  updated_by                                  String?  @db.Uuid
-  created_at                                  DateTime @default(now()) @db.Timestamptz(6)
-  updated_at                                  DateTime @default(now()) @db.Timestamptz(6)
-  events                                      events   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users_decision_templates_created_byTousers  users    @relation("decision_templates_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users_decision_templates_updated_byTousers  users?   @relation("decision_templates_updated_byTousers", fields: [updated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                                         String   @id @db.Uuid
+  event_id                                   String   @db.Uuid
+  name                                       String
+  status                                     String
+  subject_template                           String
+  body_template                              String
+  is_active                                  Boolean  @default(true)
+  created_by                                 String   @db.Uuid
+  updated_by                                 String?  @db.Uuid
+  created_at                                 DateTime @default(now()) @db.Timestamptz(6)
+  updated_at                                 DateTime @default(now()) @db.Timestamptz(6)
+  events                                     events   @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_decision_templates_created_byTousers users    @relation("decision_templates_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_decision_templates_updated_byTousers users?   @relation("decision_templates_updated_byTousers", fields: [updated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([event_id, name], map: "dt_event_name_uq")
   @@index([event_id, status, is_active], map: "dt_event_status_idx")
@@ -771,39 +795,39 @@ model decision_templates {
 }
 
 model workflow_steps {
-  id                           String                     @id @db.Uuid
-  event_id                     String                     @db.Uuid
-  step_index                   Int
-  category                     String
-  title                        String
-  instructions_rich            Json                       @default("{}")
-  unlock_policy                String
-  unlock_at                    DateTime?                  @db.Timestamptz(6)
-  review_required              Boolean                    @default(false)
-  reviewer_roles_allowed       Json                       @default("[\"reviewer\", \"organizer\"]")
-  reject_behavior              String                     @default("reject_resubmit_allowed")
-  strict_gating                Boolean                    @default(true)
-  allow_next_steps_while_revising Boolean                 @default(true)
-  revision_deadline_at         DateTime?                  @db.Timestamptz(6)
-  sensitivity_level            String                     @default("NORMAL")
-  hidden                       Boolean                    @default(false)
-  allow_applicant_modification Boolean                    @default(false)
-  modification_scope           String                     @default("SUBMITTED_ONLY")
-  deadline_at                  DateTime?                  @db.Timestamptz(6)
-  late_policy                  String                     @default("allow")
-  max_revision_cycles          Int?
-  form_version_id              String?                    @db.Uuid
-  created_at                   DateTime                   @default(now()) @db.Timestamptz(6)
-  updated_at                   DateTime                   @default(now()) @db.Timestamptz(6)
-  admin_change_patches         admin_change_patches[]
-  application_step_states      application_step_states[]
-  needs_info_requests          needs_info_requests[]
-  step_drafts                  step_drafts[]
-  step_submission_versions     step_submission_versions[]
-  review_queue_items           review_queue_items[]
-  field_file_export_jobs       field_file_export_jobs[]
-  events                       events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  form_versions                form_versions?             @relation(fields: [form_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                              String                     @id @db.Uuid
+  event_id                        String                     @db.Uuid
+  step_index                      Int
+  category                        String
+  title                           String
+  instructions_rich               Json                       @default("{}")
+  unlock_policy                   String
+  unlock_at                       DateTime?                  @db.Timestamptz(6)
+  review_required                 Boolean                    @default(false)
+  reviewer_roles_allowed          Json                       @default("[\"reviewer\", \"organizer\"]")
+  reject_behavior                 String                     @default("reject_resubmit_allowed")
+  strict_gating                   Boolean                    @default(true)
+  allow_next_steps_while_revising Boolean                    @default(true)
+  revision_deadline_at            DateTime?                  @db.Timestamptz(6)
+  sensitivity_level               String                     @default("NORMAL")
+  hidden                          Boolean                    @default(false)
+  allow_applicant_modification    Boolean                    @default(false)
+  modification_scope              String                     @default("SUBMITTED_ONLY")
+  deadline_at                     DateTime?                  @db.Timestamptz(6)
+  late_policy                     String                     @default("allow")
+  max_revision_cycles             Int?
+  form_version_id                 String?                    @db.Uuid
+  created_at                      DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at                      DateTime                   @default(now()) @db.Timestamptz(6)
+  admin_change_patches            admin_change_patches[]
+  application_step_states         application_step_states[]
+  needs_info_requests             needs_info_requests[]
+  step_drafts                     step_drafts[]
+  step_submission_versions        step_submission_versions[]
+  review_queue_items              review_queue_items[]
+  field_file_export_jobs          field_file_export_jobs[]
+  events                          events                     @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  form_versions                   form_versions?             @relation(fields: [form_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([event_id, step_index])
   @@index([event_id, step_index], map: "ws_event_idx")

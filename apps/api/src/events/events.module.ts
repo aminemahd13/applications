@@ -7,6 +7,9 @@ import { EventMetricsController } from './event-metrics.controller';
 import { EventMetricsService } from './event-metrics.service';
 import { RoleAssignmentsController } from './role-assignments.controller';
 import { RoleAssignmentsService } from './role-assignments.service';
+import { EventArchivalController } from './event-archival.controller';
+import { EventArchivalService } from './event-archival.service';
+import { EventArchivalScheduler } from './event-archival.scheduler';
 import { StorageModule } from '../common/storage/storage.module';
 
 @Module({
@@ -17,8 +20,15 @@ import { StorageModule } from '../common/storage/storage.module';
     EventOverviewController,
     EventMetricsController,
     RoleAssignmentsController,
+    EventArchivalController,
   ],
-  providers: [EventsService, EventMetricsService, RoleAssignmentsService],
+  providers: [
+    EventsService,
+    EventMetricsService,
+    RoleAssignmentsService,
+    EventArchivalService,
+    EventArchivalScheduler,
+  ],
   exports: [EventsService, EventMetricsService, RoleAssignmentsService],
 })
 export class EventsModule {}

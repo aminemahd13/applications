@@ -121,7 +121,9 @@ export default function EventApplicationIntentPage() {
 
         const resolvedEvent = unwrapResponseData<EventSummary>(eventRes);
         if (!resolvedEvent?.id) {
-          throw new Error("Event not found");
+          throw new Error(
+            "This event isn't accepting applications right now. It may have ended, been archived, or not yet published.",
+          );
         }
         setEvent(resolvedEvent);
 
@@ -209,16 +211,16 @@ export default function EventApplicationIntentPage() {
   if (error) {
     return (
       <div className="mx-auto max-w-xl py-10">
-        <Alert variant="destructive">
-          <AlertTitle>Could not open application</AlertTitle>
+        <Alert>
+          <AlertTitle>This event isn&apos;t available</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
         <div className="mt-4 flex gap-2">
           <Button asChild>
-            <Link href={fallbackEventUrl}>Back to event</Link>
+            <Link href="/events">Browse events</Link>
           </Button>
           <Button variant="outline" asChild>
-            <Link href="/events">Browse events</Link>
+            <Link href="/dashboard">Back to dashboard</Link>
           </Button>
         </div>
       </div>
