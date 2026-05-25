@@ -11,7 +11,6 @@ import {
   User,
   GraduationCap,
   MapPin,
-  Link as LinkIcon,
   Lock,
   Save,
   Loader2,
@@ -49,7 +48,6 @@ interface Profile {
   city?: string;
   country?: string;
   dateOfBirth?: string;
-  links?: string[];
 }
 
 const EDUCATION_OPTIONS = [
@@ -89,7 +87,6 @@ export default function ProfilePage() {
 
   const profileForm = useForm<Omit<Profile, "email">>({ defaultValues: {} });
   const pwForm = useForm<{ currentPassword: string; newPassword: string; confirmPassword: string }>();
-  const [links, setLinks] = useState<string[]>([""]);
 
   useEffect(() => {
     (async () => {
@@ -105,7 +102,6 @@ export default function ProfilePage() {
           country: data.country ?? "",
           dateOfBirth: data.dateOfBirth ?? "",
         });
-        setLinks(data.links?.length ? data.links : [""]);
       } catch {
         /* handled */
       } finally {
@@ -134,10 +130,9 @@ export default function ProfilePage() {
     setIsSaving(true);
     try {
       const values = profileForm.getValues();
-      const cleanLinks = links.filter((l) => l.trim());
       await apiClient("/auth/me/profile", {
         method: "PATCH",
-        body: { ...values, links: cleanLinks },
+        body: values,
         csrfToken: csrfToken ?? undefined,
       });
       const completionAfterSave = getProfileCompletionStatus(values);
@@ -392,53 +387,6 @@ export default function ProfilePage() {
               </SelectContent>
             </Select>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Links */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <LinkIcon className="h-4 w-4" />
-            Links (Optional)
-          </CardTitle>
-          <CardDescription>
-            Optional. Add portfolio or social links if relevant. This section is
-            not required to apply to events.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {links.map((link, i) => (
-            <div key={i} className="flex gap-2">
-              <Input
-                value={link}
-                onChange={(e) => {
-                  const next = [...links];
-                  next[i] = e.target.value;
-                  setLinks(next);
-                }}
-                placeholder="https://..."
-              />
-              {links.length > 1 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setLinks(links.filter((_, j) => j !== i))}
-                >
-                  x
-                </Button>
-              )}
-            </div>
-          ))}
-          {links.length < 5 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setLinks([...links, ""])}
-            >
-              + Add link
-            </Button>
-          )}
         </CardContent>
       </Card>
 

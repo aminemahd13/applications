@@ -29,6 +29,7 @@ import {
   PageSkeleton,
 } from "@/components/shared";
 import { apiClient } from "@/lib/api";
+import { useSetBreadcrumbs } from "@/components/layout/breadcrumbs-context";
 import { sanitizeClientFacingUrl } from "@/lib/public-link-url";
 
 interface StepState {
@@ -84,6 +85,15 @@ export default function ApplicationWorkspacePage() {
   const [app, setApp] = useState<ApplicationDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
+
+  useSetBreadcrumbs(
+    app
+      ? [
+          { label: "My Applications", href: "/dashboard" },
+          { label: app.eventTitle, translateLabel: false },
+        ]
+      : [],
+  );
 
   useEffect(() => {
     setIsDescriptionExpanded(false);

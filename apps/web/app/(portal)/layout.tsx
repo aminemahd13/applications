@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { AppShell, type NavGroup } from "@/components/layout/app-shell";
+import {
+  BreadcrumbsProvider,
+  useBreadcrumbs,
+} from "@/components/layout/breadcrumbs-context";
 import { Home, Inbox, User, CalendarDays } from "lucide-react";
 import { useRequireAuth } from "@/lib/auth-context";
 import { PageSkeleton } from "@/components/shared";
@@ -79,7 +83,7 @@ export default function PortalLayout({
     {
       label: "Portal",
       items: [
-        { label: "Dashboard", href: "/dashboard", icon: Home },
+        { label: "My Applications", href: "/dashboard", icon: Home },
         { label: "Events", href: "/events", icon: CalendarDays },
         { label: "Inbox", href: "/inbox", icon: Inbox, badge: unreadCount },
         { label: "Profile", href: "/profile", icon: User },
@@ -87,5 +91,24 @@ export default function PortalLayout({
     },
   ];
 
-  return <AppShell navGroups={portalNav}>{children}</AppShell>;
+  return (
+    <BreadcrumbsProvider>
+      <PortalShell navGroups={portalNav}>{children}</PortalShell>
+    </BreadcrumbsProvider>
+  );
+}
+
+function PortalShell({
+  children,
+  navGroups,
+}: {
+  children: React.ReactNode;
+  navGroups: NavGroup[];
+}) {
+  const breadcrumbs = useBreadcrumbs();
+  return (
+    <AppShell navGroups={navGroups} breadcrumbs={breadcrumbs}>
+      {children}
+    </AppShell>
+  );
 }

@@ -13,6 +13,10 @@ import {
   AlertTriangle,
   CheckCircle2,
   Timer,
+  Lightbulb,
+  User as UserIcon,
+  CalendarDays,
+  X,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -72,12 +76,34 @@ type FilterTab = "all" | "in_progress" | "accepted" | "waitlisted" | "rejected";
 type SortOption = "latest" | "deadline" | "event";
 
 export default function DashboardPage() {
-  const { isLoading: authLoading, isAuthenticated } = useAuth();
+  const { isLoading: authLoading, isAuthenticated, user } = useAuth();
   const [applications, setApplications] = useState<ApplicationSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [unreadCount, setUnreadCount] = useState(0);
   const [filter, setFilter] = useState<FilterTab>("all");
   const [sort, setSort] = useState<SortOption>("latest");
+  const [showIntro, setShowIntro] = useState(false);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    try {
+      setShowIntro(
+        window.localStorage.getItem(`intro_seen:${user.id}`) !== "1",
+      );
+    } catch {
+      setShowIntro(false);
+    }
+  }, [user?.id]);
+
+  function dismissIntro() {
+    setShowIntro(false);
+    if (!user?.id) return;
+    try {
+      window.localStorage.setItem(`intro_seen:${user.id}`, "1");
+    } catch {
+      /* ignore storage failures (private mode, blocked storage). */
+    }
+  }
 
   useEffect(() => {
     if (authLoading) return;
@@ -190,10 +216,62 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
+      {showIntro && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2 }}
+        >
+          <Card className="border-primary/40 bg-primary/5">
+            <CardContent className="relative p-5 sm:p-6">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={dismissIntro}
+                aria-label="Dismiss"
+                className="absolute right-2 top-2 h-7 w-7 p-0"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+              <div className="flex items-start gap-3 pr-8">
+                <div className="rounded-full bg-primary/10 p-2 shrink-0">
+                  <Lightbulb className="h-4 w-4 text-primary" />
+                </div>
+                <div className="space-y-2">
+                  <p className="font-semibold text-sm">Two things to know</p>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    <span className="font-medium text-foreground">Profile</span> is the info you fill once
+                    — name, school, phone.{" "}
+                    <span className="font-medium text-foreground">Applications</span> are what you submit
+                    to a specific event — one per event. Get started by completing your profile, then
+                    browse events.
+                  </p>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <Button size="sm" asChild>
+                      <Link href="/profile">
+                        <UserIcon className="mr-1.5 h-3.5 w-3.5" />
+                        Complete profile
+                      </Link>
+                    </Button>
+                    <Button size="sm" variant="outline" asChild>
+                      <Link href="/events">
+                        <CalendarDays className="mr-1.5 h-3.5 w-3.5" />
+                        Browse events
+                      </Link>
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+
       <PageHeader
         title="My Applications"
         description="Track your event applications and next steps"
       />
+
 
       {/* Quick stats */}
       <div className="grid gap-4 md:grid-cols-3">

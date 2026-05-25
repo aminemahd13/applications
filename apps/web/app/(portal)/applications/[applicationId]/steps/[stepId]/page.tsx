@@ -34,6 +34,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ConfirmDialog, PageHeader, FormSkeleton, StatusBadge } from "@/components/shared";
 import { ApiError, apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useSetBreadcrumbs } from "@/components/layout/breadcrumbs-context";
 import { sanitizeHtml } from "@/lib/sanitize";
 import { FileUpload, type FileUploadValue } from "@/components/forms/FileUpload";
 import { FormMarkdown } from "@/components/forms/form-markdown";
@@ -833,9 +834,24 @@ export default function StepFormPage() {
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [instructionsOpen, setInstructionsOpen] = useState(true);
   const [resolvedEventId, setResolvedEventId] = useState<string | null>(null);
+  const [eventTitle, setEventTitle] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [hasTriedSubmit, setHasTriedSubmit] = useState(false);
   const [isStepUnavailable, setIsStepUnavailable] = useState(false);
+
+  useSetBreadcrumbs(
+    step && eventTitle
+      ? [
+          { label: "My Applications", href: "/dashboard" },
+          {
+            label: eventTitle,
+            href: `/applications/${applicationId}`,
+            translateLabel: false,
+          },
+          { label: step.title, translateLabel: false },
+        ]
+      : [],
+  );
 
   const form = useForm({ defaultValues: {} as Record<string, unknown> });
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -994,6 +1010,9 @@ export default function StepFormPage() {
           match && typeof match.eventId === "string" ? match.eventId : undefined;
         if (!eventId) { setIsLoading(false); return; }
         setResolvedEventId(eventId);
+        if (match && typeof match.eventTitle === "string") {
+          setEventTitle(match.eventTitle);
+        }
 
         // Get the draft for this step
         const draftRes = await apiClient<Record<string, unknown> | { data: Record<string, unknown> }>(
