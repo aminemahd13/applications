@@ -337,7 +337,7 @@ export function AppShell({
             <Button
               variant="outline"
               size="sm"
-              className="h-8 px-2 text-xs font-medium"
+              className="h-9 px-2.5 text-xs font-medium"
               onClick={() => setLocale(locale === "en" ? "fr" : "en")}
               aria-label={t("Switch language")}
               title={t("Switch language")}

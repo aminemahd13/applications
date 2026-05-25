@@ -1,3 +1,9 @@
+// Microsite blocks intentionally use a separate `--mm-*` CSS variable namespace
+// (e.g. text-[var(--mm-text)], bg-[var(--mm-soft)], border-[var(--mm-border)])
+// rather than the app-wide semantic tokens (--background, --foreground, etc.).
+// This lets a published microsite be re-themed independently of the admin chrome.
+// Do not fold these into var(--background)/text-foreground during consistency sweeps.
+
 import type { Block } from "@event-platform/shared";
 import type { CSSProperties, ReactNode } from "react";
 import { cn } from "@/lib/utils";

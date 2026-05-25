@@ -320,6 +320,8 @@ export default function DashboardPage() {
           icon={FileText}
           title="No matching applications"
           description="Try changing the filter to see more applications."
+          actionLabel="Show all"
+          onAction={() => setFilter("all")}
         />
       ) : (
         <motion.div
