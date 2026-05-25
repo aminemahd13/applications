@@ -255,7 +255,7 @@ export function ImageGalleryBlock({ block }: { block: Extract<Block, { type: 'IM
               <button
                 type="button"
                 onClick={closeLightbox}
-                className="absolute right-4 top-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80"
+                className="absolute right-4 top-4 z-20 inline-flex h-11 w-11 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80"
                 aria-label="Close full screen image"
               >
                 <X className="h-5 w-5" />
@@ -266,7 +266,7 @@ export function ImageGalleryBlock({ block }: { block: Extract<Block, { type: 'IM
                   <button
                     type="button"
                     onClick={goPrev}
-                    className="absolute left-4 top-1/2 z-20 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80"
+                    className="absolute left-4 top-1/2 z-20 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80"
                     aria-label="Previous image"
                   >
                     <ChevronLeft className="h-6 w-6" />
@@ -274,7 +274,7 @@ export function ImageGalleryBlock({ block }: { block: Extract<Block, { type: 'IM
                   <button
                     type="button"
                     onClick={goNext}
-                    className="absolute right-4 top-1/2 z-20 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80"
+                    className="absolute right-4 top-1/2 z-20 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80"
                     aria-label="Next image"
                   >
                     <ChevronRight className="h-6 w-6" />
@@ -286,7 +286,7 @@ export function ImageGalleryBlock({ block }: { block: Extract<Block, { type: 'IM
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={activeItem.src}
-                  alt={activeItem.alt || ""}
+                  alt={activeItem.alt || activeItem.caption || "Gallery image"}
                   className="max-h-full max-w-full object-contain"
                 />
               </div>

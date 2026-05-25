@@ -114,7 +114,7 @@ export function AgendaBlock({
                 {sessions.map((session, sessionIdx) => (
                   <div key={sessionIdx} className="grid gap-3 px-5 py-4 md:grid-cols-[9rem_minmax(0,1fr)] md:px-6">
                     <div className="space-y-2">
-                      <p className="inline-flex items-center gap-1.5 rounded-full border border-[var(--mm-border)] bg-[var(--mm-soft)] px-2.5 py-1 text-xs font-semibold text-[var(--mm-text)]">
+                      <p className="inline-flex items-center gap-1.5 rounded-full border border-[var(--mm-border)] bg-[var(--mm-soft)] px-2.5 py-1 text-xs font-semibold tabular-nums text-[var(--mm-text)]">
                         <Clock3 className="h-3.5 w-3.5 text-[var(--mm-accent)]" />
                         {resolveSessionTime(session)}
                       </p>

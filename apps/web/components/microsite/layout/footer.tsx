@@ -51,8 +51,8 @@ export function Footer({
     ? "text-sm text-[var(--mm-text-muted)] transition-colors hover:text-[var(--mm-text)] hover:underline"
     : "text-sm text-zinc-200 transition-colors hover:text-white hover:underline";
   const socialClass = isMinimal
-    ? "inline-flex h-9 w-9 items-center justify-center rounded-full border border-[var(--mm-border)] text-[var(--mm-text-muted)] transition-colors hover:border-[var(--mm-accent)] hover:text-[var(--mm-text)]"
-    : "inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/15 text-zinc-300 transition-colors hover:border-white hover:text-white";
+    ? "inline-flex h-11 w-11 items-center justify-center rounded-full border border-[var(--mm-border)] text-[var(--mm-text-muted)] transition-colors hover:border-[var(--mm-accent)] hover:text-[var(--mm-text)]"
+    : "inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/15 text-zinc-300 transition-colors hover:border-white hover:text-white";
   const dividerClass = isMinimal ? "bg-[var(--mm-border)]/90" : "bg-zinc-700/80";
   const legalClass = isMinimal ? "text-[var(--mm-text-muted)]" : "text-zinc-500";
 

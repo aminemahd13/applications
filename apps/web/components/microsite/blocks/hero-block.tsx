@@ -377,19 +377,26 @@ export function HeroBlock({
                       target={isExternalHref(currentFrame.href) ? "_blank" : undefined}
                       rel={isExternalHref(currentFrame.href) ? "noopener noreferrer" : undefined}
                       className="block w-full"
+                      style={{ aspectRatio: "16 / 9" }}
                     >
                       <img
                         src={currentFrame.src}
                         alt={currentFrame.alt}
-                        className="h-auto w-full object-contain"
+                        loading="eager"
+                        decoding="async"
+                        className="h-full w-full object-contain"
                       />
                     </Link>
                   ) : (
-                    <img
-                      src={currentFrame.src}
-                      alt={currentFrame.alt}
-                      className="h-auto w-full object-contain"
-                    />
+                    <div className="w-full" style={{ aspectRatio: "16 / 9" }}>
+                      <img
+                        src={currentFrame.src}
+                        alt={currentFrame.alt}
+                        loading="eager"
+                        decoding="async"
+                        className="h-full w-full object-contain"
+                      />
+                    </div>
                   )
                 ) : (
                   <div className="mm-director-frame">
