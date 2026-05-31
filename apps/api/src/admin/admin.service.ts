@@ -14,7 +14,7 @@ import {
 } from '@event-platform/shared';
 import { PasswordResetService } from '../auth/password-reset.service';
 import { RateLimiterService } from '../common/services/rate-limiter.service';
-import * as argon2 from 'argon2';
+import { hashPassword } from '../common/security/password.util';
 import * as crypto from 'crypto';
 import {
   buildApplicationPortalLinks,
@@ -1074,7 +1074,7 @@ export class AdminService {
       throw new NotFoundException('User not found');
     }
 
-    const passwordHash = await argon2.hash(newPassword);
+    const passwordHash = await hashPassword(newPassword);
     await this.prisma.users.update({
       where: { id: userId },
       data: { password_hash: passwordHash },
@@ -1961,7 +1961,7 @@ export class AdminService {
 
     if (!user) {
       createdUser = true;
-      const passwordHash = await argon2.hash(
+      const passwordHash = await hashPassword(
         `${crypto.randomUUID()}-${crypto.randomUUID()}`,
       );
       user = await this.prisma.users.create({

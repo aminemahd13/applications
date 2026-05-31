@@ -8,7 +8,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RateLimiterService } from '../common/services/rate-limiter.service';
 import { EmailService } from '../common/email/email.service';
 import * as crypto from 'crypto';
-import * as argon2 from 'argon2';
+import { hashPassword } from '../common/security/password.util';
 
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 const STAFF_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
@@ -183,7 +183,7 @@ export class PasswordResetService {
       });
 
       // Update password
-      const hashedPassword = await argon2.hash(newPassword);
+      const hashedPassword = await hashPassword(newPassword);
       await tx.users.update({
         where: { id: tokenRow.user_id },
         data: { password_hash: hashedPassword },

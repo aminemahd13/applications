@@ -12,7 +12,11 @@ import { OrgSettingsService } from '../admin/org-settings.service';
 import { RateLimiterService } from '../common/services/rate-limiter.service';
 import { RateLimitExceededException } from '../common/exceptions/rate-limit-exceeded.exception';
 import { LoginDto, SignupDto } from '@event-platform/shared';
-import * as argon2 from 'argon2';
+import {
+  hashPassword,
+  passwordNeedsRehash,
+  verifyPassword,
+} from '../common/security/password.util';
 import * as crypto from 'crypto';
 
 interface UpdateProfileDto {
@@ -179,7 +183,7 @@ export class AuthService {
       throw new BadRequestException('Email already in use');
     }
 
-    const hashedPassword = await argon2.hash(dto.password);
+    const hashedPassword = await hashPassword(dto.password);
     const userId = crypto.randomUUID();
 
     // Transaction to create User and Profile
@@ -211,11 +215,16 @@ export class AuthService {
   // emails. Without this, the unknown-email branch returns ~100 ms faster than
   // the known-email-wrong-password branch (one full argon2.verify), enabling
   // timing-based account enumeration.
+  // Migrate legacy (heavier-parameter) password hashes to the current params on
+  // successful login. Can be disabled via env during a critical traffic window.
+  private static readonly REHASH_ON_LOGIN =
+    (process.env.AUTH_REHASH_ON_LOGIN ?? 'true').toLowerCase() !== 'false';
+
   private dummyHashPromise?: Promise<string>;
 
   private getDummyHash(): Promise<string> {
     if (!this.dummyHashPromise) {
-      this.dummyHashPromise = argon2.hash('dummy-for-timing-equalization');
+      this.dummyHashPromise = hashPassword('dummy-for-timing-equalization');
     }
     return this.dummyHashPromise;
   }
@@ -223,19 +232,39 @@ export class AuthService {
   async validateUser(email: string, pass: string): Promise<any> {
     const user = await this.prisma.users.findUnique({ where: { email } });
     if (user && !user.is_disabled) {
-      const match = await argon2.verify(user.password_hash, pass);
+      const match = await verifyPassword(user.password_hash, pass);
       if (match) {
+        // Opportunistically migrate a legacy hash onto the current (cheaper)
+        // parameters so this user's future logins are fast. Best-effort and
+        // non-blocking — the login already succeeded regardless of outcome.
+        if (
+          AuthService.REHASH_ON_LOGIN &&
+          passwordNeedsRehash(user.password_hash)
+        ) {
+          void this.rehashPassword(user.id, pass);
+        }
         const { password_hash, ...result } = user;
         return result;
       }
       return null;
     }
-    // Run argon2.verify against a dummy hash so the response latency matches
-    // the known-email path. The boolean result is discarded.
-    await argon2
-      .verify(await this.getDummyHash(), pass)
-      .catch(() => false);
+    // Verify against a dummy hash so the response latency matches the
+    // known-email path (prevents timing-based account enumeration). Result
+    // is discarded.
+    await verifyPassword(await this.getDummyHash(), pass).catch(() => false);
     return null;
+  }
+
+  private async rehashPassword(userId: string, plain: string): Promise<void> {
+    try {
+      const newHash = await hashPassword(plain);
+      await this.prisma.users.update({
+        where: { id: userId },
+        data: { password_hash: newHash },
+      });
+    } catch {
+      // Best-effort migration; never affects the (already successful) login.
+    }
   }
 
   /**
@@ -457,10 +486,10 @@ export class AuthService {
     });
     if (!user) throw new UnauthorizedException('Invalid session');
 
-    const ok = await argon2.verify(user.password_hash, currentPassword);
+    const ok = await verifyPassword(user.password_hash, currentPassword);
     if (!ok) throw new UnauthorizedException('Current password is incorrect');
 
-    const nextHash = await argon2.hash(newPassword);
+    const nextHash = await hashPassword(newPassword);
     await this.prisma.users.update({
       where: { id: userId },
       data: { password_hash: nextHash },
@@ -480,7 +509,7 @@ export class AuthService {
     });
     if (!user) throw new UnauthorizedException('Invalid session');
 
-    const ok = await argon2.verify(user.password_hash, currentPassword);
+    const ok = await verifyPassword(user.password_hash, currentPassword);
     if (!ok) throw new UnauthorizedException('Current password is incorrect');
 
     try {

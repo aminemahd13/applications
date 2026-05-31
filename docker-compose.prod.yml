@@ -67,11 +67,23 @@ services:
       PUBLIC_APP_BASE_URL: ${PUBLIC_APP_BASE_URL:-}
       INTERNAL_WEB_BASE_URL: ${INTERNAL_WEB_BASE_URL:-http://web:3000}
       TRUST_PROXY: ${TRUST_PROXY:-true}
-      # Sizes the libuv threadpool that runs argon2 password hashing. Default (4)
-      # caps concurrent logins at ~4 and causes login timeouts during deadline
-      # traffic spikes; raise it so bursts of logins don't queue. See login flow
-      # in apps/api/src/auth/auth.service.ts (argon2.verify).
+      # Sizes the libuv threadpool shared by argon2 password hashing, fs, sharp
+      # and Playwright. argon2 is CPU+memory-bound, so set this to roughly the
+      # container's vCPU count — over-subscribing past the cores adds contention,
+      # not throughput. The real login-throughput lever is the argon2 cost below.
       UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-12}
+      # Argon2id password-hashing cost (OWASP baseline: 19 MiB / t=2 / p=1).
+      # This is the primary fix for login timeouts during deadline spikes: lower
+      # memory/time = faster verifies + far less memory churn, so a burst of
+      # logins clears the threadpool quickly. Raise only with CPU/RAM headroom.
+      # See apps/api/src/common/security/password.util.ts.
+      ARGON2_MEMORY_KIB: ${ARGON2_MEMORY_KIB:-19456}
+      ARGON2_TIME_COST: ${ARGON2_TIME_COST:-2}
+      ARGON2_PARALLELISM: ${ARGON2_PARALLELISM:-1}
+      # On successful login, migrate legacy heavy hashes to the params above so
+      # returning users' future logins are cheap. Set "false" to pause migration
+      # during a critical traffic window, then re-enable.
+      AUTH_REHASH_ON_LOGIN: ${AUTH_REHASH_ON_LOGIN:-true}
       THROTTLE_TTL_MS: ${THROTTLE_TTL_MS:-60000}
       THROTTLE_LIMIT: ${THROTTLE_LIMIT:-1000}
       AUTH_RATE_WINDOW_MS: ${AUTH_RATE_WINDOW_MS:-900000}
