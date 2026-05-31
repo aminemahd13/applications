@@ -691,6 +691,7 @@ export default function AdminPeoplePage() {
             <div className="relative flex-1 max-w-sm">
               <Input
                 placeholder="Search by name, email, role, city, country..."
+                aria-label="Search users"
                 value={userSearch}
                 onChange={(e) => {
                   setUsersLoading(true);

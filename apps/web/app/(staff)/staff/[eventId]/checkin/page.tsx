@@ -885,10 +885,12 @@ export default function CheckinPage() {
                   }
                 }}
                 placeholder="Search name, email, phone, application ID..."
+                aria-label="Search attendees"
               />
               <Button
                 type="button"
                 variant="outline"
+                aria-label="Search attendees"
                 onClick={() => {
                   setAttendeesPage(1);
                   setAttendeeSearch(attendeeSearchInput.trim());

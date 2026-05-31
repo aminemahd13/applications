@@ -225,6 +225,7 @@ export function QrScanner({
             size="sm"
             variant="ghost"
             onClick={toggleCamera}
+            aria-label="Switch between front and back camera"
             title="Switch between front and back camera"
           >
             <SwitchCamera className="h-4 w-4" />

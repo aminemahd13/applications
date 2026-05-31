@@ -185,6 +185,7 @@ export default function AuditLogPage() {
         <div className="relative flex-1 max-w-sm">
           <Input
             placeholder="Search actions or users…"
+            aria-label="Search audit log"
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -201,7 +202,7 @@ export default function AuditLogPage() {
             setPage(1);
           }}
         >
-          <SelectTrigger className="w-full sm:w-[160px]">
+          <SelectTrigger className="w-full sm:w-[160px]" aria-label="Filter by category">
             <Filter className="mr-1.5 h-3.5 w-3.5" />
             <SelectValue placeholder="All categories" />
           </SelectTrigger>
@@ -215,7 +216,7 @@ export default function AuditLogPage() {
             <SelectItem value="settings">Settings</SelectItem>
           </SelectContent>
         </Select>
-        <Button variant="outline" size="icon" onClick={fetchAudit} className="sm:ml-auto">
+        <Button variant="outline" size="icon" onClick={fetchAudit} className="sm:ml-auto" aria-label="Refresh audit log" title="Refresh">
           <RefreshCw className="h-4 w-4" />
         </Button>
         <Button
