@@ -18,6 +18,11 @@ import { apiClient } from "@/lib/api";
 import { ChevronDown, ChevronRight, Loader2, Users, X } from "lucide-react";
 import type { RecipientFilter } from "@event-platform/shared";
 import { DecisionStatus, StepStatus } from "@event-platform/shared";
+import {
+  FieldAnswerCriterion as FieldAnswerCriterionEditor,
+  type FilterableFieldStep,
+  type FieldAnswerValue,
+} from "@/components/shared/field-answer-criterion";
 
 interface WorkflowStep {
   id: string;
@@ -142,6 +147,9 @@ export function AudienceBuilder({
   isLoadingPreview,
 }: AudienceBuilderProps) {
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
+  const [filterableFields, setFilterableFields] = useState<
+    FilterableFieldStep[]
+  >([]);
 
   useEffect(() => {
     apiClient<{ data?: Array<any> }>(`/events/${eventId}/workflow/steps`)
@@ -155,6 +163,11 @@ export function AudienceBuilder({
         );
       })
       .catch(() => {});
+    apiClient<{ data?: FilterableFieldStep[] }>(
+      `/events/${eventId}/workflow/field-options`,
+    )
+      .then((res) => setFilterableFields(res.data ?? []))
+      .catch(() => {});
   }, [eventId]);
 
   const update = useCallback(
@@ -162,6 +175,35 @@ export function AudienceBuilder({
       onChange({ ...filter, ...partial });
     },
     [filter, onChange],
+  );
+
+  const addFieldAnswer = useCallback(() => {
+    const current = filter.fieldAnswers ?? [];
+    update({
+      fieldAnswers: [
+        ...current,
+        { stepId: "", fieldKey: "", matcher: "any", values: [] },
+      ],
+    });
+  }, [filter.fieldAnswers, update]);
+
+  const updateFieldAnswer = useCallback(
+    (index: number, next: FieldAnswerValue) => {
+      const current = filter.fieldAnswers ?? [];
+      update({
+        fieldAnswers: current.map((entry, i) => (i === index ? next : entry)),
+      });
+    },
+    [filter.fieldAnswers, update],
+  );
+
+  const removeFieldAnswer = useCallback(
+    (index: number) => {
+      const current = filter.fieldAnswers ?? [];
+      const updated = current.filter((_, i) => i !== index);
+      update({ fieldAnswers: updated.length > 0 ? updated : undefined });
+    },
+    [filter.fieldAnswers, update],
   );
 
   const toggleDecisionStatus = useCallback(
@@ -318,6 +360,53 @@ export function AudienceBuilder({
           onChange={(tags) => update({ tagsAll: tags.length > 0 ? tags : undefined })}
         />
       </CollapsibleSection>
+
+      {filterableFields.length > 0 && (
+        <CollapsibleSection title="Form answers">
+          <div className="space-y-3">
+            {(filter.fieldAnswers ?? []).map((criterion, index) => (
+              <div
+                key={index}
+                className="space-y-2 rounded-md border border-border/60 p-2.5"
+              >
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-muted-foreground">
+                    Answer filter {index + 1}
+                  </Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                    onClick={() => removeFieldAnswer(index)}
+                  >
+                    Remove
+                  </Button>
+                </div>
+                <FieldAnswerCriterionEditor
+                  steps={filterableFields}
+                  value={{
+                    stepId: criterion.stepId,
+                    fieldKey: criterion.fieldKey,
+                    matcher: criterion.matcher,
+                    values: criterion.values,
+                  }}
+                  onChange={(next) => updateFieldAnswer(index, next)}
+                />
+              </div>
+            ))}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={addFieldAnswer}
+            >
+              Add answer filter
+            </Button>
+          </div>
+        </CollapsibleSection>
+      )}
 
       <CollapsibleSection title="Demographics">
         <div className="space-y-2">

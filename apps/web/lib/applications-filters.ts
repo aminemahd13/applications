@@ -73,7 +73,16 @@ export type ApplicationsFilterConditionType =
   | "tags_none"
   | "completion_bucket"
   | "has_draft_progress"
-  | "needs_revision";
+  | "needs_revision"
+  | "field_answer";
+
+export type ApplicationsFieldAnswerMatcher =
+  | "any"
+  | "all"
+  | "none"
+  | "equals"
+  | "contains"
+  | "not_contains";
 
 interface ApplicationsFilterNodeBase {
   id: string;
@@ -154,6 +163,18 @@ export interface ApplicationsNeedsRevisionConditionNode
   value: boolean;
 }
 
+export interface ApplicationsFieldAnswerConditionNode
+  extends ApplicationsFilterNodeBase {
+  type: "field_answer";
+  stepId: string;
+  fieldKey: string;
+  matcher: ApplicationsFieldAnswerMatcher;
+  values: string[];
+  /** UI-only display hints; not sent to the API. */
+  fieldLabel?: string;
+  fieldType?: string;
+}
+
 export type ApplicationsFilterConditionNode =
   | ApplicationsSearchTextConditionNode
   | ApplicationsDecisionStatusConditionNode
@@ -165,7 +186,8 @@ export type ApplicationsFilterConditionNode =
   | ApplicationsTagsNoneConditionNode
   | ApplicationsCompletionBucketConditionNode
   | ApplicationsHasDraftProgressConditionNode
-  | ApplicationsNeedsRevisionConditionNode;
+  | ApplicationsNeedsRevisionConditionNode
+  | ApplicationsFieldAnswerConditionNode;
 
 export type ApplicationsFilterNode =
   | ApplicationsFilterGroupNode
@@ -249,6 +271,15 @@ export interface ApplicationsApiNeedsRevisionCondition
   value: boolean;
 }
 
+export interface ApplicationsApiFieldAnswerCondition
+  extends ApplicationsApiFilterNodeBase {
+  type: "field_answer";
+  stepId: string;
+  fieldKey: string;
+  matcher: ApplicationsFieldAnswerMatcher;
+  values: string[];
+}
+
 export type ApplicationsApiFilterCondition =
   | ApplicationsApiSearchTextCondition
   | ApplicationsApiDecisionStatusCondition
@@ -260,7 +291,8 @@ export type ApplicationsApiFilterCondition =
   | ApplicationsApiTagsNoneCondition
   | ApplicationsApiCompletionBucketCondition
   | ApplicationsApiHasDraftProgressCondition
-  | ApplicationsApiNeedsRevisionCondition;
+  | ApplicationsApiNeedsRevisionCondition
+  | ApplicationsApiFieldAnswerCondition;
 
 export type ApplicationsApiFilterNode =
   | ApplicationsApiFilterGroup
@@ -452,6 +484,24 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
+const FIELD_ANSWER_MATCHERS: ApplicationsFieldAnswerMatcher[] = [
+  "any",
+  "all",
+  "none",
+  "equals",
+  "contains",
+  "not_contains",
+];
+
+export function isFieldAnswerMatcher(
+  value: unknown,
+): value is ApplicationsFieldAnswerMatcher {
+  return (
+    typeof value === "string" &&
+    (FIELD_ANSWER_MATCHERS as string[]).includes(value)
+  );
+}
+
 function isApiFilterCondition(value: unknown): value is ApplicationsApiFilterCondition {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as { type?: unknown; [key: string]: unknown };
@@ -499,6 +549,16 @@ function isApiFilterCondition(value: unknown): value is ApplicationsApiFilterCon
     case "has_draft_progress":
     case "needs_revision":
       return typeof candidate.value === "boolean";
+    case "field_answer":
+      return (
+        isUuid(candidate.stepId) &&
+        typeof candidate.fieldKey === "string" &&
+        candidate.fieldKey.trim().length > 0 &&
+        isFieldAnswerMatcher(candidate.matcher) &&
+        isStringArray(candidate.values) &&
+        candidate.values.length > 0 &&
+        candidate.values.every((entry) => entry.trim().length > 0)
+      );
     default:
       return false;
   }
@@ -623,6 +683,10 @@ export function createAdvancedConditionNode(
   context?: {
     stepId?: string;
     reviewerId?: string;
+    fieldKey?: string;
+    fieldLabel?: string;
+    fieldType?: string;
+    defaultValue?: string;
   },
 ): ApplicationsFilterConditionNode {
   const id = nextFilterNodeId();
@@ -661,6 +725,24 @@ export function createAdvancedConditionNode(
       return { id, type, negate: false, value: true };
     case "needs_revision":
       return { id, type, negate: false, value: true };
+    case "field_answer": {
+      const fieldType = context?.fieldType;
+      const isOption =
+        fieldType === "select" ||
+        fieldType === "multiselect" ||
+        fieldType === "checkbox";
+      return {
+        id,
+        type,
+        negate: false,
+        stepId: context?.stepId ?? "",
+        fieldKey: context?.fieldKey ?? "",
+        matcher: isOption ? "any" : "contains",
+        values: context?.defaultValue ? [context.defaultValue] : [],
+        fieldLabel: context?.fieldLabel,
+        fieldType,
+      };
+    }
     default:
       return { id, type: "search_text", negate: false, value: "" };
   }
@@ -758,6 +840,22 @@ export function toApiFilterTree(
           ...negate,
           value: Boolean(node.value),
         };
+      case "field_answer": {
+        const stepId = node.stepId.trim();
+        const fieldKey = node.fieldKey.trim();
+        const values = uniqueTrimmedStrings(node.values);
+        if (!isUuid(stepId) || fieldKey.length === 0 || values.length === 0) {
+          return null;
+        }
+        return {
+          type: node.type,
+          ...negate,
+          stepId,
+          fieldKey,
+          matcher: node.matcher,
+          values,
+        };
+      }
       default:
         return null;
     }
@@ -882,6 +980,16 @@ export function fromApiFilterTree(
           type: node.type,
           negate: Boolean(node.negate),
           value: node.value,
+        };
+      case "field_answer":
+        return {
+          id: nextFilterNodeId(),
+          type: node.type,
+          negate: Boolean(node.negate),
+          stepId: node.stepId,
+          fieldKey: node.fieldKey,
+          matcher: node.matcher,
+          values: [...node.values],
         };
       default:
         return createAdvancedConditionNode("search_text");

@@ -71,6 +71,10 @@ import {
   TableSkeleton,
   ConfirmDialog,
 } from "@/components/shared";
+import {
+  FieldAnswerCriterion,
+  type FilterableFieldStep,
+} from "@/components/shared/field-answer-criterion";
 import { ApiError, apiClient } from "@/lib/api";
 import {
   buildApplicationsQueryRequest,
@@ -513,6 +517,7 @@ export default function ApplicationsListPage() {
   const [bulkStepId, setBulkStepId] = useState("");
   const [bulkStepAction, setBulkStepAction] = useState<"UNLOCK" | "APPROVE" | "LOCK">("UNLOCK");
   const [workflowSteps, setWorkflowSteps] = useState<Array<{ id: string; title: string; stepIndex: number }>>([]);
+  const [filterableFields, setFilterableFields] = useState<FilterableFieldStep[]>([]);
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState("");
   const [templateStatus, setTemplateStatus] = useState<
@@ -884,6 +889,15 @@ export default function ApplicationsListPage() {
             stepIndex: s.stepIndex ?? s.step_index ?? 0,
           }))
         );
+        // Fetch answer-filterable form fields for the field_answer condition.
+        const fieldOptionsRes = await apiClient<{
+          data?: FilterableFieldStep[];
+        }>(`/events/${eventId}/workflow/field-options`).catch(() => ({
+          data: [],
+        }));
+        setFilterableFields(
+          Array.isArray(fieldOptionsRes.data) ? fieldOptionsRes.data : [],
+        );
       } catch {
         /* handled */
       }
@@ -1084,11 +1098,21 @@ export default function ApplicationsListPage() {
           return `${prefix}Has draft progress: ${condition.value ? "yes" : "no"}`;
         case "needs_revision":
           return `${prefix}Needs revision: ${condition.value ? "yes" : "no"}`;
+        case "field_answer": {
+          const field = filterableFields
+            .find((step) => step.stepId === condition.stepId)
+            ?.fields.find((f) => f.key === condition.fieldKey);
+          const label =
+            field?.label ??
+            condition.fieldLabel ??
+            (condition.fieldKey || "field");
+          return `${prefix}Answer "${label}" ${condition.matcher}: ${condition.values.join(", ") || "(none)"}`;
+        }
         default:
           return "Condition";
       }
     },
-    [sortedWorkflowSteps]
+    [sortedWorkflowSteps, filterableFields]
   );
   const activeFilterChips = useMemo(() => {
     const chips: FilterChip[] = [];
@@ -1463,6 +1487,9 @@ export default function ApplicationsListPage() {
               <SelectItem value="completion_bucket">Completion bucket</SelectItem>
               <SelectItem value="has_draft_progress">Has draft progress</SelectItem>
               <SelectItem value="needs_revision">Needs revision</SelectItem>
+              {filterableFields.length > 0 && (
+                <SelectItem value="field_answer">Form answer</SelectItem>
+              )}
             </SelectContent>
           </Select>
           <div className="ml-auto flex items-center gap-2">
@@ -1609,6 +1636,32 @@ export default function ApplicationsListPage() {
               )}
             </div>
           </div>
+        )}
+
+        {condition.type === "field_answer" && (
+          <FieldAnswerCriterion
+            steps={filterableFields}
+            value={{
+              stepId: condition.stepId,
+              fieldKey: condition.fieldKey,
+              matcher: condition.matcher,
+              values: condition.values,
+            }}
+            onChange={(next) => {
+              const field = filterableFields
+                .find((step) => step.stepId === next.stepId)
+                ?.fields.find((f) => f.key === next.fieldKey);
+              updateAdvancedConditionNode(condition.id, () => ({
+                ...condition,
+                stepId: next.stepId,
+                fieldKey: next.fieldKey,
+                matcher: next.matcher,
+                values: next.values,
+                fieldLabel: field?.label,
+                fieldType: field?.type,
+              }));
+            }}
+          />
         )}
 
         {condition.type === "assigned_reviewer" && (

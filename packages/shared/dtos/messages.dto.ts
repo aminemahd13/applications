@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { DecisionStatus, StepStatus } from './applications.dto';
+import {
+    DecisionStatus,
+    StepStatus,
+    FieldAnswerMatcherSchema,
+} from './applications.dto';
 
 // ============================================================
 // MESSAGING DTOs
@@ -24,6 +28,21 @@ export const RecipientFilterSchema = z.object({
     // Tags (AND/OR)
     tagsAny: z.array(z.string()).optional(),
     tagsAll: z.array(z.string()).optional(),
+
+    // Form answers: target applicants by their answer to a form question.
+    // AND-combined across entries. Lenient (the audience-builder may hold
+    // in-progress rows); the service skips entries that are not yet complete.
+    fieldAnswers: z
+        .array(
+            z.object({
+                stepId: z.string(),
+                fieldKey: z.string(),
+                matcher: FieldAnswerMatcherSchema.default('any'),
+                values: z.array(z.string()),
+            }),
+        )
+        .max(20)
+        .optional(),
 
     // Explicit addressing
     applicationIds: z.array(z.string().uuid()).optional(),

@@ -28,7 +28,9 @@ import {
   MessageEmailDeliveryState,
   MessageListQueryDto,
   MessageRecipientsQueryDto,
+  matchesFieldAnswer,
 } from '@event-platform/shared';
+import { EffectiveAnswersService } from './effective-answers.service';
 
 @Injectable()
 export class MessagesService {
@@ -76,6 +78,7 @@ export class MessagesService {
     private readonly prisma: PrismaService,
     private readonly cls: ClsService,
     private readonly emailService: EmailService,
+    private readonly effectiveAnswers: EffectiveAnswersService,
   ) {}
 
   private static readEnvInt(
@@ -247,7 +250,8 @@ export class MessagesService {
     const hasSegmentedCriteria =
       andConditions.length > 0 ||
       filter.confirmed !== undefined ||
-      filter.checkedIn !== undefined;
+      filter.checkedIn !== undefined ||
+      (filter.fieldAnswers?.length ?? 0) > 0;
     const hasExplicitTargets =
       (filter.applicationIds?.length ?? 0) > 0 ||
       (filter.userIds?.length ?? 0) > 0 ||
@@ -274,6 +278,36 @@ export class MessagesService {
       });
       for (const app of explicitApps) {
         recipientsByApplicationId.set(app.id, app.applicant_user_id);
+      }
+    }
+
+    // Form-answer segmentation: keep only applications whose effective answers
+    // match every (complete) fieldAnswers criterion (snapshot + active admin
+    // patches). Incomplete in-progress rows from the builder are skipped.
+    const fieldAnswerCriteria = (filter.fieldAnswers ?? []).filter(
+      (c) => c.stepId && c.fieldKey && c.values.length > 0,
+    );
+    if (fieldAnswerCriteria.length > 0 && recipientsByApplicationId.size > 0) {
+      const applicationIds = Array.from(recipientsByApplicationId.keys());
+      const stepIds = Array.from(
+        new Set(fieldAnswerCriteria.map((c) => c.stepId)),
+      );
+      const answersByApp =
+        await this.effectiveAnswers.getEffectiveAnswersForApplications(
+          applicationIds,
+          stepIds,
+        );
+      for (const appId of applicationIds) {
+        const byStep = answersByApp.get(appId);
+        const matchesAll = fieldAnswerCriteria.every((criterion) => {
+          const answers = byStep?.get(criterion.stepId);
+          return matchesFieldAnswer(
+            answers?.[criterion.fieldKey],
+            criterion.matcher ?? 'any',
+            criterion.values,
+          );
+        });
+        if (!matchesAll) recipientsByApplicationId.delete(appId);
       }
     }
 

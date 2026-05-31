@@ -106,6 +106,138 @@ export class WorkflowService {
   }
 
   /**
+   * List the answer-filterable form fields of every step, with options for
+   * option-based fields. Powers the "filter applicants by their answer to a
+   * question" UI on the applications page and the messaging audience-builder.
+   */
+  async getFilterableFieldOptions(eventId: string): Promise<
+    Array<{
+      stepId: string;
+      stepTitle: string;
+      stepIndex: number;
+      fields: Array<{
+        key: string;
+        label: string;
+        type: string;
+        options?: Array<{ value: string; label: string }>;
+      }>;
+    }>
+  > {
+    const steps = await this.getWorkflow(eventId);
+    const versionIds = Array.from(
+      new Set(
+        steps
+          .map((s) => s.formVersionId)
+          .filter((v): v is string => typeof v === 'string' && v.length > 0),
+      ),
+    );
+
+    const versions = versionIds.length
+      ? await this.prisma.form_versions.findMany({
+          where: { id: { in: versionIds } },
+          select: { id: true, schema: true },
+        })
+      : [];
+    const schemaByVersion = new Map<string, unknown>(
+      versions.map((v) => [v.id, v.schema]),
+    );
+
+    return steps
+      .map((step) => ({
+        stepId: step.id,
+        stepTitle: step.title,
+        stepIndex: step.stepIndex,
+        fields: this.extractFilterableFields(
+          step.formVersionId
+            ? schemaByVersion.get(step.formVersionId)
+            : null,
+        ),
+      }))
+      .filter((step) => step.fields.length > 0);
+  }
+
+  private static readonly FILTERABLE_FIELD_TYPES = new Set([
+    'select',
+    'multiselect',
+    'checkbox',
+    'text',
+    'textarea',
+    'number',
+    'email',
+    'phone',
+    'date',
+  ]);
+  private static readonly OPTION_FIELD_TYPES = new Set([
+    'select',
+    'multiselect',
+    'checkbox',
+  ]);
+
+  private extractFilterableFields(schema: unknown): Array<{
+    key: string;
+    label: string;
+    type: string;
+    options?: Array<{ value: string; label: string }>;
+  }> {
+    if (!schema || typeof schema !== 'object') return [];
+    const sections = Array.isArray((schema as { sections?: unknown }).sections)
+      ? ((schema as { sections: unknown[] }).sections as unknown[])
+      : [];
+    const out: Array<{
+      key: string;
+      label: string;
+      type: string;
+      options?: Array<{ value: string; label: string }>;
+    }> = [];
+
+    for (const section of sections) {
+      const fields = Array.isArray((section as { fields?: unknown })?.fields)
+        ? ((section as { fields: unknown[] }).fields as unknown[])
+        : [];
+      for (const raw of fields) {
+        const field = raw as {
+          key?: unknown;
+          type?: unknown;
+          label?: unknown;
+          options?: unknown;
+          ui?: { options?: unknown };
+        };
+        const type = String(field?.type ?? '').toLowerCase();
+        const key = typeof field?.key === 'string' ? field.key : '';
+        if (!key || !WorkflowService.FILTERABLE_FIELD_TYPES.has(type)) continue;
+        const label =
+          typeof field?.label === 'string' && field.label.trim().length > 0
+            ? field.label
+            : key;
+        const entry: {
+          key: string;
+          label: string;
+          type: string;
+          options?: Array<{ value: string; label: string }>;
+        } = { key, label, type };
+
+        if (WorkflowService.OPTION_FIELD_TYPES.has(type)) {
+          const rawOptions = field?.ui?.options ?? field?.options ?? [];
+          entry.options = Array.isArray(rawOptions)
+            ? rawOptions
+                .map((o) => {
+                  const opt = o as { value?: unknown; label?: unknown };
+                  const value = String(opt?.value ?? '');
+                  return {
+                    value,
+                    label: String(opt?.label ?? opt?.value ?? value),
+                  };
+                })
+                .filter((o) => o.value.length > 0)
+            : [];
+        }
+        out.push(entry);
+      }
+    }
+    return out;
+  }
+
+  /**
    * Create new workflow step (appended at end)
    */
   async createStep(

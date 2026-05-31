@@ -8,6 +8,7 @@ import {
   decodeFilterTreeFromUrl,
   encodeFilterTreeForUrl,
   formatProgressLabel,
+  fromApiFilterTree,
   getFilterTreeStats,
   quickFiltersToApiFilterTree,
   quickFiltersToAdvancedTree,
@@ -348,5 +349,81 @@ describe("formatProgressLabel", () => {
         completed: 2,
       }),
     ).toBe("2/5 steps");
+  });
+});
+
+describe("field_answer condition", () => {
+  const FIELD_KEY = "favorite_language";
+
+  function makeFieldAnswerNode() {
+    return createAdvancedConditionNode("field_answer", {
+      stepId: STEP_ID,
+      fieldKey: FIELD_KEY,
+      fieldLabel: "Favorite language",
+      fieldType: "select",
+      defaultValue: "typescript",
+    });
+  }
+
+  it("creates a node seeded from field context", () => {
+    const node = makeFieldAnswerNode();
+    expect(node.type).toBe("field_answer");
+    if (node.type !== "field_answer") return;
+    expect(node.stepId).toBe(STEP_ID);
+    expect(node.fieldKey).toBe(FIELD_KEY);
+    expect(node.matcher).toBe("any");
+    expect(node.values).toEqual(["typescript"]);
+  });
+
+  it("defaults text fields to the contains matcher", () => {
+    const node = createAdvancedConditionNode("field_answer", {
+      stepId: STEP_ID,
+      fieldKey: "motivation",
+      fieldType: "text",
+    });
+    if (node.type !== "field_answer") return;
+    expect(node.matcher).toBe("contains");
+    expect(node.values).toEqual([]);
+  });
+
+  it("round-trips through toApiFilterTree / fromApiFilterTree", () => {
+    const root = createEmptyAdvancedFilterTree();
+    const node = makeFieldAnswerNode();
+    if (node.type === "field_answer") {
+      node.values = ["typescript", "python"];
+    }
+    root.children.push(node);
+
+    const api = toApiFilterTree(root);
+    expect(api.children).toHaveLength(1);
+    const apiCondition = api.children[0] as unknown as Record<string, unknown>;
+    expect(apiCondition.type).toBe("field_answer");
+    expect(apiCondition.stepId).toBe(STEP_ID);
+    expect(apiCondition.fieldKey).toBe(FIELD_KEY);
+    expect(apiCondition.matcher).toBe("any");
+    expect(apiCondition.values).toEqual(["typescript", "python"]);
+    // UI-only display hints are not serialized to the API.
+    expect(apiCondition.fieldLabel).toBeUndefined();
+    expect(apiCondition.fieldType).toBeUndefined();
+
+    const restored = fromApiFilterTree(api).children[0];
+    expect(restored.type).toBe("field_answer");
+    if (restored.type !== "field_answer") return;
+    expect(restored.stepId).toBe(STEP_ID);
+    expect(restored.fieldKey).toBe(FIELD_KEY);
+    expect(restored.matcher).toBe("any");
+    expect(restored.values).toEqual(["typescript", "python"]);
+  });
+
+  it("drops a condition with no selected values", () => {
+    const root = createEmptyAdvancedFilterTree();
+    root.children.push(
+      createAdvancedConditionNode("field_answer", {
+        stepId: STEP_ID,
+        fieldKey: FIELD_KEY,
+        fieldType: "select",
+      }),
+    );
+    expect(toApiFilterTree(root).children).toHaveLength(0);
   });
 });

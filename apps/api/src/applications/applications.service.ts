@@ -46,6 +46,7 @@ import {
   StepModificationScope,
   UpdateDecisionTemplateDto,
   PaginatedResponse,
+  matchesFieldAnswer,
 } from '@event-platform/shared';
 import { StepStateService } from './step-state.service';
 import * as jwt from 'jsonwebtoken';
@@ -88,9 +89,19 @@ type ApplicationsListRecord = {
   } | null;
 };
 
+interface ApplicationsFilterEvalContext {
+  // Effective answers for the current application, keyed by stepId. Only
+  // populated when the filter tree contains a field_answer condition.
+  answersByStep?: Map<string, Record<string, unknown>>;
+}
+
 interface CompiledApplicationsFilter {
   dbWhere: Prisma.applicationsWhereInput | null;
-  evaluate: (application: ApplicationsListRecord, summary: ApplicationSummary) => boolean;
+  evaluate: (
+    application: ApplicationsListRecord,
+    summary: ApplicationSummary,
+    ctx?: ApplicationsFilterEvalContext,
+  ) => boolean;
 }
 
 interface QueryBatchOptions {
@@ -248,6 +259,8 @@ export class ApplicationsService {
     const limit = Math.min(Math.max(request.limit ?? 50, 1), 100);
     const order = request.order === 'asc' ? 'asc' : 'desc';
     const compiled = this.compileApplicationsFilterTree(request.filterTree);
+    const fieldAnswerStepIds = this.collectFieldAnswerStepIds(request.filterTree);
+    const needsAnswers = fieldAnswerStepIds.size > 0;
     const shouldIncludeTotal = !request.cursor;
 
     // Use larger scan windows to avoid missing sparse matches while preserving stable cursor pagination.
@@ -273,9 +286,17 @@ export class ApplicationsService {
         break;
       }
 
+      const answersByApplication = needsAnswers
+        ? await this.loadFieldAnswersForBatch(batch, fieldAnswerStepIds)
+        : null;
+
       for (const application of batch) {
         const summary = this.toSummary(application);
-        if (compiled.evaluate(application, summary)) {
+        const ctx: ApplicationsFilterEvalContext | undefined =
+          answersByApplication
+            ? { answersByStep: answersByApplication.get(application.id) }
+            : undefined;
+        if (compiled.evaluate(application, summary, ctx)) {
           totalMatches += 1;
           if (matched.length < maxMatchesToCollect) {
             matched.push({ application, summary });
@@ -491,8 +512,8 @@ export class ApplicationsService {
     const compiledNode = this.compileApplicationsFilterNode(normalizedTree);
     return {
       dbWhere: compiledNode.dbWhere,
-      evaluate: (application, summary) =>
-        compiledNode.evaluate(application, summary),
+      evaluate: (application, summary, ctx) =>
+        compiledNode.evaluate(application, summary, ctx),
     };
   }
 
@@ -500,7 +521,11 @@ export class ApplicationsService {
     node: ApplicationsFilterTreeNode,
   ): {
     dbWhere: Prisma.applicationsWhereInput | null;
-    evaluate: (application: ApplicationsListRecord, summary: ApplicationSummary) => boolean;
+    evaluate: (
+      application: ApplicationsListRecord,
+      summary: ApplicationSummary,
+      ctx?: ApplicationsFilterEvalContext,
+    ) => boolean;
   } {
     if (node.type !== 'group') {
       const conditionWhere = this.compileDbWhereForCondition(node);
@@ -511,8 +536,8 @@ export class ApplicationsService {
         : conditionWhere;
       return {
         dbWhere,
-        evaluate: (application, summary) =>
-          this.evaluateApplicationsFilterCondition(node, application, summary),
+        evaluate: (application, summary, ctx) =>
+          this.evaluateApplicationsFilterCondition(node, application, summary, ctx),
       };
     }
 
@@ -547,9 +572,9 @@ export class ApplicationsService {
 
     return {
       dbWhere,
-      evaluate: (application, summary) => {
+      evaluate: (application, summary, ctx) => {
         const evaluations = compiledChildren.map((entry) =>
-          entry.evaluate(application, summary),
+          entry.evaluate(application, summary, ctx),
         );
         const value =
           evaluations.length === 0
@@ -639,6 +664,7 @@ export class ApplicationsService {
     condition: ApplicationsFilterCondition,
     application: ApplicationsListRecord,
     summary: ApplicationSummary,
+    ctx?: ApplicationsFilterEvalContext,
   ): boolean {
     let value = false;
     switch (condition.type) {
@@ -719,12 +745,77 @@ export class ApplicationsService {
         value = condition.value ? hasNeedsRevision : !hasNeedsRevision;
         break;
       }
+      case 'field_answer': {
+        const answers = ctx?.answersByStep?.get(condition.stepId);
+        value = matchesFieldAnswer(
+          answers?.[condition.fieldKey],
+          condition.matcher,
+          condition.values,
+        );
+        break;
+      }
       default:
         value = true;
         break;
     }
 
     return condition.negate ? !value : value;
+  }
+
+  /** Collect the stepIds referenced by any field_answer condition in the tree. */
+  private collectFieldAnswerStepIds(
+    node: ApplicationsFilterTreeNode,
+  ): Set<string> {
+    const stepIds = new Set<string>();
+    const walk = (n: ApplicationsFilterTreeNode) => {
+      if (n.type === 'group') {
+        for (const child of n.children ?? []) walk(child);
+        return;
+      }
+      if (n.type === 'field_answer') stepIds.add(n.stepId);
+    };
+    walk(node);
+    return stepIds;
+  }
+
+  /**
+   * Load effective answers (submission snapshot + active admin patches) for the
+   * referenced steps across a batch of applications. Returns
+   * applicationId -> (stepId -> answers). Only called when the filter tree
+   * contains a field_answer condition.
+   */
+  private async loadFieldAnswersForBatch(
+    batch: ApplicationsListRecord[],
+    stepIds: Set<string>,
+  ): Promise<Map<string, Map<string, Record<string, unknown>>>> {
+    const versionIds = new Set<string>();
+    const appStepVersion = new Map<string, Map<string, string>>();
+    for (const app of batch) {
+      const stepMap = new Map<string, string>();
+      for (const state of app.application_step_states ?? []) {
+        if (stepIds.has(state.step_id) && state.latest_submission_version_id) {
+          stepMap.set(state.step_id, state.latest_submission_version_id);
+          versionIds.add(state.latest_submission_version_id);
+        }
+      }
+      if (stepMap.size > 0) appStepVersion.set(app.id, stepMap);
+    }
+
+    const answersByVersion =
+      await this.getEffectiveAnswersBySubmissionVersionIds(
+        Array.from(versionIds),
+      );
+
+    const result = new Map<string, Map<string, Record<string, unknown>>>();
+    for (const [appId, stepMap] of appStepVersion) {
+      const byStep = new Map<string, Record<string, unknown>>();
+      for (const [stepId, versionId] of stepMap) {
+        const answers = answersByVersion.get(versionId);
+        if (answers) byStep.set(stepId, answers);
+      }
+      result.set(appId, byStep);
+    }
+    return result;
   }
 
   async listSavedViews(eventId: string): Promise<ApplicationSavedView[]> {

@@ -121,6 +121,7 @@ export const ApplicationsFilterConditionTypeSchema = z.enum([
     'completion_bucket',
     'has_draft_progress',
     'needs_revision',
+    'field_answer',
 ]);
 
 export type ApplicationsFilterConditionType = z.infer<
@@ -226,6 +227,36 @@ export const ApplicationsNeedsRevisionConditionSchema =
         value: z.boolean(),
     });
 
+// --- Field answer: filter applicants by their answer to a form question ---
+export const FieldAnswerMatcherSchema = z.enum([
+    'any', // answer is any of the values (option "is one of" / dropdown)
+    'all', // answer (multi-select) contains all of the values
+    'none', // answer is none of the values (also matches no-answer)
+    'equals', // text answer equals any value (case-insensitive)
+    'contains', // text answer contains any value (case-insensitive substring)
+    'not_contains', // text answer contains none of the values
+]);
+export type FieldAnswerMatcher = z.infer<typeof FieldAnswerMatcherSchema>;
+
+// Reusable criterion shared by the applications filter condition and the
+// messaging recipient filter. stepId + fieldKey identify the question; values
+// are option values (SELECT/MULTISELECT/CHECKBOX) or text fragments.
+const fieldAnswerCriterionShape = {
+    stepId: z.string().uuid(),
+    fieldKey: z.string().trim().min(1).max(200),
+    matcher: FieldAnswerMatcherSchema.default('any'),
+    values: z.array(z.string().trim().min(1)).min(1).max(50),
+};
+
+export const FieldAnswerCriterionSchema = z.object(fieldAnswerCriterionShape);
+export type FieldAnswerCriterion = z.infer<typeof FieldAnswerCriterionSchema>;
+
+export const ApplicationsFieldAnswerConditionSchema =
+    ApplicationsFilterConditionBaseSchema.extend({
+        type: z.literal('field_answer'),
+        ...fieldAnswerCriterionShape,
+    });
+
 export const ApplicationsFilterConditionSchema = z.discriminatedUnion('type', [
     ApplicationsSearchTextConditionSchema,
     ApplicationsDecisionStatusConditionSchema,
@@ -238,6 +269,7 @@ export const ApplicationsFilterConditionSchema = z.discriminatedUnion('type', [
     ApplicationsCompletionBucketConditionSchema,
     ApplicationsHasDraftProgressConditionSchema,
     ApplicationsNeedsRevisionConditionSchema,
+    ApplicationsFieldAnswerConditionSchema,
 ]);
 
 export type ApplicationsFilterCondition = z.infer<

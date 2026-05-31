@@ -14,4 +14,5 @@ export * from './dtos/metrics.dto';
 export * from './dtos/exports.dto';
 export * from './dtos/certificates.dto';
 export * from './dtos/event-archival.dto';
+export * from './utils/field-answer-match';
 

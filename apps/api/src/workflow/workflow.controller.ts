@@ -65,6 +65,21 @@ export class WorkflowController {
   }
 
   /**
+   * Answer-filterable form fields per step (with options) for the applications
+   * filter and the messaging audience-builder.
+   */
+  @Get('field-options')
+  @RequirePermission(
+    Permission.EVENT_APPLICATION_LIST,
+    Permission.EVENT_MESSAGES_SEND,
+    Permission.EVENT_WORKFLOW_MANAGE,
+  )
+  async listFieldOptions(@Param('eventId') eventId: string) {
+    const data = await this.workflowService.getFilterableFieldOptions(eventId);
+    return { data };
+  }
+
+  /**
    * Get single step
    */
   @Get('steps/:stepId')
