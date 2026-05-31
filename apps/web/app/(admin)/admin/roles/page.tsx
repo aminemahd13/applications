@@ -584,14 +584,14 @@ export default function RolesPage() {
       ) : (
         <Card>
           <CardContent className="p-0">
-            <Table>
-              <TableHeader>
+            <Table className="block md:table">
+              <TableHeader className="hidden md:table-header-group">
                 <TableRow>
                   <TableHead>User</TableHead>
                   <TableHead>Assignments</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody>
+              <TableBody className="block md:table-row-group">
                 {grouped.map((group) => {
                   const uniqueScopes = new Set(
                     group.assignments.map((assignment) =>
@@ -601,8 +601,11 @@ export default function RolesPage() {
                   const assignmentCount = group.assignments.length;
 
                   return (
-                    <TableRow key={group.key}>
-                      <TableCell className="align-top">
+                    <TableRow
+                      key={group.key}
+                      className="block border-b last:border-0 md:table-row"
+                    >
+                      <TableCell className="block align-top md:table-cell">
                         <div className="flex items-center gap-3">
                           <Avatar className="h-8 w-8">
                             <AvatarFallback className="text-xs">
@@ -633,7 +636,7 @@ export default function RolesPage() {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="block md:table-cell">
                         <div className="space-y-2">
                           {group.assignments.map((assignment) => {
                             const workspaceHref = assignment.eventId

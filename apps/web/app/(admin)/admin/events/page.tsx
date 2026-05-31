@@ -86,6 +86,108 @@ interface ApiEvent {
   createdAt?: string;
 }
 
+/** Event row action buttons, shared between the desktop table and mobile cards.
+ *  Defined at module scope so it isn't recreated on every render. */
+function EventRowActions({
+  event,
+  router,
+  onArchive,
+  onUnarchive,
+  onDelete,
+}: {
+  event: EventRow;
+  router: ReturnType<typeof useRouter>;
+  onArchive: (id: string) => void;
+  onUnarchive: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9"
+        aria-label="View event"
+        title="View event"
+        onClick={(e) => {
+          e.stopPropagation();
+          router.push(`/admin/events/${event.id}`);
+        }}
+      >
+        <Eye className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9"
+        aria-label="Open staff workspace"
+        title="Open staff workspace"
+        onClick={(e) => {
+          e.stopPropagation();
+          router.push(`/staff/${event.id}`);
+        }}
+      >
+        <BriefcaseBusiness className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9"
+        aria-label="Event settings"
+        title="Event settings"
+        onClick={(e) => {
+          e.stopPropagation();
+          router.push(`/admin/events/${event.id}/settings`);
+        }}
+      >
+        <Settings className="h-3.5 w-3.5" />
+      </Button>
+      {event.status === "archived" ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9"
+          aria-label="Unarchive event"
+          title="Unarchive event"
+          onClick={(e) => {
+            e.stopPropagation();
+            onUnarchive(event.id);
+          }}
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+        </Button>
+      ) : (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9"
+          aria-label="Archive event"
+          title="Archive event"
+          onClick={(e) => {
+            e.stopPropagation();
+            onArchive(event.id);
+          }}
+        >
+          <Archive className="h-3.5 w-3.5" />
+        </Button>
+      )}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9 text-destructive"
+        aria-label="Delete event permanently"
+        title="Delete permanently"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete(event.id);
+        }}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </Button>
+    </div>
+  );
+}
+
 function normalizeEventRow(event: ApiEvent): EventRow {
   const status =
     event.status?.toLowerCase() ??
@@ -383,74 +485,13 @@ export default function AdminEventsPage() {
       {
         id: "actions",
         cell: ({ row }) => (
-          <div className="flex gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => router.push(`/admin/events/${row.original.id}`)}
-            >
-              <Eye className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              title="Open staff workspace"
-              onClick={() => router.push(`/staff/${row.original.id}`)}
-            >
-              <BriefcaseBusiness className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() =>
-                router.push(`/admin/events/${row.original.id}/settings`)
-              }
-            >
-              <Settings className="h-3.5 w-3.5" />
-            </Button>
-            {row.original.status === "archived" ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                title="Unarchive event"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setUnarchiveTarget(row.original.id);
-                }}
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-              </Button>
-            ) : (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                title="Archive event"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setArchiveTarget(row.original.id);
-                }}
-              >
-                <Archive className="h-3.5 w-3.5" />
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-destructive"
-              title="Delete permanently"
-              onClick={(e) => {
-                e.stopPropagation();
-                setHardDeleteTarget(row.original.id);
-              }}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+          <EventRowActions
+            event={row.original}
+            router={router}
+            onArchive={setArchiveTarget}
+            onUnarchive={setUnarchiveTarget}
+            onDelete={setHardDeleteTarget}
+          />
         ),
       },
     ],
@@ -502,7 +543,8 @@ export default function AdminEventsPage() {
       {isLoading ? (
         <TableSkeleton />
       ) : (
-        <Card>
+        <>
+        <Card className="hidden md:block">
           <CardContent className="p-0">
             <Table>
               <TableHeader>
@@ -555,9 +597,80 @@ export default function AdminEventsPage() {
             </Table>
           </CardContent>
         </Card>
+
+        {/* Mobile: stacked cards (6-column table with a 5-action cell is unusable on phones) */}
+        <div className="space-y-3 md:hidden">
+          {table.getRowModel().rows.length === 0 ? (
+            <p className="py-12 text-center text-sm text-muted-foreground">
+              No events found.
+            </p>
+          ) : (
+            table.getRowModel().rows.map((row) => {
+              const ev = row.original;
+              return (
+                <Card key={row.id}>
+                  <CardContent className="space-y-3 p-4">
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/admin/events/${ev.id}`)}
+                      className="flex w-full items-start justify-between gap-3 text-left"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium break-words">
+                          {ev.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground break-all">
+                          /{ev.slug}
+                        </p>
+                      </div>
+                      <Badge
+                        variant={
+                          ev.status === "published" ? "default" : "secondary"
+                        }
+                        className="shrink-0"
+                      >
+                        {ev.status === "archived"
+                          ? "Archived"
+                          : ev.isPublished
+                            ? "Published"
+                            : "Draft"}
+                      </Badge>
+                    </button>
+                    <dl className="grid grid-cols-3 gap-2 text-xs">
+                      <div className="min-w-0">
+                        <dt className="text-muted-foreground">Applications</dt>
+                        <dd className="font-medium">{ev.applicationCount}</dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-muted-foreground">Staff</dt>
+                        <dd className="font-medium">{ev.staffCount}</dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-muted-foreground">Created</dt>
+                        <dd className="font-medium">
+                          {new Date(ev.createdAt).toLocaleDateString("en-GB")}
+                        </dd>
+                      </div>
+                    </dl>
+                    <div className="border-t pt-2">
+                      <EventRowActions
+                        event={ev}
+                        router={router}
+                        onArchive={setArchiveTarget}
+                        onUnarchive={setUnarchiveTarget}
+                        onDelete={setHardDeleteTarget}
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })
+          )}
+        </div>
+        </>
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted-foreground">
           {events.length} events total
         </p>
