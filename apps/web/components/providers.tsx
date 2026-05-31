@@ -1,6 +1,7 @@
 "use client";
 
 import { ThemeProvider } from "next-themes";
+import { MotionConfig } from "framer-motion";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/lib/auth-context";
@@ -62,9 +63,13 @@ export function Providers({
         <PlatformSettingsProvider initialSettings={settings}>
           <QueryClientProvider client={queryClient}>
             <AuthProvider bootstrapOnMount={shouldBootstrapAuth}>
-              <AutoTranslate>{children}</AutoTranslate>
-              <GlobalLocaleToggle />
-              <Toaster richColors position="bottom-right" />
+              {/* reducedMotion="user" makes every framer-motion animation in the
+                  app honor the OS "reduce motion" setting (a11y). */}
+              <MotionConfig reducedMotion="user">
+                <AutoTranslate>{children}</AutoTranslate>
+                <GlobalLocaleToggle />
+                <Toaster richColors position="bottom-right" />
+              </MotionConfig>
             </AuthProvider>
           </QueryClientProvider>
         </PlatformSettingsProvider>

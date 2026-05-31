@@ -2736,7 +2736,7 @@ export default function ApplicationsListPage() {
       }
       toastBulkChunkErrors("Bulk tags", summary.errorMessages);
     } catch {
-      /* handled */
+      toast.error("Could not update tags");
     } finally {
       setIsApplyingBulk(false);
     }
@@ -2788,7 +2788,7 @@ export default function ApplicationsListPage() {
       }
       toastBulkChunkErrors("Decision draft update", summary.errorMessages);
     } catch {
-      /* handled */
+      toast.error("Could not update decision drafts");
     } finally {
       setIsApplyingBulk(false);
     }
