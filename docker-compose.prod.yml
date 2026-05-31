@@ -67,6 +67,11 @@ services:
       PUBLIC_APP_BASE_URL: ${PUBLIC_APP_BASE_URL:-}
       INTERNAL_WEB_BASE_URL: ${INTERNAL_WEB_BASE_URL:-http://web:3000}
       TRUST_PROXY: ${TRUST_PROXY:-true}
+      # Sizes the libuv threadpool that runs argon2 password hashing. Default (4)
+      # caps concurrent logins at ~4 and causes login timeouts during deadline
+      # traffic spikes; raise it so bursts of logins don't queue. See login flow
+      # in apps/api/src/auth/auth.service.ts (argon2.verify).
+      UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-12}
       THROTTLE_TTL_MS: ${THROTTLE_TTL_MS:-60000}
       THROTTLE_LIMIT: ${THROTTLE_LIMIT:-1000}
       AUTH_RATE_WINDOW_MS: ${AUTH_RATE_WINDOW_MS:-900000}
