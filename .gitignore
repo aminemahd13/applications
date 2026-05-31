@@ -30,3 +30,6 @@ pnpm-debug.log*
 Thumbs.db
 .vscode/
 com.chrome.devtools.json
+
+# Internal planning doc - keep private
+details.md
