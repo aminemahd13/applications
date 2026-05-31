@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { LandingMobileMenu } from "@/components/shared/landing-mobile-menu";
 
 const features = [
   {
@@ -78,7 +79,8 @@ export default function Home() {
           <Link href="/" className="text-xl font-bold tracking-tight text-foreground">
             Math&Maroc
           </Link>
-          <div className="flex items-center gap-3">
+          {/* Desktop nav */}
+          <div className="hidden items-center gap-3 sm:flex">
             <Button variant="ghost" size="sm" asChild>
               <Link href="/events">
                 <Search className="mr-1.5 h-4 w-4" />
@@ -91,6 +93,10 @@ export default function Home() {
             <Button size="sm" asChild>
               <Link href="/signup">Get started</Link>
             </Button>
+          </div>
+          {/* Mobile nav */}
+          <div className="sm:hidden">
+            <LandingMobileMenu />
           </div>
         </div>
       </header>
