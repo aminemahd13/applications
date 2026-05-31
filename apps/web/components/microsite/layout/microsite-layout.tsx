@@ -65,7 +65,7 @@ export function MicrositeLayout({
         tagline={normalizedSettings.branding?.tagline}
         themePreference={normalizedSettings.theme}
       />
-      <main className={cn("flex-grow pb-12", isStickyNavbar ? "pt-16" : "pt-0")}>{children}</main>
+      <main className={cn("flex-grow overflow-x-clip pb-12", isStickyNavbar ? "pt-16" : "pt-0")}>{children}</main>
       <Footer
         settings={normalizedSettings.footer}
         basePath={basePath}

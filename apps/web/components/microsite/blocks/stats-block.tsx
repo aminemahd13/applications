@@ -39,7 +39,7 @@ export function StatsBlock({ block }: { block: Extract<Block, { type: 'STATS' }>
             key={idx}
             className="group flex flex-col items-center gap-3 px-4 transition-transform duration-300 md:hover:-translate-y-0.5"
           >
-            <span className="font-display bg-gradient-to-br from-[var(--mm-accent)] to-[var(--mm-accent-2)] bg-clip-text text-5xl font-semibold tracking-[-0.02em] text-transparent md:text-6xl">
+            <span className="font-display bg-gradient-to-br from-[var(--mm-accent)] to-[var(--mm-accent-2)] bg-clip-text text-4xl font-semibold tracking-[-0.02em] text-transparent sm:text-5xl md:text-6xl">
               <MarkdownText content={`${stat.value ?? ""}${stat.suffix ?? ""}`} mode="inline" as="span" />
             </span>
             <span className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--mm-text-muted)]">
