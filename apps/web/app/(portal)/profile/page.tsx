@@ -275,7 +275,7 @@ export default function ProfilePage() {
             <Input value={user?.email ?? ""} disabled className="bg-muted/50" />
             <p className="text-xs text-muted-foreground">Email cannot be changed.</p>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="firstName" className="text-sm">First name</Label>
               <Input

@@ -197,7 +197,7 @@ export default function StaffLayout({
       headerSubtitle={event?.name ?? "Event"}
       translateHeaderSubtitle={false}
     >
-      <div className={isMicrositeBuilder ? "min-h-0" : "space-y-4 min-h-0"}>
+      <div className={isMicrositeBuilder ? "w-full min-w-0 min-h-0" : "flex w-full min-w-0 flex-col gap-4 min-h-0"}>
         {!isMicrositeBuilder && (
           <Button asChild variant="ghost" size="sm" className="w-fit">
             <Link href="/staff">

@@ -217,8 +217,6 @@ const FR_MESSAGES: Record<string, string> = {
   "Everything you need": "Tout ce dont vous avez besoin",
   "A complete platform for managing events, applications, and reviews — from start to finish.":
     "Une plateforme complète pour gérer événements, candidatures et évaluations du début à la fin.",
-  "A complete platform for managing events, applications, and reviews â€” from start to finish.":
-    "Une plateforme complète pour gérer événements, candidatures et évaluations du début à la fin.",
   "How it works": "Comment ça marche",
   "Get started in three simple steps.":
     "Commencez en trois étapes simples.",

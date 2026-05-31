@@ -388,7 +388,7 @@ export default function ApplicationWorkspacePage() {
         </motion.div>
       )}
 
-      {/* Ticket banner â€” shown when accepted & all steps done */}
+      {/* Ticket banner — shown when accepted & all steps done */}
       {showTicketBanner && (
         <motion.div
           initial={{ opacity: 0, y: -8 }}
@@ -570,7 +570,7 @@ export default function ApplicationWorkspacePage() {
           </Card>
         </div>
 
-        {/* Sidebar â€” Submission history */}
+        {/* Sidebar — Submission history */}
         <div className="space-y-4">
           <Card>
             <CardHeader>

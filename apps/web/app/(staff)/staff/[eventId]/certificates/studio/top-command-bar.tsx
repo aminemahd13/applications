@@ -251,7 +251,7 @@ export function TopCommandBar(props: TopCommandBarProps) {
             Snap {snapEnabled ? "on" : "off"}
           </Button>
           <Select value={String(zoomPercent)} onValueChange={(value) => onZoomChange(Number(value))}>
-            <SelectTrigger className="h-8 w-[120px]">
+            <SelectTrigger className="h-8 w-full sm:w-[120px]">
               <SelectValue placeholder="Zoom" />
             </SelectTrigger>
             <SelectContent>

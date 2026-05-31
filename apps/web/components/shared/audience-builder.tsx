@@ -321,7 +321,7 @@ export function AudienceBuilder({
 
       <CollapsibleSection title="Demographics">
         <div className="space-y-2">
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <div className="space-y-1">
               <Label className="text-xs">Min age</Label>
               <Input

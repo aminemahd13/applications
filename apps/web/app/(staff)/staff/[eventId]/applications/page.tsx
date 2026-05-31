@@ -364,7 +364,7 @@ function collectAdvancedConditionNodes(
   return nodes;
 }
 
-/** Normalise an API ApplicationSummary â†’ frontend Application */
+/** Normalise an API ApplicationSummary → frontend Application */
 function normalizeApplication(raw: Record<string, unknown>): Application {
   const ss = raw.stepsSummary as
     | { total?: number; completed?: number; progressed?: number }
@@ -1448,7 +1448,7 @@ export default function ApplicationsListPage() {
               }));
             }}
           >
-            <SelectTrigger className="h-8 w-[220px]">
+            <SelectTrigger className="h-8 w-full sm:w-[220px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1749,7 +1749,7 @@ export default function ApplicationsListPage() {
                 setSelectedViewId(NO_SAVED_VIEW_VALUE);
               }}
             >
-              <SelectTrigger className="h-8 w-[210px]">
+              <SelectTrigger className="h-8 w-full sm:w-[210px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -3130,7 +3130,7 @@ export default function ApplicationsListPage() {
           row.original.decision ? (
             <StatusBadge status={row.original.decision} />
           ) : (
-            <span className="text-xs text-muted-foreground">â€”</span>
+            <span className="text-xs text-muted-foreground">—</span>
           ),
       },
       {
@@ -3165,7 +3165,7 @@ export default function ApplicationsListPage() {
               {new Date(row.original.submittedAt).toLocaleDateString("en-GB")}
             </span>
           ) : (
-            <span className="text-xs text-muted-foreground">â€”</span>
+            <span className="text-xs text-muted-foreground">—</span>
           ),
       },
       {
@@ -3362,7 +3362,7 @@ export default function ApplicationsListPage() {
                 Advanced builder
               </Button>
               <Select value={selectedViewId} onValueChange={selectSavedView}>
-                <SelectTrigger className="w-[240px]">
+                <SelectTrigger className="w-full sm:w-[240px]">
                   <SelectValue placeholder="Shared saved view" />
                 </SelectTrigger>
                 <SelectContent>
@@ -4493,7 +4493,7 @@ export default function ApplicationsListPage() {
                         <div>
                           <p className="text-sm font-medium">{template.name}</p>
                           <p className="text-[11px] text-muted-foreground">
-                            {template.status} â€¢ {template.isActive ? "Active" : "Inactive"}
+                            {template.status} • {template.isActive ? "Active" : "Inactive"}
                           </p>
                         </div>
                         <div className="flex items-center gap-1">

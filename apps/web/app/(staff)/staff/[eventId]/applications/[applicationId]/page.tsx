@@ -2043,7 +2043,7 @@ export default function ApplicationDetailPage() {
                               {label}
                             </p>
                             <p className={`text-sm ${hasValue ? "" : "text-muted-foreground/60"}`}>
-                              {hasValue ? value : "â€”"}
+                              {hasValue ? value : "—"}
                             </p>
                           </div>
                         </div>
@@ -2077,7 +2077,7 @@ export default function ApplicationDetailPage() {
                             })}
                           </div>
                         ) : (
-                          <p className="text-sm text-muted-foreground/60">â€”</p>
+                          <p className="text-sm text-muted-foreground/60">—</p>
                         )}
                       </div>
                     </div>
@@ -2295,7 +2295,7 @@ export default function ApplicationDetailPage() {
                               }
                               disabled={stepActionInFlight !== null}
                             >
-                              <SelectTrigger className="h-8 w-[190px]">
+                              <SelectTrigger className="h-8 w-full sm:w-[190px]">
                                 <SelectValue placeholder="Pick field to add" />
                               </SelectTrigger>
                               <SelectContent>
@@ -2341,7 +2341,7 @@ export default function ApplicationDetailPage() {
                               (!canStepOverride && !hasAnyReviewAction)
                             }
                           >
-                            <SelectTrigger className="h-8 w-[190px]">
+                            <SelectTrigger className="h-8 w-full sm:w-[190px]">
                               <SelectValue placeholder="Step action" />
                             </SelectTrigger>
                             <SelectContent>
@@ -2653,7 +2653,7 @@ export default function ApplicationDetailPage() {
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Select value={auditFilter} onValueChange={setAuditFilter}>
-                        <SelectTrigger className="w-[180px]">
+                        <SelectTrigger className="w-full sm:w-[180px]">
                           <SelectValue placeholder="Filter entity" />
                         </SelectTrigger>
                         <SelectContent>

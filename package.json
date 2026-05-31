@@ -10,7 +10,8 @@
     "dev": "npm run dev --workspaces",
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present",
+    "check:encoding": "node scripts/check-encoding.mjs",
+    "lint": "node scripts/check-encoding.mjs && npm run lint --workspaces --if-present",
     "devtools": "react-devtools"
   },
   "devDependencies": {

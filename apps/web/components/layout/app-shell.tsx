@@ -313,6 +313,7 @@ export function AppShell({
 
           {/* Breadcrumbs */}
           {localizedBreadcrumbs && localizedBreadcrumbs.length > 0 && (
+            <div className="min-w-0 flex-1 overflow-x-auto">
             <Breadcrumb>
               <BreadcrumbList>
                 {localizedBreadcrumbs.map((crumb, i) => (
@@ -331,6 +332,7 @@ export function AppShell({
                 ))}
               </BreadcrumbList>
             </Breadcrumb>
+            </div>
           )}
 
           <div className="ml-auto flex items-center gap-2">
@@ -384,7 +386,7 @@ export function AppShell({
         )}
 
         {/* Page content */}
-        <main className="flex min-h-0 flex-1 flex-col p-4 lg:p-6 print:p-0">{children}</main>
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-clip p-4 lg:p-6 print:p-0">{children}</main>
       </SidebarInset>
     </SidebarProvider>
   );

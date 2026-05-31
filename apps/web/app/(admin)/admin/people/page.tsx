@@ -709,7 +709,7 @@ export default function AdminPeoplePage() {
                 setUserPage(1);
               }}
             >
-              <SelectTrigger className="w-[200px]">
+              <SelectTrigger className="w-full sm:w-[200px]">
                 <SelectValue placeholder="Filter users" />
               </SelectTrigger>
               <SelectContent>
@@ -744,7 +744,8 @@ export default function AdminPeoplePage() {
               }
             />
           ) : (
-            <Card>
+            <>
+            <Card className="hidden md:block">
               <CardContent className="p-0">
                 <Table>
                   <TableHeader>
@@ -888,9 +889,89 @@ export default function AdminPeoplePage() {
                 </Table>
               </CardContent>
             </Card>
+
+            {/* Mobile: stacked cards (table is unreadable at 7 columns on phones) */}
+            <div className="space-y-3 md:hidden">
+              {users.map((user) => (
+                <Card key={user.id}>
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-start gap-3">
+                      <Avatar className="h-9 w-9 shrink-0">
+                        <AvatarFallback className="text-xs">
+                          {getInitials(user.fullName, user.email)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium break-words">
+                          {user.fullName ?? user.email}
+                        </p>
+                        <p className="text-xs text-muted-foreground break-all">
+                          {user.email}
+                        </p>
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          <Badge variant={getAccountTypeBadge(user).variant}>
+                            {getAccountTypeBadge(user).label}
+                          </Badge>
+                          {user.staffRoleCount > 0 && (
+                            <Badge variant="secondary">
+                              {user.staffRoleCount} role
+                              {user.staffRoleCount === 1 ? "" : "s"}
+                            </Badge>
+                          )}
+                          {user.isDisabled && (
+                            <Badge variant="destructive">Disabled</Badge>
+                          )}
+                          {user.emailVerifiedAt ? (
+                            <Badge variant="secondary">Verified</Badge>
+                          ) : (
+                            <Badge variant="outline">Unverified</Badge>
+                          )}
+                        </div>
+                      </div>
+                      <Button variant="outline" size="sm" asChild className="shrink-0">
+                        <Link
+                          href={`/admin/people/${user.id}`}
+                          aria-label={`Open ${user.fullName ?? user.email}`}
+                        >
+                          Open
+                          <ArrowUpRight className="ml-1.5 h-3.5 w-3.5" />
+                        </Link>
+                      </Button>
+                    </div>
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                      <div className="min-w-0">
+                        <dt className="text-muted-foreground">Applications</dt>
+                        <dd className="font-medium">
+                          {user.applicationCount} in {user.eventCount} event
+                          {user.eventCount === 1 ? "" : "s"}
+                        </dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-muted-foreground">Region</dt>
+                        <dd className="font-medium break-words">
+                          {[user.city, user.country].filter(Boolean).join(", ") ||
+                            "N/A"}
+                        </dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-muted-foreground">Profile</dt>
+                        <dd className="font-medium">
+                          {user.profileCompleteness}% complete
+                        </dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-muted-foreground">Joined</dt>
+                        <dd className="font-medium">{formatDate(user.createdAt)}</dd>
+                      </div>
+                    </dl>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            </>
           )}
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-muted-foreground">
               Page {userPage}
             </p>
@@ -944,7 +1025,7 @@ export default function AdminPeoplePage() {
                 setEventPage(1);
               }}
             >
-              <SelectTrigger className="w-[200px]">
+              <SelectTrigger className="w-full sm:w-[200px]">
                 <SelectValue placeholder="All statuses" />
               </SelectTrigger>
               <SelectContent>

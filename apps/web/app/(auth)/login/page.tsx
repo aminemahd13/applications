@@ -7,7 +7,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { motion } from "framer-motion";
-import { Loader2, Mail, Lock } from "lucide-react";
+import { Loader2, Mail, Lock, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -21,6 +21,7 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, apiClient } from "@/lib/api";
 import { getProfileCompletionStatus } from "@/lib/profile-completion";
+import { toast } from "sonner";
 
 const loginSchema = z.object({
   email: z.string().email("Enter a valid email"),
@@ -91,6 +92,7 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const { login } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const form = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
@@ -99,40 +101,49 @@ function LoginForm() {
 
   async function onSubmit(values: LoginValues) {
     setIsLoading(true);
-    const user = await login(values.email, values.password);
-    if (!user) {
-      setIsLoading(false);
-      return;
-    }
+    try {
+      const user = await login(values.email, values.password);
+      if (!user) {
+        // login() surfaces its own error toast on failure.
+        return;
+      }
 
-    const returnUrl = searchParams.get("returnUrl");
-    const defaultPath = getDefaultPostLoginPath(user);
-    const targetPath =
-      isSafeReturnUrl(returnUrl) && shouldUseReturnUrl(returnUrl, user)
-        ? returnUrl
-        : defaultPath;
+      const returnUrl = searchParams.get("returnUrl");
+      const defaultPath = getDefaultPostLoginPath(user);
+      const targetPath =
+        isSafeReturnUrl(returnUrl) && shouldUseReturnUrl(returnUrl, user)
+          ? returnUrl
+          : defaultPath;
 
-    const isApplicantUser =
-      !user.isGlobalAdmin && (user.eventRoles?.length ?? 0) === 0;
-    if (isApplicantUser && !targetPath.startsWith("/profile")) {
-      try {
-        const profile = await apiClient<ApplicantProfileCompletionPayload>(
-          "/auth/me/profile",
-        );
-        const completion = getProfileCompletionStatus(profile);
-        if (!completion.isComplete) {
-          window.location.assign(buildProfilePromptUrl(targetPath));
-          return;
-        }
-      } catch (error: unknown) {
-        if (error instanceof ApiError && error.status === 401) {
-          window.location.assign("/login");
-          return;
+      const isApplicantUser =
+        !user.isGlobalAdmin && (user.eventRoles?.length ?? 0) === 0;
+      if (isApplicantUser && !targetPath.startsWith("/profile")) {
+        try {
+          const profile = await apiClient<ApplicantProfileCompletionPayload>(
+            "/auth/me/profile",
+          );
+          const completion = getProfileCompletionStatus(profile);
+          if (!completion.isComplete) {
+            window.location.assign(buildProfilePromptUrl(targetPath));
+            return;
+          }
+        } catch (error: unknown) {
+          if (error instanceof ApiError && error.status === 401) {
+            window.location.assign("/login");
+            return;
+          }
+          // Non-401 profile errors: proceed to the target path anyway.
         }
       }
-    }
 
-    window.location.assign(targetPath);
+      window.location.assign(targetPath);
+    } catch {
+      toast.error("Something went wrong while signing in. Please try again.");
+    } finally {
+      // Always release the spinner. On the success path the page is already
+      // navigating away via window.location.assign, so this is a no-op there.
+      setIsLoading(false);
+    }
   }
 
   return (
@@ -192,12 +203,25 @@ function LoginForm() {
                     <div className="relative">
                       <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                       <Input
-                        type="password"
+                        type={showPassword ? "text" : "password"}
                         placeholder="********"
-                        className="pl-10"
+                        className="pl-10 pr-10"
                         autoComplete="current-password"
                         {...field}
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((v) => !v)}
+                        className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                        tabIndex={-1}
+                      >
+                        {showPassword ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
                     </div>
                   </FormControl>
                   <FormMessage />

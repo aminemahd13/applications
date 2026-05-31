@@ -856,7 +856,7 @@ export default function CheckinPage() {
           </div>
         </CardHeader>
         <CardContent className="flex max-h-[70vh] min-h-0 flex-col gap-4 overflow-hidden">
-          <div className="grid gap-2 md:grid-cols-[220px_minmax(0,1fr)_auto]">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-[220px_minmax(0,1fr)_auto]">
             <Select
               value={attendeeStatusFilter}
               onValueChange={(value) => {

@@ -184,7 +184,7 @@ export default function AuditLogPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1 max-w-sm">
           <Input
-            placeholder="Search actions or usersâ€¦"
+            placeholder="Search actions or users…"
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -201,7 +201,7 @@ export default function AuditLogPage() {
             setPage(1);
           }}
         >
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger className="w-full sm:w-[160px]">
             <Filter className="mr-1.5 h-3.5 w-3.5" />
             <SelectValue placeholder="All categories" />
           </SelectTrigger>
@@ -381,7 +381,7 @@ export default function AuditLogPage() {
           </CardContent>
           <CardFooter className="flex items-center justify-between border-t p-4">
             <p className="text-sm text-muted-foreground">
-              Showing {(page - 1) * PAGE_SIZE + 1}â€“{Math.min(page * PAGE_SIZE, total)} of {total} entries
+              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total} entries
             </p>
             <div className="flex items-center gap-2">
               <Button
