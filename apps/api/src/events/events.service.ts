@@ -412,15 +412,15 @@ export class EventsService {
   /**
    * Compute lifecycle status from dates (derived, never stored)
    */
-  private computeLifecycleStatus(event: {
-    application_open_at: Date | null;
-    application_close_at: Date | null;
-  }): LifecycleStatus {
+  private computeLifecycleStatus(
+    applicationOpenAt: Date | null,
+    applicationCloseAt: Date | null,
+  ): LifecycleStatus {
     const now = new Date();
-    if (!event.application_open_at || now < event.application_open_at) {
+    if (!applicationOpenAt || now < applicationOpenAt) {
       return LifecycleStatus.UPCOMING;
     }
-    if (event.application_close_at && now > event.application_close_at) {
+    if (applicationCloseAt && now > applicationCloseAt) {
       return LifecycleStatus.ENDED;
     }
     return LifecycleStatus.RUNNING;
@@ -437,7 +437,10 @@ export class EventsService {
       seriesKey: event.series_key,
       editionLabel: event.edition_label,
       status: event.status,
-      lifecycleStatus: this.computeLifecycleStatus(event),
+      lifecycleStatus: this.computeLifecycleStatus(
+        event.application_open_at,
+        event.application_close_at,
+      ),
       applicationOpenAt: event.application_open_at,
       applicationCloseAt: event.application_close_at,
       timezone: event.timezone,
@@ -458,6 +461,14 @@ export class EventsService {
   }
 
   private toPublicEventResponse(event: any) {
+    // The deadline shown publicly (and used to derive open/closed) is the FIRST
+    // workflow step's deadline — the date by which a new applicant must complete
+    // the first step. The legacy event-level application_close_at is no longer
+    // used for gating or display.
+    const effectiveCloseAt =
+      (Array.isArray(event.workflow_steps)
+        ? event.workflow_steps[0]?.deadline_at
+        : null) ?? null;
     return {
       id: event.id,
       title: event.title,
@@ -465,9 +476,12 @@ export class EventsService {
       seriesKey: event.series_key,
       editionLabel: event.edition_label,
       status: event.status,
-      lifecycleStatus: this.computeLifecycleStatus(event),
+      lifecycleStatus: this.computeLifecycleStatus(
+        event.application_open_at,
+        effectiveCloseAt,
+      ),
       applicationOpenAt: event.application_open_at,
-      applicationCloseAt: event.application_close_at,
+      applicationCloseAt: effectiveCloseAt,
       timezone: event.timezone,
       startAt: event.start_at,
       endAt: event.end_at,
@@ -522,7 +536,10 @@ export class EventsService {
         slug: event.slug,
         status: event.status,
         isPublished: event.status === 'published',
-        lifecycleStatus: this.computeLifecycleStatus(event),
+        lifecycleStatus: this.computeLifecycleStatus(
+        event.application_open_at,
+        event.application_close_at,
+      ),
         applicationOpenAt: event.application_open_at,
         applicationCloseAt: event.application_close_at,
         applicationCount: event._count.applications,
@@ -584,6 +601,11 @@ export class EventsService {
         format: true,
         created_at: true,
         updated_at: true,
+        workflow_steps: {
+          orderBy: { step_index: 'asc' },
+          take: 1,
+          select: { deadline_at: true },
+        },
       },
     });
 
@@ -652,6 +674,11 @@ export class EventsService {
         format: true,
         created_at: true,
         updated_at: true,
+        workflow_steps: {
+          orderBy: { step_index: 'asc' },
+          take: 1,
+          select: { deadline_at: true },
+        },
       },
     });
     if (!event) throw new NotFoundException('Event not found');

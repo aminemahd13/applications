@@ -1121,6 +1121,9 @@ describe('ApplicationsService create profile requirements', () => {
           capacity: null,
         }),
       },
+      workflow_steps: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       applications: {
         count: jest.fn().mockResolvedValue(0),
         findFirst: jest.fn().mockResolvedValue(null),

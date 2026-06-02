@@ -209,7 +209,6 @@ export default function SettingsPage() {
           startAt: toIsoDateTime(settings.startDate),
           endAt: toIsoDateTime(settings.endDate),
           applicationsOpenAt: toIsoDateTime(settings.applicationsOpenAt),
-          applicationsCloseAt: toIsoDateTime(settings.applicationDeadline),
           capacity: settings.capacity,
           publishStatus: settings.isPublished ? "PUBLISHED" : "DRAFT",
           requiresEmailVerification: settings.requiresEmailVerification,
@@ -297,7 +296,13 @@ export default function SettingsPage() {
           </div>
           <div className="space-y-2">
             <Label className="text-sm">Application deadline</Label>
-            <Input type="datetime-local" value={settings.applicationDeadline ?? ""} onChange={(e) => setSettings({ ...settings, applicationDeadline: e.target.value })} />
+            <p className="text-xs text-muted-foreground">
+              Deadlines are now set per step in the{" "}
+              <span className="font-medium text-foreground">Workflow</span>{" "}
+              editor. Each step has its own deadline, so every applicant sees the
+              deadline for their current step. New applicants are limited by the
+              first step&apos;s deadline.
+            </p>
           </div>
         </CardContent>
       </Card>

@@ -1643,7 +1643,7 @@ export class ApplicationsService {
       throw new ForbiddenException('Applications are not open for this event');
     }
 
-    // Enforce application window (if set)
+    // Enforce the application open date (if set).
     const now = new Date();
     if (
       event.application_open_at &&
@@ -1651,9 +1651,18 @@ export class ApplicationsService {
     ) {
       throw new ForbiddenException('Applications have not opened yet');
     }
+    // The misleading event-level "application deadline" is gone: the deadline is
+    // now per-step. A new applicant may start as long as the FIRST step's
+    // deadline (if any) has not passed; each subsequent step is governed by its
+    // own deadline at submission time.
+    const firstStepForGate = await this.prisma.workflow_steps.findFirst({
+      where: { event_id: eventId },
+      orderBy: { step_index: 'asc' },
+      select: { deadline_at: true },
+    });
     if (
-      event.application_close_at &&
-      now > new Date(event.application_close_at)
+      firstStepForGate?.deadline_at &&
+      now > new Date(firstStepForGate.deadline_at)
     ) {
       throw new ForbiddenException('Applications are closed');
     }
