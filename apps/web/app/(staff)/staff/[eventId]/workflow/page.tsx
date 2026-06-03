@@ -439,10 +439,18 @@ export default function WorkflowBuilderPage() {
 
       toast.success("Workflow saved!");
 
-      const res = await apiClient<any>(`/events/${eventId}/workflow`);
+      const [res, fieldOptionsRes] = await Promise.all([
+        apiClient<any>(`/events/${eventId}/workflow`),
+        apiClient<{ data?: FilterableFieldStep[] }>(
+          `/events/${eventId}/workflow/field-options`,
+        ).catch(() => ({ data: [] })),
+      ]);
       const list = extractDataArray(res);
       setSteps(
         list.map(normalizeStep).sort((a, b) => a.stepIndex - b.stepIndex)
+      );
+      setFilterableSteps(
+        Array.isArray(fieldOptionsRes?.data) ? fieldOptionsRes.data : [],
       );
       setRemovedServerStepIds([]);
     } catch (error: any) {
