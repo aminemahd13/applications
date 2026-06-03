@@ -814,6 +814,7 @@ model workflow_steps {
   allow_applicant_modification    Boolean                    @default(false)
   modification_scope              String                     @default("SUBMITTED_ONLY")
   deadline_at                     DateTime?                  @db.Timestamptz(6)
+  deadline_rules                  Json                       @default("[]")
   late_policy                     String                     @default("allow")
   max_revision_cycles             Int?
   form_version_id                 String?                    @db.Uuid

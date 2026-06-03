@@ -47,8 +47,11 @@ import {
   UpdateDecisionTemplateDto,
   PaginatedResponse,
   matchesFieldAnswer,
+  type ApplicantDeadlineContext,
+  type DeadlineRule,
 } from '@event-platform/shared';
 import { StepStateService } from './step-state.service';
+import { StepDeadlineService } from './step-deadline.service';
 import * as jwt from 'jsonwebtoken';
 import { createHmac } from 'node:crypto';
 import {
@@ -165,6 +168,9 @@ export class ApplicationsService {
     private readonly prisma: PrismaService,
     private readonly cls: ClsService,
     private readonly stepStateService: StepStateService,
+    // Optional so existing unit tests that construct the service with fewer
+    // dependencies keep compiling; DI always provides it in production.
+    private readonly stepDeadlineService?: StepDeadlineService,
   ) {}
 
   /**
@@ -1504,6 +1510,7 @@ export class ApplicationsService {
                 step_index: true,
                 category: true,
                 deadline_at: true,
+                deadline_rules: true,
                 revision_deadline_at: true,
                 instructions_rich: true,
                 form_versions: { select: { schema: true } },
@@ -1600,7 +1607,13 @@ export class ApplicationsService {
       app.application_step_states ?? [],
     );
 
-    const detail = this.toDetail(app, { answersByStepId, answersSourceByStepId });
+    const deadlineContext = await this.buildDeadlineContextIfNeeded(app);
+
+    const detail = this.toDetail(app, {
+      answersByStepId,
+      answersSourceByStepId,
+      deadlineContext,
+    });
     const profile = await this.prisma.applicant_profiles.findUnique({
       where: { user_id: detail.applicantUserId },
       select: {
@@ -1822,6 +1835,7 @@ export class ApplicationsService {
                 step_index: true,
                 category: true,
                 deadline_at: true,
+                deadline_rules: true,
                 revision_deadline_at: true,
                 instructions_rich: true,
                 hidden: true,
@@ -1947,11 +1961,13 @@ export class ApplicationsService {
       });
       if (!app) return null;
     }
+    const deadlineContext = await this.buildDeadlineContextIfNeeded(app);
     return this.toDetail(app, {
       maskDecisionIfUnpublished: true,
       hideInternalNotes: true,
       hideAssignedReviewer: true,
       hideUnreleasedCertificates: true,
+      deadlineContext,
     });
   }
 
@@ -3430,6 +3446,7 @@ export class ApplicationsService {
       hideInternalNotes?: boolean;
       hideAssignedReviewer?: boolean;
       hideUnreleasedCertificates?: boolean;
+      deadlineContext?: ApplicantDeadlineContext;
     },
   ): ApplicationDetail {
     const summary = this.toSummary(app, {
@@ -3475,7 +3492,10 @@ export class ApplicationsService {
           stepIndex: ss.workflow_steps?.step_index ?? 0,
           category: ss.workflow_steps?.category,
           status: ss.status as StepStatus,
-          deadlineAt: ss.workflow_steps?.deadline_at ?? null,
+          deadlineAt: this.resolveDetailStepDeadline(
+            ss,
+            options?.deadlineContext,
+          ),
           revisionDeadlineAt,
           revisionOverdue:
             ss.status === StepStatus.NEEDS_REVISION &&
@@ -3508,6 +3528,42 @@ export class ApplicationsService {
         };
       }),
     };
+  }
+
+  /**
+   * Build the applicant condition-evaluation context, but ONLY when at least
+   * one of the application's steps actually carries conditional deadline rules.
+   * The common case (no rules anywhere) skips the extra profile/answer queries
+   * and returns undefined, so `toDetail` falls back to the base deadline.
+   */
+  private async buildDeadlineContextIfNeeded(
+    app: any,
+  ): Promise<ApplicantDeadlineContext | undefined> {
+    const svc = this.stepDeadlineService;
+    if (!svc) return undefined;
+    const states = app?.application_step_states ?? [];
+    const hasRules = states.some((ss: any) =>
+      svc.hasRules(ss?.workflow_steps?.deadline_rules),
+    );
+    if (!hasRules) return undefined;
+    return svc.buildContext(app.applicant_user_id, states);
+  }
+
+  /**
+   * Effective per-step deadline for the application detail. Falls back to the
+   * base `deadline_at` when there are no conditional rules or no applicant
+   * context (e.g. a caller that didn't load it).
+   */
+  private resolveDetailStepDeadline(
+    stepState: any,
+    ctx?: ApplicantDeadlineContext,
+  ): Date | null {
+    const base = stepState?.workflow_steps?.deadline_at ?? null;
+    const rules = stepState?.workflow_steps?.deadline_rules as
+      | DeadlineRule[]
+      | undefined;
+    if (!ctx || !this.stepDeadlineService?.hasRules(rules)) return base;
+    return this.stepDeadlineService.resolve(rules, base, ctx);
   }
 
   private isApplicantStepVisible(stepState: any): boolean {

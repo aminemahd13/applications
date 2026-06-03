@@ -39,6 +39,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { PageHeader, ConfirmDialog, EmptyState } from "@/components/shared";
+import {
+  DeadlineRulesEditor,
+  deadlineRulesFromApi,
+  deadlineRulesToApi,
+  type UiDeadlineRule,
+} from "@/components/shared/deadline-rules-editor";
+import type { FilterableFieldStep } from "@/components/shared/field-answer-criterion";
 import { ApiError, apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
@@ -73,6 +80,7 @@ interface WorkflowStep {
   hidden: boolean;
   allowApplicantModification: boolean;
   modificationScope: StepModificationScope;
+  deadlineRules: UiDeadlineRule[];
 }
 
 interface FormVersionOption {
@@ -189,6 +197,7 @@ function normalizeStep(raw: any): WorkflowStep {
     hidden: Boolean(raw?.hidden),
     allowApplicantModification: Boolean(raw?.allowApplicantModification),
     modificationScope: normalizeModificationScope(raw?.modificationScope),
+    deadlineRules: deadlineRulesFromApi(raw?.deadlineRules),
   };
 }
 
@@ -210,6 +219,7 @@ function toApiPayload(step: WorkflowStep) {
     hidden: step.hidden,
     allowApplicantModification: step.allowApplicantModification,
     modificationScope: step.modificationScope,
+    deadlineRules: deadlineRulesToApi(step.deadlineRules),
   };
 }
 
@@ -256,6 +266,9 @@ export default function WorkflowBuilderPage() {
   const [formVersionOptions, setFormVersionOptions] = useState<
     FormVersionOption[]
   >([]);
+  const [filterableSteps, setFilterableSteps] = useState<FilterableFieldStep[]>(
+    [],
+  );
   const [removedServerStepIds, setRemovedServerStepIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -266,9 +279,12 @@ export default function WorkflowBuilderPage() {
 
     (async () => {
       try {
-        const [workflowRes, formsRes] = await Promise.all([
+        const [workflowRes, formsRes, fieldOptionsRes] = await Promise.all([
           apiClient<any>(`/events/${eventId}/workflow`),
           apiClient<any>(`/events/${eventId}/forms?limit=100`),
+          apiClient<{ data?: FilterableFieldStep[] }>(
+            `/events/${eventId}/workflow/field-options`,
+          ).catch(() => ({ data: [] })),
         ]);
 
         const workflowList = extractDataArray(workflowRes);
@@ -310,6 +326,9 @@ export default function WorkflowBuilderPage() {
         setFormVersionOptions(
           versionOptionsNested.flat().sort((a, b) => a.label.localeCompare(b.label))
         );
+        setFilterableSteps(
+          Array.isArray(fieldOptionsRes?.data) ? fieldOptionsRes.data : [],
+        );
         setRemovedServerStepIds([]);
       } catch {
         if (!cancelled) {
@@ -347,6 +366,7 @@ export default function WorkflowBuilderPage() {
       hidden: false,
       allowApplicantModification: false,
       modificationScope: "SUBMITTED_ONLY",
+      deadlineRules: [],
     };
     setSteps([...steps, newStep]);
   }
@@ -483,6 +503,15 @@ export default function WorkflowBuilderPage() {
             const hasKnownAttachedForm =
               !step.formVersionId ||
               formVersionOptions.some((opt) => opt.id === step.formVersionId);
+
+            // A field_answer condition may only reference an EARLIER step's
+            // answer, so restrict the pickable fields to steps before this one.
+            const earlierStepIds = new Set(
+              steps.slice(0, index).map((s) => s.id),
+            );
+            const earlierFieldSteps = filterableSteps.filter((s) =>
+              earlierStepIds.has(s.stepId),
+            );
 
             return (
               <Reorder.Item key={step.id} value={step} className="list-none">
@@ -627,6 +656,20 @@ export default function WorkflowBuilderPage() {
                                 className="h-8 text-xs"
                               />
                             </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <SettingHelpLabel
+                              label="Conditional deadlines (optional)"
+                              helpText="Give specific applicants a different deadline for this step based on their profile or an answer to an earlier step (e.g. a later deadline for a given education level). Rules are checked top to bottom; the first match wins, otherwise the base deadline above applies."
+                            />
+                            <DeadlineRulesEditor
+                              value={step.deadlineRules}
+                              fieldSteps={earlierFieldSteps}
+                              onChange={(next) =>
+                                updateStep(step.id, { deadlineRules: next })
+                              }
+                            />
                           </div>
 
                           <div className="space-y-2">

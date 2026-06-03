@@ -14,6 +14,9 @@ import {
   WorkflowValidationResult,
   WorkflowValidationIssue,
   WorkflowValidationCodes,
+  DeadlineRule,
+  ApplicantConditionNode,
+  ApplicantConditionGroup,
 } from '@event-platform/shared';
 
 export interface WorkflowStepResponse {
@@ -35,6 +38,7 @@ export interface WorkflowStepResponse {
   allowApplicantModification: boolean;
   modificationScope: StepModificationScope;
   deadlineAt: Date | null;
+  deadlineRules: DeadlineRule[];
   formVersionId: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -72,10 +76,74 @@ export class WorkflowService {
           ? StepModificationScope.SUBMITTED_OR_APPROVED
           : StepModificationScope.SUBMITTED_ONLY,
       deadlineAt: step.deadline_at,
+      deadlineRules: Array.isArray(step.deadline_rules)
+        ? (step.deadline_rules as DeadlineRule[])
+        : [],
       formVersionId: step.form_version_id,
       createdAt: step.created_at,
       updatedAt: step.updated_at,
     };
+  }
+
+  /**
+   * Conditional-deadline rules are stored as plain JSON. Normalize the parsed
+   * DTO (which carries `Date` objects) into JSON-serializable values for the
+   * `deadline_rules` jsonb column.
+   */
+  private serializeDeadlineRules(rules: DeadlineRule[] | undefined): unknown {
+    if (!rules || rules.length === 0) return [];
+    return JSON.parse(JSON.stringify(rules));
+  }
+
+  /**
+   * Validate that every `field_answer` leaf inside a step's deadline rules
+   * references a step that (a) exists in this event and (b) has a strictly
+   * lower `step_index` — otherwise the referenced answer would not yet be
+   * available when this step's deadline is resolved.
+   */
+  private async validateDeadlineRules(
+    eventId: string,
+    stepIndex: number,
+    rules: DeadlineRule[] | undefined,
+  ): Promise<void> {
+    if (!rules || rules.length === 0) return;
+
+    const referencedStepIds = new Set<string>();
+    const collect = (node: ApplicantConditionNode): void => {
+      if ((node as ApplicantConditionGroup).type === 'group') {
+        for (const child of (node as ApplicantConditionGroup).children ?? []) {
+          collect(child);
+        }
+        return;
+      }
+      if ((node as { kind?: string }).kind === 'field_answer') {
+        referencedStepIds.add((node as { stepId: string }).stepId);
+      }
+    };
+    for (const rule of rules) {
+      if (rule?.condition) collect(rule.condition);
+    }
+    if (referencedStepIds.size === 0) return;
+
+    const steps = await this.prisma.workflow_steps.findMany({
+      where: { event_id: eventId, id: { in: Array.from(referencedStepIds) } },
+      select: { id: true, step_index: true },
+    });
+    const indexById = new Map(steps.map((s) => [s.id, s.step_index]));
+
+    for (const refId of referencedStepIds) {
+      const refIndex = indexById.get(refId);
+      if (refIndex === undefined) {
+        throw new BadRequestException(
+          'A deadline rule references an answer from a step that does not belong to this event.',
+        );
+      }
+      if (refIndex >= stepIndex) {
+        throw new BadRequestException(
+          'A deadline rule can only reference answers from earlier steps; the referenced step must come before this one.',
+        );
+      }
+    }
   }
 
   /**
@@ -261,6 +329,8 @@ export class WorkflowService {
       await this.assertFormVersionInEvent(eventId, dto.formVersionId);
     }
 
+    await this.validateDeadlineRules(eventId, nextIndex, dto.deadlineRules);
+
     const step = await this.prisma.workflow_steps.create({
       data: {
         id: crypto.randomUUID(),
@@ -283,6 +353,7 @@ export class WorkflowService {
         modification_scope:
           dto.modificationScope ?? StepModificationScope.SUBMITTED_ONLY,
         deadline_at: dto.deadlineAt,
+        deadline_rules: this.serializeDeadlineRules(dto.deadlineRules) as any,
         form_version_id: dto.formVersionId,
       },
     });
@@ -298,7 +369,7 @@ export class WorkflowService {
     stepId: string,
     dto: UpdateWorkflowStepDto,
   ): Promise<WorkflowStepResponse> {
-    await this.getStep(eventId, stepId); // Verify exists
+    const current = await this.getStep(eventId, stepId); // Verify exists
 
     const data: any = { updated_at: new Date() };
     if (dto.title !== undefined) data.title = dto.title;
@@ -327,6 +398,14 @@ export class WorkflowService {
       data.modification_scope = dto.modificationScope;
     }
     if (dto.deadlineAt !== undefined) data.deadline_at = dto.deadlineAt;
+    if (dto.deadlineRules !== undefined) {
+      await this.validateDeadlineRules(
+        eventId,
+        current.stepIndex,
+        dto.deadlineRules,
+      );
+      data.deadline_rules = this.serializeDeadlineRules(dto.deadlineRules);
+    }
     if (dto.formVersionId !== undefined && dto.formVersionId !== null) {
       await this.assertFormVersionInEvent(eventId, dto.formVersionId);
     }

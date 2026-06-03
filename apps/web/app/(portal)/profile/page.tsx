@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/select";
 import { PageHeader, FormSkeleton } from "@/components/shared";
 import { PhoneInput } from "@/components/ui/phone-input";
+import { EDUCATION_LEVEL_OPTIONS } from "@event-platform/shared";
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { getProfileCompletionStatus } from "@/lib/profile-completion";
@@ -50,14 +51,8 @@ interface Profile {
   dateOfBirth?: string;
 }
 
-const EDUCATION_OPTIONS = [
-  "Middle School",
-  "High School",
-  "Undergraduate",
-  "Graduate",
-  "PhD",
-  "Other",
-];
+// Single source of truth shared with the admin workflow deadline-rules editor.
+const EDUCATION_OPTIONS = EDUCATION_LEVEL_OPTIONS;
 
 const COUNTRY_OPTIONS = [
   "Morocco",

@@ -15,6 +15,7 @@ import {
   PatchSummary,
 } from '@event-platform/shared';
 import { StepStateService } from './step-state.service';
+import { StepDeadlineService } from './step-deadline.service';
 import { FilesService } from '../reviews/files.service';
 import { FormsService } from '../workflow/forms.service';
 import { canApplicantEditStep } from './applicant-step-editability.util';
@@ -40,6 +41,9 @@ export class SubmissionsService {
     private readonly stepStateService: StepStateService,
     private readonly filesService: FilesService,
     private readonly formsService: FormsService,
+    // Optional + last so existing unit tests keep their constructor arity; DI
+    // always provides it in production.
+    private readonly stepDeadlineService?: StepDeadlineService,
   ) {}
 
   /**
@@ -268,6 +272,7 @@ export class SubmissionsService {
       select: {
         category: true,
         deadline_at: true,
+        deadline_rules: true,
         form_version_id: true,
         review_required: true,
         allow_applicant_modification: true,
@@ -289,14 +294,39 @@ export class SubmissionsService {
       throw new ForbiddenException('Step is not open for submission');
     }
 
-    // Enforce base step deadline for non-revision submissions.
-    // Revision cycles use the dedicated revision deadline metadata and remain submittable when overdue.
-    if (
-      state.status !== StepStatus.NEEDS_REVISION &&
-      step.deadline_at &&
-      new Date() > new Date(step.deadline_at)
-    ) {
-      throw new ForbiddenException('Step deadline has passed');
+    // Enforce the step deadline for non-revision submissions. The base
+    // `deadline_at` may be personalized by conditional `deadline_rules` (e.g. a
+    // later deadline for a given education level / earlier answer), so resolve
+    // the applicant's *effective* deadline before gating. Revision cycles use
+    // the dedicated revision deadline metadata and remain submittable when overdue.
+    if (state.status !== StepStatus.NEEDS_REVISION) {
+      let effectiveDeadline: Date | null = step.deadline_at ?? null;
+      const deadlineSvc = this.stepDeadlineService;
+      if (deadlineSvc?.hasRules(step.deadline_rules)) {
+        const [application, states] = await Promise.all([
+          this.prisma.applications.findUnique({
+            where: { id: applicationId },
+            select: { applicant_user_id: true },
+          }),
+          this.prisma.application_step_states.findMany({
+            where: { application_id: applicationId },
+            select: { step_id: true, latest_submission_version_id: true },
+          }),
+        ]);
+        const ctx = await deadlineSvc.buildContext(
+          application?.applicant_user_id,
+          states,
+        );
+        effectiveDeadline = deadlineSvc.resolve(
+          step.deadline_rules,
+          step.deadline_at,
+          ctx,
+        );
+      }
+
+      if (effectiveDeadline && new Date() > new Date(effectiveDeadline)) {
+        throw new ForbiddenException('Step deadline has passed');
+      }
     }
 
     if (!step.form_version_id) {

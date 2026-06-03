@@ -4,6 +4,7 @@ import { ClsService } from 'nestjs-cls';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { StepDeadlineService } from './step-deadline.service';
 
 function isApplicantVisibleStepState(stepState: any): boolean {
   if (!stepState?.workflow_steps?.hidden) return true;
@@ -16,6 +17,9 @@ export class SelfApplicationsController {
   constructor(
     private readonly cls: ClsService,
     private readonly prisma: PrismaService,
+    // Optional + last so existing unit tests keep their constructor arity; DI
+    // always provides it in production.
+    private readonly stepDeadline?: StepDeadlineService,
   ) {}
 
   @Get('me')
@@ -46,6 +50,7 @@ export class SelfApplicationsController {
                 title: true,
                 step_index: true,
                 deadline_at: true,
+                deadline_rules: true,
                 revision_deadline_at: true,
                 hidden: true,
               },
@@ -55,47 +60,68 @@ export class SelfApplicationsController {
       },
     });
 
-    const data = applications.map((app) => {
-      const stepStates = (app.application_step_states ?? []).filter(
-        (s) => isApplicantVisibleStepState(s),
-      );
-      const stepsTotal = stepStates.length;
-      const stepsCompleted = stepStates.filter(
-        (s) => s.status === 'APPROVED' || s.status === 'SUBMITTED',
-      ).length;
+    const data = await Promise.all(
+      applications.map(async (app) => {
+        const stepStates = (app.application_step_states ?? []).filter(
+          (s) => isApplicantVisibleStepState(s),
+        );
+        const stepsTotal = stepStates.length;
+        const stepsCompleted = stepStates.filter(
+          (s) => s.status === 'APPROVED' || s.status === 'SUBMITTED',
+        ).length;
 
-      const actionableStep = [...stepStates]
-        .sort(
-          (a, b) =>
-            (a.workflow_steps?.step_index ?? 9999) -
-            (b.workflow_steps?.step_index ?? 9999),
-        )
-        .find((s) => s.status === 'UNLOCKED' || s.status === 'NEEDS_REVISION');
+        const actionableStep = [...stepStates]
+          .sort(
+            (a, b) =>
+              (a.workflow_steps?.step_index ?? 9999) -
+              (b.workflow_steps?.step_index ?? 9999),
+          )
+          .find((s) => s.status === 'UNLOCKED' || s.status === 'NEEDS_REVISION');
 
-      return {
-        id: app.id,
-        eventId: app.events.id,
-        eventTitle: app.events.title,
-        eventSlug: app.events.slug,
-        eventStartDate: app.events.start_at,
-        eventLocation: app.events.venue_name,
-        decisionStatus:
-          app.decision_published_at != null ? app.decision_status : 'NONE',
-        stepsCompleted,
-        stepsTotal,
-        nextAction: actionableStep
-          ? actionableStep.status === 'NEEDS_REVISION'
-            ? `Revision requested: ${actionableStep.workflow_steps?.title ?? 'Step'}`
-            : `Complete: ${actionableStep.workflow_steps?.title ?? 'Step'}`
-          : undefined,
-        nextDeadline:
-          actionableStep?.status === 'NEEDS_REVISION'
-            ? actionableStep?.revision_deadline_at ??
-              actionableStep?.workflow_steps?.revision_deadline_at ??
-              actionableStep?.workflow_steps?.deadline_at
-            : actionableStep?.workflow_steps?.deadline_at,
-      };
-    });
+        // Revision cycles keep their dedicated (non-conditional) deadline; the
+        // main step deadline is personalized by the step's conditional rules.
+        let nextDeadline: Date | null | undefined;
+        if (actionableStep?.status === 'NEEDS_REVISION') {
+          nextDeadline =
+            actionableStep?.revision_deadline_at ??
+            actionableStep?.workflow_steps?.revision_deadline_at ??
+            actionableStep?.workflow_steps?.deadline_at;
+        } else {
+          const baseDeadline =
+            actionableStep?.workflow_steps?.deadline_at ?? null;
+          const rules = actionableStep?.workflow_steps?.deadline_rules;
+          const svc = this.stepDeadline;
+          if (actionableStep && svc?.hasRules(rules)) {
+            const ctx = await svc.buildContext(
+              actorId,
+              app.application_step_states ?? [],
+            );
+            nextDeadline = svc.resolve(rules, baseDeadline, ctx);
+          } else {
+            nextDeadline = baseDeadline;
+          }
+        }
+
+        return {
+          id: app.id,
+          eventId: app.events.id,
+          eventTitle: app.events.title,
+          eventSlug: app.events.slug,
+          eventStartDate: app.events.start_at,
+          eventLocation: app.events.venue_name,
+          decisionStatus:
+            app.decision_published_at != null ? app.decision_status : 'NONE',
+          stepsCompleted,
+          stepsTotal,
+          nextAction: actionableStep
+            ? actionableStep.status === 'NEEDS_REVISION'
+              ? `Revision requested: ${actionableStep.workflow_steps?.title ?? 'Step'}`
+              : `Complete: ${actionableStep.workflow_steps?.title ?? 'Step'}`
+            : undefined,
+          nextDeadline,
+        };
+      }),
+    );
 
     return { applications: data };
   }

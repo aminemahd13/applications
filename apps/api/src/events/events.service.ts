@@ -63,6 +63,43 @@ export class EventsService {
     return value as Prisma.InputJsonValue;
   }
 
+  /**
+   * Deep-copy a step's conditional `deadline_rules`, rewriting every
+   * `field_answer` leaf's `stepId` to the cloned step's id. Steps are cloned in
+   * `step_index` order and a `field_answer` leaf may only reference an earlier
+   * step, so the referenced id is always present in `idMap` by the time we get
+   * here. References that are somehow unmapped are dropped (their leaf is
+   * removed) so a clone never carries a dangling cross-event step id.
+   */
+  private remapDeadlineRulesStepIds(
+    rules: unknown,
+    idMap: Map<string, string>,
+  ): unknown {
+    if (!Array.isArray(rules) || rules.length === 0) return [];
+
+    const remapNode = (node: any): any | null => {
+      if (node && node.type === 'group') {
+        const children = Array.isArray(node.children)
+          ? node.children.map(remapNode).filter((c: any) => c !== null)
+          : [];
+        return { ...node, children };
+      }
+      if (node && node.kind === 'field_answer') {
+        const mapped = idMap.get(node.stepId);
+        if (!mapped) return null;
+        return { ...node, stepId: mapped };
+      }
+      return node;
+    };
+
+    return rules
+      .map((rule: any) => {
+        if (!rule || !rule.condition) return null;
+        return { ...rule, condition: remapNode(rule.condition) };
+      })
+      .filter((r: any) => r !== null);
+  }
+
   private parseDateCursor(cursor?: string): Date | null {
     if (!cursor || typeof cursor !== 'string') return null;
     const parsed = new Date(cursor);
@@ -462,9 +499,12 @@ export class EventsService {
 
   private toPublicEventResponse(event: any) {
     // The deadline shown publicly (and used to derive open/closed) is the FIRST
-    // workflow step's deadline — the date by which a new applicant must complete
-    // the first step. The legacy event-level application_close_at is no longer
-    // used for gating or display.
+    // workflow step's BASE deadline — the date by which a new applicant must
+    // complete the first step. Conditional per-step `deadline_rules` are
+    // intentionally NOT applied here: there is no applicant (profile / answers)
+    // to evaluate them against yet, so the personalized deadline only appears
+    // once the user starts applying. The legacy event-level application_close_at
+    // is no longer used for gating or display.
     const effectiveCloseAt =
       (Array.isArray(event.workflow_steps)
         ? event.workflow_steps[0]?.deadline_at
@@ -876,6 +916,7 @@ export class EventsService {
           }
         }
 
+        const sourceStepIdToClonedId = new Map<string, string>();
         for (const sourceStep of sourceWorkflowSteps) {
           let mappedFormVersionId: string | null = null;
           if (sourceStep.form_version_id) {
@@ -888,9 +929,10 @@ export class EventsService {
             }
           }
 
+          const clonedStepId = crypto.randomUUID();
           await tx.workflow_steps.create({
             data: {
-              id: crypto.randomUUID(),
+              id: clonedStepId,
               event_id: targetEventId,
               step_index: sourceStep.step_index,
               category: sourceStep.category,
@@ -914,10 +956,15 @@ export class EventsService {
               allow_applicant_modification: sourceStep.allow_applicant_modification,
               modification_scope: sourceStep.modification_scope,
               deadline_at: sourceStep.deadline_at,
+              deadline_rules: this.remapDeadlineRulesStepIds(
+                (sourceStep as { deadline_rules?: unknown }).deadline_rules,
+                sourceStepIdToClonedId,
+              ) as any,
               max_revision_cycles: sourceStep.max_revision_cycles,
               form_version_id: mappedFormVersionId,
             },
           });
+          sourceStepIdToClonedId.set(sourceStep.id, clonedStepId);
         }
 
         if (sourceMicrosite) {
