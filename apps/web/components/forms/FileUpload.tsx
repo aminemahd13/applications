@@ -65,6 +65,69 @@ function summarizeMessages(messages: string[]): string {
     return `${messages.slice(0, 2).join(' ')} (+${messages.length - 2} more)`;
 }
 
+/**
+ * PUT a file straight to storage (presigned URL) with REAL upload progress and
+ * a stall watchdog.
+ *
+ * `fetch` cannot report upload progress, so the previous implementation left the
+ * bar frozen at a hardcoded percentage for the whole transfer — a 10 MB file
+ * looked "stuck at 30%" even while uploading fine. XHR exposes
+ * `upload.onprogress`. If no bytes move for `stallMs`, the request is aborted so
+ * a genuinely stuck upload surfaces an error instead of hanging forever.
+ */
+function putFileWithProgress(
+    url: string,
+    file: File,
+    contentType: string,
+    onProgress: (loaded: number, total: number) => void,
+    stallMs = 30000,
+): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        let stallTimer: ReturnType<typeof setTimeout> | undefined;
+        const clearStall = () => {
+            if (stallTimer) clearTimeout(stallTimer);
+        };
+        const armStall = () => {
+            clearStall();
+            stallTimer = setTimeout(() => {
+                xhr.abort();
+                reject(
+                    new Error(
+                        'Upload stalled — no data was sent for a while. Check your connection and try again.',
+                    ),
+                );
+            }, stallMs);
+        };
+
+        xhr.open('PUT', url);
+        xhr.setRequestHeader('Content-Type', contentType);
+        xhr.upload.onloadstart = armStall;
+        xhr.upload.onprogress = (e) => {
+            armStall();
+            if (e.lengthComputable) onProgress(e.loaded, e.total);
+        };
+        xhr.onload = () => {
+            clearStall();
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve();
+            } else {
+                reject(new Error(`Upload to storage failed (${xhr.status}).`));
+            }
+        };
+        xhr.onerror = () => {
+            clearStall();
+            reject(
+                new Error(
+                    'Network error during upload. Check your connection and try again.',
+                ),
+            );
+        };
+        xhr.onabort = clearStall;
+        xhr.send(file);
+    });
+}
+
 export function FileUpload({
     value,
     onChange,
@@ -157,9 +220,10 @@ export function FileUpload({
         try {
             const uploaded: FileUploadValue[] = [];
 
-            for (const file of acceptedFiles) {
+            for (let fileIndex = 0; fileIndex < acceptedFiles.length; fileIndex++) {
+                const file = acceptedFiles[fileIndex];
                 const fileMimeType = file.type || 'application/octet-stream';
-                // 1. Register Upload
+                // 1. Register upload (reserve a storage key + presigned PUT URL).
                 const { uploadUrl, id } = await apiClient<{ uploadUrl: string; id: string; storageKey: string }>(
                     `/events/${eventId}/uploads`,
                     {
@@ -177,24 +241,22 @@ export function FileUpload({
                     },
                 );
 
-                setProgress(30);
-
-                // 2. Upload to S3 (PUT)
-                const s3Res = await fetch(uploadUrl, {
-                    method: 'PUT',
-                    body: file,
-                    headers: {
-                        'Content-Type': fileMimeType,
+                // 2. Upload straight to storage with real byte-level progress so
+                // the bar tracks the actual transfer (no more frozen 30%), and a
+                // stall watchdog so a stuck upload fails fast with a clear message.
+                await putFileWithProgress(
+                    uploadUrl,
+                    file,
+                    fileMimeType,
+                    (loaded, totalBytes) => {
+                        const fraction = totalBytes > 0 ? loaded / totalBytes : 0;
+                        const overall = (fileIndex + fraction) / acceptedFiles.length;
+                        // Cap at 98% so the commit step below can take it to 100%.
+                        setProgress(Math.max(5, Math.min(98, Math.round(overall * 100))));
                     },
-                });
+                );
 
-                if (!s3Res.ok) {
-                    throw new Error(`Upload to storage failed: ${s3Res.statusText}`);
-                }
-
-                setProgress(80);
-
-                // 3. Commit Upload
+                // 3. Commit upload (promote STAGED -> ready).
                 await apiClient(`/events/${eventId}/uploads/${id}/commit`, {
                     method: 'POST',
                     body: {
@@ -205,14 +267,14 @@ export function FileUpload({
                     csrfToken: csrfToken ?? undefined,
                 });
 
-                setProgress(100);
-
                 uploaded.push({
                     fileObjectId: id,
                     originalFilename: file.name,
                     sizeBytes: file.size,
                 });
             }
+
+            setProgress(100);
 
             const next = [...existing, ...uploaded];
             const output =

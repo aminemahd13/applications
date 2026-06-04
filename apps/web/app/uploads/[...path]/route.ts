@@ -179,6 +179,17 @@ async function proxyToStorage(
 
   const requestImpl = targetUrl.protocol === "https:" ? httpsRequest : httpRequest;
 
+  // Uploads (PUT/POST/PATCH) of large files need a far longer socket timeout
+  // than reads: MinIO can take well over the old hardcoded 5s to acknowledge a
+  // multi-MB object under deadline load, which previously destroyed the request
+  // and surfaced as a stuck/failed upload. Both values are env-tunable.
+  const method = req.method.toUpperCase();
+  const isUpload =
+    method === "PUT" || method === "POST" || method === "PATCH";
+  const upstreamTimeoutMs = isUpload
+    ? Number(process.env.STORAGE_PROXY_UPLOAD_TIMEOUT_MS) || 120000
+    : Number(process.env.STORAGE_PROXY_TIMEOUT_MS) || 30000;
+
   return new Promise<Response>((resolve, reject) => {
     const upstreamReq = requestImpl(
       {
@@ -188,7 +199,7 @@ async function proxyToStorage(
         method: req.method,
         path: `${targetUrl.pathname}${targetUrl.search}`,
         headers: buildForwardHeaders(req, body?.byteLength),
-        timeout: 5000,
+        timeout: upstreamTimeoutMs,
       },
       (upstreamRes) => {
         const responseHeaders = new Headers();
