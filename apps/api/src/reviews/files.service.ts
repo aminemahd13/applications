@@ -234,6 +234,20 @@ export class FilesService {
       .toLowerCase()
       .trim();
 
+    // 0. Integrity: the stored object must be EXACTLY the size the client
+    // declared at registration. A short object means the PUT body was truncated
+    // in transit (observed: an HTTP/3/CDN body-truncation that cut large uploads
+    // off near ~10 MiB, dropping the PDF trailer). Committing it would silently
+    // store an incomplete, unopenable file, so fail loudly and clean up instead
+    // — the applicant simply re-uploads.
+    const declaredSize = Number(file.size_bytes ?? 0);
+    if (declaredSize > 0 && actualSize !== declaredSize) {
+      await this.cleanupFailedUpload(file.storage_key, fileId);
+      throw new BadRequestException(
+        `Upload incomplete — received ${actualSize} of ${declaredSize} bytes. Please upload the file again.`,
+      );
+    }
+
     // 1. Size Check (Max 50MB global limit as safety net)
     const MAX_SIZE = 50 * 1024 * 1024;
     if (actualSize > MAX_SIZE) {
