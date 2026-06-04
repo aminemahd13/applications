@@ -981,10 +981,26 @@ export class FilesService {
       );
     }
 
-    // Ensure the file is actually referenced in the submission answers for this field
-    const answerValue = (submission.answers_snapshot as Record<string, any>)[
-      fieldKey
-    ];
+    // Resolve the effective answers the same way the reviewer UI and the file
+    // export path do: normalize the `{ data: {...} }` snapshot shape AND apply
+    // any active admin patches. Reading the raw snapshot here caused valid
+    // verifications to 400 ("File is not referenced...") whenever the field had
+    // been patched (file replaced via "Edit field") or the snapshot was stored
+    // under a nested `data` key — the fileObjectId the reviewer clicked comes
+    // from the patched/normalized answers, not the raw snapshot.
+    const activePatches = await this.prisma.admin_change_patches.findMany({
+      where: {
+        submission_version_id: submissionVersionId,
+        is_active: true,
+      },
+      select: { ops: true },
+      orderBy: { created_at: 'asc' },
+    });
+    const effectiveAnswers = this.applyActivePatchesToAnswers(
+      submission.answers_snapshot as Record<string, unknown>,
+      activePatches.map((patch) => patch.ops),
+    );
+    const answerValue = effectiveAnswers[fieldKey];
     const fileIdsInAnswer = this.extractFileObjectIds(answerValue);
     if (!fileIdsInAnswer.includes(fileObjectId)) {
       throw new BadRequestException(

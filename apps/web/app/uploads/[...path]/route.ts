@@ -202,6 +202,15 @@ async function proxyToStorage(
         timeout: upstreamTimeoutMs,
       },
       (upstreamRes) => {
+        // The body is now streaming. A slow client legitimately idles this
+        // upstream socket via TCP backpressure (we stop reading from MinIO while
+        // the browser drains), so an inactivity timeout here would destroy the
+        // stream mid-transfer and hand the browser a TRUNCATED file — the cause
+        // of "Failed to load PDF document" for large downloads on slow networks.
+        // The connect/first-byte phase was already protected by the initial
+        // timeout; disable it now that bytes are flowing.
+        upstreamReq.setTimeout(0);
+
         const responseHeaders = new Headers();
         copyResponseHeaders(upstreamRes.headers, responseHeaders);
 

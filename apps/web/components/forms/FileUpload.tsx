@@ -107,6 +107,11 @@ function putFileWithProgress(
             armStall();
             if (e.lengthComputable) onProgress(e.loaded, e.total);
         };
+        // Once the body is fully sent, stop the upload-stall watchdog: it only
+        // guards the transfer of bytes. Otherwise the timer would keep counting
+        // while we wait for the server's response and could falsely abort a
+        // successful upload when MinIO is slow to acknowledge under load.
+        xhr.upload.onload = clearStall;
         xhr.onload = () => {
             clearStall();
             if (xhr.status >= 200 && xhr.status < 300) {

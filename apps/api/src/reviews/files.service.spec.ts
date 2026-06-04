@@ -963,3 +963,129 @@ describe('FilesService event-wide field ZIP export', () => {
     );
   });
 });
+
+describe('FilesService verifyField', () => {
+  function createService(params: {
+    answersSnapshot: Record<string, unknown>;
+    patches?: Array<{ ops: unknown }>;
+  }) {
+    const upsert = jest.fn().mockImplementation(({ create }: any) => ({
+      id: 'verification-1',
+      submission_version_id: create.submission_version_id,
+      field_id: create.field_id,
+      file_object_id: create.file_object_id,
+      status: create.status,
+      reason_code: create.reason_code ?? null,
+      notes_internal: create.notes_internal ?? null,
+      set_by: create.set_by ?? null,
+      set_at: new Date(),
+    }));
+
+    const prisma = {
+      step_submission_versions: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'version-1',
+          application_id: 'app-1',
+          step_id: 'step-1',
+          form_version_id: 'form-1',
+          answers_snapshot: params.answersSnapshot,
+          applications: { event_id: 'event-1' },
+        }),
+      },
+      form_versions: {
+        findUnique: jest.fn().mockResolvedValue({
+          schema: {
+            sections: [
+              {
+                id: 'section-1',
+                title: 'Files',
+                fields: [
+                  {
+                    id: 'resume',
+                    key: 'resume',
+                    type: FieldType.FILE_UPLOAD,
+                    label: 'Resume',
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      },
+      admin_change_patches: {
+        findMany: jest.fn().mockResolvedValue(params.patches ?? []),
+      },
+      file_objects: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'file-new' }),
+      },
+      field_verifications: { upsert },
+    };
+
+    const cls = { get: jest.fn().mockReturnValue('reviewer-1') };
+    const service = new FilesService(prisma as any, cls as any, {} as any);
+    return { service, prisma, upsert };
+  }
+
+  function callVerify(service: FilesService, fileObjectId: string) {
+    return service.verifyField(
+      'event-1',
+      'app-1',
+      'step-1',
+      'version-1',
+      'resume',
+      fileObjectId,
+      'VERIFIED' as any,
+      undefined,
+      undefined,
+    );
+  }
+
+  it('verifies a file referenced directly in the snapshot', async () => {
+    const { service, upsert } = createService({
+      answersSnapshot: { resume: { fileObjectId: 'file-original' } },
+    });
+
+    await expect(callVerify(service, 'file-original')).resolves.toEqual(
+      expect.objectContaining({ fileObjectId: 'file-original' }),
+    );
+    expect(upsert).toHaveBeenCalled();
+  });
+
+  it('verifies a file referenced under a nested `data` snapshot shape', async () => {
+    const { service } = createService({
+      answersSnapshot: { data: { resume: { fileObjectId: 'file-original' } } },
+    });
+
+    await expect(callVerify(service, 'file-original')).resolves.toEqual(
+      expect.objectContaining({ fileObjectId: 'file-original' }),
+    );
+  });
+
+  it('verifies a file that replaced the original via an active admin patch', async () => {
+    const { service } = createService({
+      answersSnapshot: { resume: { fileObjectId: 'file-original' } },
+      patches: [
+        {
+          ops: [
+            { op: 'replace', path: '/resume', value: { fileObjectId: 'file-new' } },
+          ],
+        },
+      ],
+    });
+
+    // The reviewer sees (and clicks) the patched file, not the original.
+    await expect(callVerify(service, 'file-new')).resolves.toEqual(
+      expect.objectContaining({ fileObjectId: 'file-new' }),
+    );
+  });
+
+  it('rejects a file not referenced in the effective answers', async () => {
+    const { service } = createService({
+      answersSnapshot: { resume: { fileObjectId: 'file-original' } },
+    });
+
+    await expect(callVerify(service, 'file-unrelated')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+});
