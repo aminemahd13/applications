@@ -243,6 +243,83 @@ async function proxyToStorage(
   });
 }
 
+/**
+ * Stream an upload (PUT/POST/PATCH) straight to storage WITHOUT buffering the
+ * whole body. Reading the full body via `req.arrayBuffer()` silently caps it at
+ * ~10 MiB in the Next server, truncating large uploads (a 10.8 MB PDF was stored
+ * as ~10.45 MB, losing its trailer). Piping the raw request stream avoids that
+ * and keeps memory flat. The body can only be consumed once, so — unlike the
+ * read path — we send it to the first reachable target instead of retrying.
+ */
+async function proxyUploadStream(
+  baseUrl: string,
+  req: NextRequest,
+): Promise<Response> {
+  const targetUrl = buildTargetUrl(
+    baseUrl,
+    req.nextUrl.pathname,
+    req.nextUrl.search,
+  );
+  if (isSameOrigin(targetUrl, req)) {
+    throw new Error("Skipping same-origin upload proxy target");
+  }
+
+  const requestImpl =
+    targetUrl.protocol === "https:" ? httpsRequest : httpRequest;
+  const upstreamTimeoutMs =
+    Number(process.env.STORAGE_PROXY_UPLOAD_TIMEOUT_MS) || 120000;
+  const contentLengthHeader = req.headers.get("content-length");
+  const contentLength =
+    contentLengthHeader && /^\d+$/.test(contentLengthHeader)
+      ? Number(contentLengthHeader)
+      : undefined;
+
+  return new Promise<Response>((resolve, reject) => {
+    const upstreamReq = requestImpl(
+      {
+        protocol: targetUrl.protocol,
+        hostname: targetUrl.hostname,
+        port: targetUrl.port || undefined,
+        method: req.method,
+        path: `${targetUrl.pathname}${targetUrl.search}`,
+        headers: buildForwardHeaders(req, contentLength),
+        timeout: upstreamTimeoutMs,
+      },
+      (upstreamRes) => {
+        // Upload body is fully sent; stop the inactivity timer while we read
+        // the (small) response.
+        upstreamReq.setTimeout(0);
+
+        const responseHeaders = new Headers();
+        copyResponseHeaders(upstreamRes.headers, responseHeaders);
+        const status = upstreamRes.statusCode ?? 502;
+        const stream =
+          status === 204 || status === 205 || status === 304
+            ? null
+            : (Readable.toWeb(
+                upstreamRes as unknown as Readable,
+              ) as ReadableStream<Uint8Array>);
+        resolve(new NextResponse(stream, { status, headers: responseHeaders }));
+      },
+    );
+
+    upstreamReq.on("error", reject);
+    upstreamReq.on("timeout", () => {
+      upstreamReq.destroy(new Error("Storage upstream timeout"));
+    });
+
+    if (!req.body) {
+      upstreamReq.end();
+      return;
+    }
+    const bodyReadable = Readable.fromWeb(
+      req.body as unknown as Parameters<typeof Readable.fromWeb>[0],
+    );
+    bodyReadable.on("error", (e) => upstreamReq.destroy(e));
+    bodyReadable.pipe(upstreamReq);
+  });
+}
+
 async function handle(req: NextRequest): Promise<Response> {
   const guardedMicrositeAssetRedirect = maybeRedirectMicrositeAsset(req);
   if (guardedMicrositeAssetRedirect) {
@@ -251,11 +328,35 @@ async function handle(req: NextRequest): Promise<Response> {
 
   const method = req.method.toUpperCase();
   const shouldReadBody = method !== "GET" && method !== "HEAD";
-  const body = shouldReadBody ? Buffer.from(await req.arrayBuffer()) : undefined;
+
+  if (shouldReadBody) {
+    // Uploads stream straight through; the body is consumed once, so send it to
+    // the first reachable (non-same-origin) target rather than retrying.
+    for (const baseUrl of resolveStorageBaseUrls()) {
+      const targetUrl = buildTargetUrl(
+        baseUrl,
+        req.nextUrl.pathname,
+        req.nextUrl.search,
+      );
+      if (isSameOrigin(targetUrl, req)) continue;
+      try {
+        return await proxyUploadStream(baseUrl, req);
+      } catch {
+        return NextResponse.json(
+          { message: "Storage upstream unavailable" },
+          { status: 502 },
+        );
+      }
+    }
+    return NextResponse.json(
+      { message: "Storage upstream unavailable" },
+      { status: 502 },
+    );
+  }
 
   for (const baseUrl of resolveStorageBaseUrls()) {
     try {
-      return await proxyToStorage(baseUrl, req, body);
+      return await proxyToStorage(baseUrl, req);
     } catch {
       continue;
     }
