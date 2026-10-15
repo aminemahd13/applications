@@ -20,6 +20,45 @@ describe('FilesController', () => {
     return { controller, filesService, cls };
   }
 
+  it('slugifies the original filename inside the upload storage key', async () => {
+    const { controller, filesService } = createController();
+    filesService.registerUpload.mockResolvedValue({ id: 'file-1' });
+
+    await controller.registerUpload('event-1', {
+      originalFilename: '../../Évil Name?#.PDF',
+      mimeType: 'application/pdf',
+      sizeBytes: 10,
+      applicationId: 'app-1',
+      stepId: 'step-1',
+      fieldId: 'resume',
+    });
+
+    const [, fileData] = filesService.registerUpload.mock.calls[0];
+    expect(fileData.originalFilename).toBe('../../Évil Name?#.PDF');
+    expect(fileData.storageKey).toMatch(
+      /^events\/event-1\/uploads\/[0-9a-f-]{36}-\.\.-\.\.-vil-name-\.pdf$/,
+    );
+  });
+
+  it('uses a default name in the storage key when the filename is missing', async () => {
+    const { controller, filesService } = createController();
+    filesService.registerUpload.mockResolvedValue({ id: 'file-1' });
+
+    await controller.registerUpload('event-1', {
+      originalFilename: undefined as unknown as string,
+      mimeType: 'application/pdf',
+      sizeBytes: 10,
+      applicationId: 'app-1',
+      stepId: 'step-1',
+      fieldId: 'resume',
+    });
+
+    const [, fileData] = filesService.registerUpload.mock.calls[0];
+    expect(fileData.storageKey).toMatch(
+      /^events\/event-1\/uploads\/[0-9a-f-]{36}-upload$/,
+    );
+  });
+
   it('lists exportable file fields for an event', async () => {
     const { controller, filesService } = createController();
     const payload = [

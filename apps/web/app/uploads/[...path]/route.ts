@@ -6,6 +6,7 @@ import {
 import { request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
 import { NextRequest, NextResponse } from "next/server";
+import { hardenUploadResponseHeaders } from "@/lib/upload-response-headers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -215,6 +216,8 @@ async function proxyToStorage(
         copyResponseHeaders(upstreamRes.headers, responseHeaders);
 
         const status = upstreamRes.statusCode ?? 502;
+        // Same-origin storage responses must never render as an active page.
+        hardenUploadResponseHeaders(responseHeaders, status);
         const stream =
           status === 204 || status === 205 || status === 304
             ? null
@@ -293,6 +296,7 @@ async function proxyUploadStream(
         const responseHeaders = new Headers();
         copyResponseHeaders(upstreamRes.headers, responseHeaders);
         const status = upstreamRes.statusCode ?? 502;
+        hardenUploadResponseHeaders(responseHeaders, status);
         const stream =
           status === 204 || status === 205 || status === 304
             ? null

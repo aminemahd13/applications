@@ -20,6 +20,10 @@ import { FilesService } from '../reviews/files.service';
 import { FormsService } from '../workflow/forms.service';
 import { canApplicantEditStep } from './applicant-step-editability.util';
 import {
+  normalizeAnswersShape,
+  resolveEffectiveAnswers,
+} from '../common/utils/effective-answers.util';
+import {
   generateFormSchema,
   FormDefinition,
   getFormFields,
@@ -647,23 +651,13 @@ export class SubmissionsService {
       include: { users: { select: { id: true } } },
     });
 
-    // Compute effective answers by applying patches
-    const baseAnswers = this.normalizeAnswersShape(
-      latestSubmission.answers_snapshot as Record<string, any>,
-    );
-    const effectiveAnswers = { ...baseAnswers };
-
-    for (const patch of patches) {
-      const ops = patch.ops as any[];
-      if (Array.isArray(ops)) {
-        for (const op of ops) {
-          if (op.op === 'replace' && op.path) {
-            const fieldPath = op.path.replace(/^\//, '');
-            effectiveAnswers[fieldPath] = op.value;
-          }
-        }
-      }
-    }
+    // Base = normalized snapshot; effective = base + active patches, applied
+    // by the shared util every other surface uses (replace/add/remove).
+    const { original: baseAnswers, answers: effectiveAnswers } =
+      resolveEffectiveAnswers(
+        latestSubmission.answers_snapshot,
+        patches.map((patch) => patch.ops),
+      );
 
     return {
       stepId,
@@ -1000,32 +994,13 @@ export class SubmissionsService {
   }
 
   /**
-   * Backward-compat: unwrap legacy answer envelopes shaped as { data: {...} }.
+   * Backward-compat: unwrap legacy answer envelopes shaped as { data: {...} }
+   * (shared util, so drafts/submissions normalize exactly like every reader).
    */
   private normalizeAnswersShape(
     answers: Record<string, any> | null | undefined,
   ): Record<string, any> {
-    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
-      return {};
-    }
-
-    const normalized = { ...answers };
-    const nestedData = normalized.data;
-    if (
-      nestedData &&
-      typeof nestedData === 'object' &&
-      !Array.isArray(nestedData)
-    ) {
-      Object.assign(normalized, nestedData as Record<string, any>);
-    }
-    if (
-      'data' in normalized &&
-      Object.keys(normalized).some((key) => key !== 'data')
-    ) {
-      delete normalized.data;
-    }
-
-    return normalized;
+    return normalizeAnswersShape(answers);
   }
 
   private async ensureEventScope(

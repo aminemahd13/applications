@@ -19,18 +19,17 @@ import {
   UpdateReviewQueueSavedViewDto,
   Permission,
   type ReviewContextApplicant,
-  type ReviewContextEditedField,
   type ReviewContextFile,
   type ReviewContextSubmission,
   type ReviewQueueItemContext,
 } from '@event-platform/shared';
 import { ReviewerAssignmentService } from './reviewer-assignment.service';
 import {
-  applyPatchOpsToAnswers,
   collectFileFieldRefs,
-  normalizeAnswersShape,
+  groupPatchOpsByVersionId,
+  resolveEffectiveAnswers,
 } from '../common/utils/effective-answers.util';
-import { parseInternalNotes } from '../applications/internal-notes.util';
+import { parseInternalNotes } from '@event-platform/shared';
 
 type QueueItemVisibilityFields = {
   queue_mode: string;
@@ -320,8 +319,11 @@ export class ReviewQueueService {
         stepTitle: item.workflow_steps?.title || 'Unknown',
         stepIndex: item.workflow_steps?.step_index ?? 0,
         status: stepState.status as StepStatus,
+        // Raw snapshot for now; replaced below by the effective (normalized +
+        // patched) answers for the visible page only.
         answers:
           (submissionVersion.answers_snapshot as Record<string, unknown>) ?? {},
+        editedFields: [],
         formDefinition,
         submissionVersionId: submissionVersion.id,
         submissionVersionNumber: submissionVersion.version_number,
@@ -355,6 +357,21 @@ export class ReviewQueueService {
     const visible = hasMore ? filtered.slice(0, limit) : filtered;
     const lastVisible = visible[visible.length - 1];
 
+    // Show reviewers the same answers the approve gate and file verification
+    // use: normalized snapshot + active staff patches. One batched query for
+    // the visible page only.
+    const patchOpsByVersionId = await this.loadActivePatchOpsByVersionId(
+      visible.map((item) => item.submissionVersionId),
+    );
+    for (const item of visible) {
+      const resolved = resolveEffectiveAnswers(
+        item.answers,
+        patchOpsByVersionId.get(item.submissionVersionId),
+      );
+      item.answers = resolved.answers;
+      item.editedFields = resolved.editedFields;
+    }
+
     return {
       data: visible as ReviewQueueItem[],
       meta: {
@@ -368,6 +385,34 @@ export class ReviewQueueService {
         hasMore,
       },
     };
+  }
+
+  /**
+   * Active staff patch op lists per submission version, oldest first. Skips
+   * the query when there is nothing to look up.
+   */
+  private async loadActivePatchOpsByVersionId(
+    submissionVersionIds: string[],
+    applicationId?: string,
+  ): Promise<Map<string, unknown[]>> {
+    const ids = Array.from(
+      new Set(
+        submissionVersionIds.filter(
+          (id): id is string => typeof id === 'string' && id.length > 0,
+        ),
+      ),
+    );
+    if (ids.length === 0) return new Map();
+    const patches = await this.prisma.admin_change_patches.findMany({
+      where: {
+        submission_version_id: { in: ids },
+        ...(applicationId ? { application_id: applicationId } : {}),
+        is_active: true,
+      },
+      select: { submission_version_id: true, ops: true },
+      orderBy: { created_at: 'asc' },
+    });
+    return groupPatchOpsByVersionId(patches);
   }
 
   /** Global admins and organizers (EVENT_UPDATE) see every queue item. */
@@ -503,9 +548,9 @@ export class ReviewQueueService {
       ),
     );
 
-    const [versions, patches] =
+    const [versions, patchOpsByVersionId] =
       latestVersionIds.length === 0
-        ? [[], []]
+        ? [[], new Map<string, unknown[]>()]
         : await Promise.all([
             this.prisma.step_submission_versions.findMany({
               where: {
@@ -521,23 +566,11 @@ export class ReviewQueueService {
                 form_versions: { select: { schema: true } },
               },
             }),
-            this.prisma.admin_change_patches.findMany({
-              where: {
-                submission_version_id: { in: latestVersionIds },
-                application_id: application.id,
-                is_active: true,
-              },
-              select: { submission_version_id: true, ops: true },
-              orderBy: { created_at: 'asc' },
-            }),
+            this.loadActivePatchOpsByVersionId(
+              latestVersionIds,
+              application.id,
+            ),
           ]);
-
-    const patchOpsByVersionId = new Map<string, unknown[]>();
-    for (const patch of patches) {
-      const list = patchOpsByVersionId.get(patch.submission_version_id) ?? [];
-      list.push(patch.ops);
-      patchOpsByVersionId.set(patch.submission_version_id, list);
-    }
 
     const submissionByStepId = new Map<string, ReviewContextSubmission>();
     const fileRefs: Array<{
@@ -550,15 +583,9 @@ export class ReviewQueueService {
       const state = stateByStepId.get(version.step_id);
       if (!state || state.latest_submission_version_id !== version.id) continue;
 
-      const original = normalizeAnswersShape(version.answers_snapshot);
-      const { answers, editedKeys } = applyPatchOpsToAnswers(
-        original,
-        patchOpsByVersionId.get(version.id) ?? [],
-      );
-      const editedFields: ReviewContextEditedField[] = editedKeys.map((key) =>
-        Object.prototype.hasOwnProperty.call(original, key)
-          ? { key, originalValue: original[key] }
-          : { key },
+      const { answers, editedFields } = resolveEffectiveAnswers(
+        version.answers_snapshot,
+        patchOpsByVersionId.get(version.id),
       );
       const formDefinition = toFormDefinitionRecord(
         version.form_versions?.schema,

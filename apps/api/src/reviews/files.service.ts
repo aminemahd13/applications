@@ -18,7 +18,20 @@ import {
   Permission,
 } from '@event-platform/shared';
 import { StorageService } from '../common/storage/storage.service';
+import {
+  isActiveContentMimeType,
+  isBareMimeType,
+  normalizeMimeEssence,
+  resolveSafeResponseHeaders,
+} from '../common/storage/safe-response-headers.util';
 import { FormDefinition, getFormFields } from '@event-platform/schemas';
+import {
+  extractFileObjectIds,
+  groupPatchOpsByVersionId,
+  readAnswerValue,
+  resolveEffectiveAnswers,
+  resolveFieldAnswerKey,
+} from '../common/utils/effective-answers.util';
 import { canApplicantEditStep } from '../applications/applicant-step-editability.util';
 import JSZip from 'jszip';
 import { extname } from 'path';
@@ -66,6 +79,25 @@ interface ExportPermissionContext {
   canReadSensitive: boolean;
 }
 
+const BLOCKED_FILE_TYPE_MESSAGE =
+  'This file type is not allowed for security reasons.';
+
+/** Names the offending upload so applicants know which file to replace. */
+function blockedFileTypeMessage(filename: unknown): string {
+  const name = typeof filename === 'string' ? filename.trim() : '';
+  return name
+    ? `"${name}": ${BLOCKED_FILE_TYPE_MESSAGE}`
+    : BLOCKED_FILE_TYPE_MESSAGE;
+}
+// Executables are refused on top of every active-content type (HTML, SVG,
+// XML, JavaScript…) — see isActiveContentMimeType.
+const BLOCKED_EXECUTABLE_MIME_TYPES = [
+  'application/x-msdownload',
+  'application/x-sh',
+  'application/x-php',
+  'application/x-dosexec',
+];
+const FILE_DOWNLOAD_URL_TTL_SECONDS = 3600;
 const ZIP_EXPORT_STORAGE_FETCH_CONCURRENCY = 6;
 const FIELD_FILE_EXPORT_JOB_PRESIGNED_DOWNLOAD_TTL_SECONDS = 3600;
 const FIELD_FILE_EXPORT_JOB_DEFAULT_MAX_ATTEMPTS = 3;
@@ -114,10 +146,15 @@ export class FilesService {
     if (!mimeType) {
       throw new BadRequestException('mimeType is required');
     }
+    // Browsers always send a bare `type/subtype` (File.type); anything with
+    // parameters or garbage is refused before it can reach storage.
+    if (!isBareMimeType(mimeType)) {
+      throw new BadRequestException(blockedFileTypeMessage(originalFilename));
+    }
     if (!Number.isFinite(declaredSizeBytes) || declaredSizeBytes <= 0) {
       throw new BadRequestException('sizeBytes must be a positive number');
     }
-    this.assertMimeNotBlocked(mimeType);
+    this.assertMimeNotBlocked(mimeType, originalFilename);
     this.assertMatchesFieldConstraints(
       mimeType,
       declaredSizeBytes,
@@ -204,7 +241,15 @@ export class FilesService {
     if (file.status === 'COMMITTED') {
       const committedMime = String(file.mime_type ?? '').toLowerCase();
       const committedSize = Number(file.size_bytes ?? 0);
-      this.assertMimeNotBlocked(committedMime);
+      // Files committed before active types were refused (e.g. an SVG) are
+      // already served as octet-stream attachments, so they must not block a
+      // (re)submission; only executables stay refused here. New uploads still
+      // get the full check at registration and at the STAGED commit below.
+      if (this.isBlockedExecutableMimeType(committedMime)) {
+        throw new BadRequestException(
+          blockedFileTypeMessage(file.original_filename),
+        );
+      }
       if (fieldConstraints) {
         this.assertMatchesFieldConstraints(
           committedMime,
@@ -266,7 +311,9 @@ export class FilesService {
     // 3. Blocklist (Extra safety)
     if (this.isBlockedMimeType(actualMime)) {
       await this.cleanupFailedUpload(file.storage_key, fileId);
-      throw new BadRequestException('File type not allowed.');
+      throw new BadRequestException(
+        blockedFileTypeMessage(file.original_filename),
+      );
     }
 
     if (fieldConstraints) {
@@ -341,6 +388,11 @@ export class FilesService {
       throw new NotFoundException('File not found');
     }
 
+    // Only committed files were size/type-checked against storage.
+    if (file.status !== 'COMMITTED') {
+      throw new NotFoundException('File not found');
+    }
+
     let allowed = false;
 
     // 1. Staff / Admin Check
@@ -402,6 +454,17 @@ export class FilesService {
       throw new ForbiddenException('Access denied');
     }
 
+    // The signed URL is served from the app origin, so storage must never
+    // echo the applicant-declared type: only passive types (raster images,
+    // PDF) render inline; everything else downloads as octet-stream.
+    const responseHeaders = resolveSafeResponseHeaders({
+      mimeType: file.mime_type,
+      filename: file.original_filename,
+      forceDownload: download,
+      profile: 'private',
+    });
+    const disposition = responseHeaders.inline ? 'inline' : 'attachment';
+
     // Audit Log
     await this.prisma.audit_logs.create({
       data: {
@@ -411,25 +474,24 @@ export class FilesService {
         action: 'FILE_ACCESS',
         entity_type: 'file_object',
         entity_id: fileId,
-        after: { sensitivity: file.sensitivity },
+        after: { sensitivity: file.sensitivity, disposition },
       },
     });
 
     // Signed URL generation
-    const safeFilename = encodeURIComponent(
-      file.original_filename || 'download',
-    );
-    const contentDisposition = download
-      ? `attachment; filename*=UTF-8''${safeFilename}`
-      : undefined;
-    const url = await this.storageService.getPresignedGetUrlWithDisposition(
+    const url = await this.storageService.getPresignedGetUrlWithResponseHeaders(
       file.storage_key,
-      contentDisposition,
+      {
+        contentType: responseHeaders.contentType,
+        contentDisposition: responseHeaders.contentDisposition,
+        cacheControl: 'private, no-store',
+      },
+      FILE_DOWNLOAD_URL_TTL_SECONDS,
     );
 
     return {
       url,
-      expiresAt: new Date(Date.now() + 3600 * 1000),
+      expiresAt: new Date(Date.now() + FILE_DOWNLOAD_URL_TTL_SECONDS * 1000),
     };
   }
 
@@ -781,12 +843,7 @@ export class FilesService {
       );
     }
 
-    const patchesBySubmissionId = new Map<string, unknown[]>();
-    for (const patch of patches) {
-      const list = patchesBySubmissionId.get(patch.submission_version_id) ?? [];
-      list.push(patch.ops);
-      patchesBySubmissionId.set(patch.submission_version_id, list);
-    }
+    const patchesBySubmissionId = groupPatchOpsByVersionId(patches);
 
     const applicationFiles: Array<{
       applicationId: string;
@@ -806,11 +863,13 @@ export class FilesService {
         );
       }
 
-      const effectiveAnswers = this.applyActivePatchesToAnswers(
-        submission.answers_snapshot as Record<string, unknown>,
-        patchesBySubmissionId.get(submission.id) ?? [],
+      const { answers: effectiveAnswers } = resolveEffectiveAnswers(
+        submission.answers_snapshot,
+        patchesBySubmissionId.get(submission.id),
       );
-      const fileObjectIds = this.extractFileObjectIds(effectiveAnswers[fieldKey]);
+      const fileObjectIds = extractFileObjectIds(
+        readAnswerValue(effectiveAnswers, fieldKey),
+      );
       if (fileObjectIds.length === 0) continue;
 
       const applicantEmail =
@@ -995,27 +1054,21 @@ export class FilesService {
       );
     }
 
-    // Resolve the effective answers the same way the reviewer UI and the file
-    // export path do: normalize the `{ data: {...} }` snapshot shape AND apply
-    // any active admin patches. Reading the raw snapshot here caused valid
-    // verifications to 400 ("File is not referenced...") whenever the field had
-    // been patched (file replaced via "Edit field") or the snapshot was stored
-    // under a nested `data` key — the fileObjectId the reviewer clicked comes
-    // from the patched/normalized answers, not the raw snapshot.
-    const activePatches = await this.prisma.admin_change_patches.findMany({
-      where: {
-        submission_version_id: submissionVersionId,
-        is_active: true,
-      },
-      select: { ops: true },
-      orderBy: { created_at: 'asc' },
-    });
-    const effectiveAnswers = this.applyActivePatchesToAnswers(
-      submission.answers_snapshot as Record<string, unknown>,
-      activePatches.map((patch) => patch.ops),
+    // Check the file against the EFFECTIVE answers (normalized snapshot +
+    // active staff patches) — the same values the review queue shows and the
+    // approve gate requires — so a file replaced or added by staff can be
+    // verified and a removed one cannot. A legacy answer stored under the
+    // field id is read too; the verification is always stored under the
+    // canonical key (`fieldKey`), which is what the approve gate looks up.
+    const effectiveAnswers = await this.getEffectiveAnswersForVersion(
+      submissionVersionId,
+      submission.answers_snapshot,
     );
-    const answerValue = effectiveAnswers[fieldKey];
-    const fileIdsInAnswer = this.extractFileObjectIds(answerValue);
+    const answerKey =
+      resolveFieldAnswerKey(effectiveAnswers, field) ?? fieldKey;
+    const fileIdsInAnswer = extractFileObjectIds(
+      readAnswerValue(effectiveAnswers, answerKey),
+    );
     if (!fileIdsInAnswer.includes(fileObjectId)) {
       throw new BadRequestException(
         'File is not referenced in this submission for the specified field',
@@ -1067,6 +1120,29 @@ export class FilesService {
       setBy: verification.set_by,
       setAt: verification.set_at,
     };
+  }
+
+  /**
+   * Effective answers of one submission version: the normalized snapshot with
+   * its active staff patches applied (`created_at` asc). Shared by
+   * `verifyField` and the approve gate so both always read the same values.
+   */
+  async getEffectiveAnswersForVersion(
+    submissionVersionId: string,
+    answersSnapshot: unknown,
+  ): Promise<Record<string, unknown>> {
+    const activePatches = await this.prisma.admin_change_patches.findMany({
+      where: {
+        submission_version_id: submissionVersionId,
+        is_active: true,
+      },
+      select: { ops: true },
+      orderBy: { created_at: 'asc' },
+    });
+    return resolveEffectiveAnswers(
+      answersSnapshot,
+      activePatches.map((patch) => patch.ops),
+    ).answers;
   }
 
   /**
@@ -1443,71 +1519,6 @@ export class FilesService {
     );
   }
 
-  private applyActivePatchesToAnswers(
-    baseAnswers: Record<string, unknown> | null | undefined,
-    patchOpsList: unknown[],
-  ): Record<string, unknown> {
-    const effective = this.normalizeAnswersShape(baseAnswers);
-
-    for (const rawOps of patchOpsList) {
-      if (!Array.isArray(rawOps)) continue;
-      for (const rawOp of rawOps) {
-        const op = rawOp as {
-          op?: string;
-          path?: string;
-          value?: unknown;
-        };
-        if (!op || typeof op.path !== 'string') continue;
-        const key = this.decodeJsonPointerPath(op.path);
-        if (!key) continue;
-
-        if (op.op === 'remove') {
-          delete effective[key];
-          continue;
-        }
-
-        if (op.op === 'replace' || op.op === 'add') {
-          effective[key] = op.value;
-        }
-      }
-    }
-
-    return this.normalizeAnswersShape(effective);
-  }
-
-  private normalizeAnswersShape(
-    answers: Record<string, unknown> | null | undefined,
-  ): Record<string, unknown> {
-    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
-      return {};
-    }
-    const normalized = { ...answers };
-    const nestedData = normalized.data;
-    if (
-      nestedData &&
-      typeof nestedData === 'object' &&
-      !Array.isArray(nestedData)
-    ) {
-      Object.assign(normalized, nestedData as Record<string, unknown>);
-    }
-    if (
-      'data' in normalized &&
-      Object.keys(normalized).some((key) => key !== 'data')
-    ) {
-      delete normalized.data;
-    }
-    return normalized;
-  }
-
-  private decodeJsonPointerPath(path: string): string {
-    const trimmed = path.replace(/^\//, '');
-    if (!trimmed) return '';
-    return trimmed
-      .split('/')
-      .map((segment) => segment.replace(/~1/g, '/').replace(/~0/g, '~'))
-      .join('/');
-  }
-
   private assertCanExportFileBySensitivity(
     sensitivity: string,
     userPermissions: string[],
@@ -1670,34 +1681,29 @@ export class FilesService {
     }
   }
 
-  private assertMimeNotBlocked(mimeType: string): void {
+  private assertMimeNotBlocked(mimeType: string, filename?: string): void {
     if (this.isBlockedMimeType(mimeType)) {
-      throw new BadRequestException('File type not allowed.');
+      throw new BadRequestException(blockedFileTypeMessage(filename));
     }
   }
 
+  /**
+   * Applicant uploads never accept active content (HTML, SVG, XML, JS…), even
+   * when a form's allow-list names it, nor executables or unparseable types.
+   * Works on the MIME essence so `TEXT/HTML; charset=utf-8` is caught too.
+   */
   private isBlockedMimeType(mimeType: string): boolean {
-    const blockedTypes = [
-      'application/x-msdownload',
-      'application/x-sh',
-      'application/x-php',
-      'application/x-dosexec',
-    ];
-    return blockedTypes.includes(String(mimeType).toLowerCase());
+    const essence = normalizeMimeEssence(mimeType);
+    if (!essence) return true;
+    return (
+      BLOCKED_EXECUTABLE_MIME_TYPES.includes(essence) ||
+      isActiveContentMimeType(essence)
+    );
   }
 
-  private extractFileObjectIds(value: any): string[] {
-    if (!value) return [];
-    if (Array.isArray(value)) {
-      return value.flatMap((v) => this.extractFileObjectIds(v));
-    }
-    if (typeof value === 'string') return [value];
-    if (typeof value === 'object') {
-      if (typeof value.fileObjectId === 'string') return [value.fileObjectId];
-      if (Array.isArray(value.fileObjectIds)) {
-        return value.fileObjectIds.filter((v: any) => typeof v === 'string');
-      }
-    }
-    return [];
+  /** Legacy rule for already-committed files: executables only. */
+  private isBlockedExecutableMimeType(mimeType: string): boolean {
+    const essence = normalizeMimeEssence(mimeType) ?? mimeType.trim();
+    return BLOCKED_EXECUTABLE_MIME_TYPES.includes(essence);
   }
 }

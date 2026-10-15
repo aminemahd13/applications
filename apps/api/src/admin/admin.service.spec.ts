@@ -505,3 +505,69 @@ describe('AdminService user management', () => {
     ).rejects.toThrow(NotFoundException);
   });
 });
+
+describe('AdminService effective answers (users CSV)', () => {
+  it('normalizes like every other surface and applies all patch ops', async () => {
+    const mockPrisma = {
+      step_submission_versions: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'v1',
+            // Mixed shape: nested data overrides the top-level copy and the
+            // envelope is dropped (previously kept as a `data` column).
+            answers_snapshot: {
+              essay: 'stale',
+              data: { essay: 'fresh', school: 'Lycee', 'a/b': 'old' },
+            },
+          },
+          { id: 'v2', answers_snapshot: { data: { city: 'Fes' } } },
+        ]),
+      },
+      admin_change_patches: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            submission_version_id: 'v1',
+            ops: [
+              { op: 'add', path: '/track', value: 'olympiad' },
+              { op: 'remove', path: '/school' },
+              { op: 'replace', path: '/a~1b', value: 'new' },
+            ],
+          },
+        ]),
+      },
+      $transaction: jest.fn((operations: Array<Promise<unknown>>) =>
+        Promise.all(operations),
+      ),
+    };
+    const service = new AdminService(
+      mockPrisma as any,
+      {} as any,
+      {} as any,
+    );
+
+    const effective: Map<string, Record<string, unknown>> = await (
+      service as any
+    ).getEffectiveAnswersBySubmissionVersionIds(['v1', 'v2']);
+
+    expect(effective.get('v1')).toEqual({
+      essay: 'fresh',
+      track: 'olympiad',
+      'a/b': 'new',
+    });
+    expect(effective.get('v2')).toEqual({ city: 'Fes' });
+  });
+
+  it('skips queries for an empty id list', async () => {
+    const mockPrisma = { $transaction: jest.fn() };
+    const service = new AdminService(
+      mockPrisma as any,
+      {} as any,
+      {} as any,
+    );
+
+    await expect(
+      (service as any).getEffectiveAnswersBySubmissionVersionIds([]),
+    ).resolves.toEqual(new Map());
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+});

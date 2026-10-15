@@ -567,6 +567,77 @@ describe('ApplicationsService detail draft answer visibility', () => {
     expect(result.stepStates[0]?.answers).toEqual({ essay: 'Draft answer' });
     expect(result.stepStates[0]?.answersSource).toBe('DRAFT');
   });
+
+  it('applies replace/add/remove and escaped-path patches to submitted answers', async () => {
+    const mockPrisma = {
+      applications: {
+        findFirst: jest.fn().mockResolvedValue(
+          createDetailedApplication({ latestSubmissionVersionId: 'submission-1' }),
+        ),
+      },
+      step_submission_versions: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'submission-1',
+            answers_snapshot: {
+              data: {
+                essay: 'Submitted answer',
+                school: 'Lycee',
+                'id/passport': 'old-number',
+              },
+            },
+          },
+        ]),
+      },
+      admin_change_patches: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            submission_version_id: 'submission-1',
+            ops: [{ op: 'replace', path: '/essay', value: 'Patched answer' }],
+          },
+          {
+            submission_version_id: 'submission-1',
+            ops: [
+              { op: 'add', path: '/city', value: 'Fes' },
+              { op: 'remove', path: '/school' },
+              { op: 'replace', path: '/id~1passport', value: 'new-number' },
+            ],
+          },
+        ]),
+      },
+      step_drafts: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      applicant_profiles: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+      $transaction: jest.fn((operations: Array<Promise<unknown>>) =>
+        Promise.all(operations),
+      ),
+    };
+    const service = new ApplicationsService(
+      mockPrisma as any,
+      { get: jest.fn() } as any,
+      { ensureStepStates: jest.fn().mockResolvedValue(false) } as any,
+    );
+
+    const result = await service.findById('event-1', 'app-1');
+
+    expect(result.stepStates[0]?.answersSource).toBe('SUBMISSION');
+    expect(result.stepStates[0]?.answers).toEqual({
+      essay: 'Patched answer',
+      city: 'Fes',
+      'id/passport': 'new-number',
+    });
+    expect(mockPrisma.admin_change_patches.findMany).toHaveBeenCalledWith({
+      where: {
+        submission_version_id: { in: ['submission-1'] },
+        is_active: true,
+      },
+      select: { submission_version_id: true, ops: true },
+      orderBy: { created_at: 'asc' },
+    });
+  });
 });
 
 describe('ApplicationsService applicant visibility', () => {
@@ -1542,6 +1613,41 @@ describe('ApplicationsService CSV export', () => {
     expect(row).toContain('"vip | intl"');
   });
 
+  it('exports effective answers: added fields become columns, removed ones are dropped', async () => {
+    const { service, mockPrisma } = createService();
+    const [application] = await mockPrisma.applications.findMany();
+    application.application_step_states[0].latest_submission_version_id =
+      'sub-1';
+    mockPrisma.applications.findMany.mockResolvedValue([application]);
+    mockPrisma.step_submission_versions.findMany.mockResolvedValue([
+      {
+        id: 'sub-1',
+        answers_snapshot: { data: { school: 'Lycee Zeta', essay: 'Hello' } },
+      },
+    ]);
+    mockPrisma.admin_change_patches.findMany.mockResolvedValue([
+      {
+        submission_version_id: 'sub-1',
+        ops: [
+          { op: 'add', path: '/hometown', value: 'Tetouan' },
+          { op: 'remove', path: '/school' },
+        ],
+      },
+    ]);
+    mockPrisma.$transaction.mockImplementation(
+      (operations: Array<Promise<unknown>>) => Promise.all(operations),
+    );
+
+    const result = await service.exportEventApplicationsCsv('event-1');
+
+    const [header, row] = result.csv.split('\n');
+    expect(header.toLowerCase()).toContain('hometown');
+    expect(row).toContain('"Tetouan"');
+    expect(row).toContain('"Hello"');
+    expect(header.toLowerCase()).not.toContain('school');
+    expect(row).not.toContain('Lycee Zeta');
+  });
+
   it('applies selected application IDs filter for export', async () => {
     const { service, mockPrisma } = createService();
 
@@ -2443,5 +2549,202 @@ describe('ApplicationsService appendInternalNote', () => {
     expect(tx.applications.updateMany).not.toHaveBeenCalled();
     expect(mockPrisma.applications.update).not.toHaveBeenCalled();
     expect(mockPrisma.$executeRaw).not.toHaveBeenCalled();
+  });
+});
+
+describe('ApplicationsService deleteInternalNotes', () => {
+  const EVENT_ID = '0b6f4f5e-1f0a-4c55-9a43-5f3f2b7f9a10';
+  const APPLICATION_ID = '37a2125b-fdd0-42e2-a273-89d2f8010e4c';
+  const NOW = new Date('2026-10-15T09:30:00.000Z');
+  const LINE_A = '[2026-10-01T08:00:00.000Z] Grace Hopper: see [ref] note: x';
+  const LINE_B = '[2026-10-02T08:00:00.000Z] Ada Lovelace: second look';
+  const LINE_C = '[2026-10-03T08:00:00.000Z] Alan Turing: added meanwhile';
+
+  const noteA = {
+    id: 'note-1',
+    createdAt: '2026-10-01T08:00:00.000Z',
+    authorName: 'Grace Hopper',
+    content: 'see [ref] note: x',
+  };
+  const noteB = {
+    id: 'note-2',
+    createdAt: '2026-10-02T08:00:00.000Z',
+    authorName: 'Ada Lovelace',
+    content: 'second look',
+  };
+  const legacyNote = {
+    id: 'note-0',
+    createdAt: null,
+    authorName: null,
+    content: 'Legacy unprefixed note',
+  };
+
+  let service: ApplicationsService;
+  let mockPrisma: any;
+  let tx: any;
+
+  function setup(internalNotes: string | null) {
+    tx = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      $executeRawUnsafe: jest.fn(),
+      $queryRaw: jest.fn(),
+      applications: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ internal_notes: internalNotes }),
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn(),
+      },
+    };
+    mockPrisma = {
+      $transaction: jest.fn(async (fn: (client: unknown) => unknown) => fn(tx)),
+      $executeRaw: jest.fn(),
+      applications: {
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
+    };
+    const cls = { get: jest.fn() };
+    service = new ApplicationsService(mockPrisma, cls as any, {} as any);
+  }
+
+  beforeEach(() => {
+    jest.useFakeTimers({
+      now: NOW,
+      doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate'],
+    });
+    setup(['Legacy unprefixed note', LINE_A, LINE_B].join('\n'));
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('locks the application row (scoped to the event), then reads, then writes', async () => {
+    await service.deleteInternalNotes(EVENT_ID, APPLICATION_ID, [noteB]);
+
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    const [strings, ...values] = tx.$executeRaw.mock.calls[0];
+    const sql = Array.from(strings as string[]).join('?');
+    expect(sql).toBe(
+      'SELECT 1 FROM applications WHERE id = ?::uuid AND event_id = ?::uuid FOR UPDATE',
+    );
+    expect(values).toEqual([APPLICATION_ID, EVENT_ID]);
+    expect(tx.applications.findFirst).toHaveBeenCalledWith({
+      where: { id: APPLICATION_ID, event_id: EVENT_ID },
+      select: { internal_notes: true },
+    });
+    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.applications.findFirst.mock.invocationCallOrder[0],
+    );
+    expect(tx.applications.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.applications.update.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('throws 404 and writes nothing when the application is not in the event', async () => {
+    tx.applications.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.deleteInternalNotes(EVENT_ID, APPLICATION_ID, [noteB]),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(tx.applications.update).not.toHaveBeenCalled();
+  });
+
+  it('writes only through the applications.update delegate (audited), not raw SQL', async () => {
+    await service.deleteInternalNotes(EVENT_ID, APPLICATION_ID, [noteB]);
+
+    expect(tx.applications.update).toHaveBeenCalledTimes(1);
+    expect(tx.applications.update).toHaveBeenCalledWith({
+      where: { id: APPLICATION_ID },
+      data: {
+        internal_notes: ['Legacy unprefixed note', LINE_A].join('\n'),
+        updated_at: NOW,
+      },
+    });
+    // The only raw statement is the row lock; there is no raw write.
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$executeRawUnsafe).not.toHaveBeenCalled();
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(tx.applications.updateMany).not.toHaveBeenCalled();
+    expect(mockPrisma.applications.update).not.toHaveBeenCalled();
+    expect(mockPrisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('returns the remaining notes with removed/missing counts', async () => {
+    const result = await service.deleteInternalNotes(EVENT_ID, APPLICATION_ID, [
+      noteA,
+    ]);
+
+    expect(result).toEqual({
+      notes: [
+        {
+          id: 'note-1',
+          createdAt: '2026-10-02T08:00:00.000Z',
+          authorName: 'Ada Lovelace',
+          content: 'second look',
+        },
+        legacyNote,
+      ],
+      removed: 1,
+      missing: 0,
+    });
+  });
+
+  it('writes nothing (no updated_at bump) when every target is already gone', async () => {
+    const result = await service.deleteInternalNotes(EVENT_ID, APPLICATION_ID, [
+      { ...noteB, content: 'deleted by someone else' },
+    ]);
+
+    expect(tx.applications.update).not.toHaveBeenCalled();
+    expect(result.removed).toBe(0);
+    expect(result.missing).toBe(1);
+    expect(result.notes.map((note) => note.id)).toEqual([
+      'note-2',
+      'note-1',
+      'note-0',
+    ]);
+  });
+
+  it('keeps a note appended after the caller loaded the page ("Clear all")', async () => {
+    setup(['Legacy unprefixed note', LINE_A, LINE_B, LINE_C].join('\n'));
+
+    const result = await service.deleteInternalNotes(EVENT_ID, APPLICATION_ID, [
+      noteB,
+      noteA,
+      legacyNote,
+    ]);
+
+    expect(tx.applications.update).toHaveBeenCalledWith({
+      where: { id: APPLICATION_ID },
+      data: { internal_notes: LINE_C, updated_at: NOW },
+    });
+    expect(result).toEqual({
+      notes: [
+        {
+          id: 'note-0',
+          createdAt: '2026-10-03T08:00:00.000Z',
+          authorName: 'Alan Turing',
+          content: 'added meanwhile',
+        },
+      ],
+      removed: 3,
+      missing: 0,
+    });
+  });
+
+  it('writes internal_notes: null when every note is removed', async () => {
+    const result = await service.deleteInternalNotes(EVENT_ID, APPLICATION_ID, [
+      noteB,
+      noteA,
+      legacyNote,
+    ]);
+
+    expect(tx.applications.update).toHaveBeenCalledWith({
+      where: { id: APPLICATION_ID },
+      data: { internal_notes: null, updated_at: NOW },
+    });
+    expect(result).toEqual({ notes: [], removed: 3, missing: 0 });
   });
 });

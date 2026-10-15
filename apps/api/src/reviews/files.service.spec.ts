@@ -158,6 +158,419 @@ describe('FilesService applicant upload guard', () => {
   });
 });
 
+describe('FilesService upload type guard', () => {
+  const BLOCKED_MESSAGE = 'This file type is not allowed for security reasons.';
+
+  function createService(allowedMimeTypes?: string[]) {
+    const prisma = {
+      applications: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'app-1',
+          applicant_user_id: 'user-1',
+        }),
+      },
+      workflow_steps: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'step-1',
+          form_version_id: 'form-1',
+          deadline_at: null,
+          allow_applicant_modification: true,
+          modification_scope: 'SUBMITTED_ONLY',
+        }),
+      },
+      application_step_states: {
+        findFirst: jest.fn().mockResolvedValue({ status: 'UNLOCKED' }),
+      },
+      form_versions: {
+        findUnique: jest.fn().mockResolvedValue({
+          schema: {
+            sections: [
+              {
+                id: 'section-1',
+                title: 'Files',
+                fields: [
+                  {
+                    id: 'resume',
+                    key: 'resume',
+                    type: FieldType.FILE_UPLOAD,
+                    label: 'Resume',
+                    ...(allowedMimeTypes ? { ui: { allowedMimeTypes } } : {}),
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      },
+      file_objects: {
+        create: jest.fn().mockImplementation(({ data }: any) => data),
+        findUnique: jest.fn(),
+        delete: jest.fn(),
+      },
+    };
+    const cls = {
+      get: jest.fn((key: string) => {
+        if (key === 'actorId') return 'user-1';
+        if (key === 'permissions') return [];
+        return undefined;
+      }),
+    };
+    const storageService = {
+      getPresignedPutUrl: jest.fn().mockResolvedValue('https://put-url'),
+      getHeadObject: jest.fn(),
+      deleteObject: jest.fn(),
+      computeSha256: jest.fn(),
+    };
+    const service = new FilesService(
+      prisma as any,
+      cls as any,
+      storageService as any,
+    );
+    return { service, prisma, storageService };
+  }
+
+  function register(service: FilesService, mimeType: string) {
+    return service.registerUpload('event-1', {
+      originalFilename: 'payload.html',
+      mimeType,
+      sizeBytes: 100,
+      storageKey: 'events/event-1/uploads/uuid-payload.html',
+      sensitivity: 'normal' as any,
+      applicationId: 'app-1',
+      stepId: 'step-1',
+      fieldId: 'resume',
+    });
+  }
+
+  const ACTIVE_TYPES = [
+    'text/html',
+    'TEXT/HTML',
+    'application/xhtml+xml',
+    'image/svg+xml',
+    'text/xml',
+    'application/xml',
+    'application/rss+xml',
+    'application/javascript',
+    'text/javascript',
+    'multipart/x-mixed-replace',
+  ];
+
+  it.each(ACTIVE_TYPES)(
+    'rejects %p when the field has no allow-list',
+    async (mimeType) => {
+      const { service, prisma, storageService } = createService();
+      await expect(register(service, mimeType)).rejects.toThrow(BLOCKED_MESSAGE);
+      expect(prisma.file_objects.create).not.toHaveBeenCalled();
+      expect(storageService.getPresignedPutUrl).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(ACTIVE_TYPES)(
+    'rejects %p even when the field allow-list names it',
+    async (mimeType) => {
+      const { service, prisma } = createService([
+        mimeType.toLowerCase(),
+        'application/pdf',
+      ]);
+      await expect(register(service, mimeType)).rejects.toThrow(BLOCKED_MESSAGE);
+      expect(prisma.file_objects.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['text/html; charset=utf-8', 'image/png; x=y', 'garbage', 'image/'])(
+    'rejects non-bare MIME strings like %p',
+    async (mimeType) => {
+      const { service, prisma } = createService();
+      await expect(register(service, mimeType)).rejects.toThrow(BLOCKED_MESSAGE);
+      expect(prisma.file_objects.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still rejects executables', async () => {
+    const { service } = createService();
+    await expect(
+      register(service, 'application/x-msdownload'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('accepts passive types and signs the PUT with the declared type', async () => {
+    const { service, prisma, storageService } = createService();
+
+    await expect(register(service, 'application/pdf')).resolves.toEqual(
+      expect.objectContaining({
+        uploadUrl: 'https://put-url',
+        mimeType: 'application/pdf',
+      }),
+    );
+    expect(prisma.file_objects.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        mime_type: 'application/pdf',
+        status: 'STAGED',
+      }),
+    });
+    expect(storageService.getPresignedPutUrl).toHaveBeenCalledWith(
+      'events/event-1/uploads/uuid-payload.html',
+      'application/pdf',
+    );
+  });
+
+  it('rejects and cleans up a legacy staged HTML upload at commit', async () => {
+    const { service, prisma, storageService } = createService();
+    prisma.file_objects.findUnique.mockResolvedValue({
+      id: 'file-1',
+      event_id: 'event-1',
+      created_by: 'user-1',
+      status: 'STAGED',
+      storage_key: 'events/event-1/uploads/uuid-payload.html',
+      mime_type: 'text/html',
+      size_bytes: BigInt(100),
+    });
+    storageService.getHeadObject.mockResolvedValue({
+      ContentLength: 100,
+      ContentType: 'text/html',
+    });
+
+    await expect(
+      service.commitUpload('file-1', 'event-1', {
+        applicationId: 'app-1',
+        stepId: 'step-1',
+        fieldId: 'resume',
+      }),
+    ).rejects.toThrow(BLOCKED_MESSAGE);
+    expect(storageService.deleteObject).toHaveBeenCalledWith(
+      'events/event-1/uploads/uuid-payload.html',
+    );
+    expect(prisma.file_objects.delete).toHaveBeenCalledWith({
+      where: { id: 'file-1' },
+    });
+    expect(storageService.computeSha256).not.toHaveBeenCalled();
+  });
+
+  it('names the file in the rejection so applicants know what to replace', async () => {
+    const { service } = createService();
+    await expect(register(service, 'image/svg+xml')).rejects.toThrow(
+      `"payload.html": ${BLOCKED_MESSAGE}`,
+    );
+  });
+
+  it('does not block a (re)submission over an active-type file committed before the stricter rule', async () => {
+    const { service, prisma, storageService } = createService();
+    prisma.file_objects.findUnique.mockResolvedValue({
+      id: 'file-1',
+      event_id: 'event-1',
+      created_by: 'user-1',
+      status: 'COMMITTED',
+      storage_key: 'events/event-1/uploads/uuid-logo.svg',
+      original_filename: 'logo.svg',
+      mime_type: 'image/svg+xml',
+      size_bytes: BigInt(100),
+    });
+
+    await expect(
+      service.commitUpload('file-1', 'event-1', {
+        applicationId: 'app-1',
+        stepId: 'step-1',
+        fieldId: 'resume',
+      }),
+    ).resolves.toBeUndefined();
+    expect(storageService.getHeadObject).not.toHaveBeenCalled();
+    expect(prisma.file_objects.delete).not.toHaveBeenCalled();
+  });
+
+  it('still refuses an already-committed executable', async () => {
+    const { service, prisma } = createService();
+    prisma.file_objects.findUnique.mockResolvedValue({
+      id: 'file-1',
+      event_id: 'event-1',
+      created_by: 'user-1',
+      status: 'COMMITTED',
+      storage_key: 'events/event-1/uploads/uuid-setup.exe',
+      original_filename: 'setup.exe',
+      mime_type: 'application/x-msdownload',
+      size_bytes: BigInt(100),
+    });
+
+    await expect(
+      service.commitUpload('file-1', 'event-1', {
+        applicationId: 'app-1',
+        stepId: 'step-1',
+        fieldId: 'resume',
+      }),
+    ).rejects.toThrow(`"setup.exe": ${BLOCKED_MESSAGE}`);
+  });
+});
+
+describe('FilesService getDownloadUrl response headers', () => {
+  function createService(file: Record<string, unknown> | null) {
+    const prisma = {
+      file_objects: {
+        findUnique: jest.fn().mockResolvedValue(file),
+      },
+      audit_logs: {
+        create: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const cls = { get: jest.fn().mockReturnValue('staff-1') };
+    const storageService = {
+      getPresignedGetUrlWithResponseHeaders: jest
+        .fn()
+        .mockResolvedValue('https://signed-get'),
+      getPresignedGetUrlWithDisposition: jest.fn(),
+      getPresignedGetUrl: jest.fn(),
+    };
+    const service = new FilesService(
+      prisma as any,
+      cls as any,
+      storageService as any,
+    );
+    return { service, prisma, storageService };
+  }
+
+  function committedFile(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'file-1',
+      event_id: 'event-1',
+      storage_key: 'events/event-1/uploads/uuid-file',
+      original_filename: 'file.bin',
+      mime_type: 'application/octet-stream',
+      sensitivity: 'normal',
+      status: 'COMMITTED',
+      created_by: 'applicant-1',
+      ...overrides,
+    };
+  }
+
+  const READ_NORMAL = [Permission.EVENT_FILES_READ_NORMAL];
+
+  function signedHeaders(storageService: {
+    getPresignedGetUrlWithResponseHeaders: jest.Mock;
+  }) {
+    expect(
+      storageService.getPresignedGetUrlWithResponseHeaders,
+    ).toHaveBeenCalledTimes(1);
+    return storageService.getPresignedGetUrlWithResponseHeaders.mock.calls[0];
+  }
+
+  it('signs an applicant-declared text/html file as an octet-stream attachment', async () => {
+    const { service, storageService } = createService(
+      committedFile({ mime_type: 'text/html', original_filename: 'cv.html' }),
+    );
+
+    await expect(
+      service.getDownloadUrl('file-1', 'event-1', READ_NORMAL, false),
+    ).resolves.toEqual(
+      expect.objectContaining({ url: 'https://signed-get' }),
+    );
+
+    const [key, headers, expiry] = signedHeaders(storageService);
+    expect(key).toBe('events/event-1/uploads/uuid-file');
+    expect(headers).toEqual({
+      contentType: 'application/octet-stream',
+      contentDisposition: `attachment; filename="cv.html"; filename*=UTF-8''cv.html`,
+      cacheControl: 'private, no-store',
+    });
+    expect(expiry).toBe(3600);
+  });
+
+  it('serves a png inline with its canonical type', async () => {
+    const { service, storageService } = createService(
+      committedFile({ mime_type: 'image/png', original_filename: 'id.png' }),
+    );
+
+    await service.getDownloadUrl('file-1', 'event-1', READ_NORMAL, false);
+
+    const [, headers] = signedHeaders(storageService);
+    expect(headers).toEqual({
+      contentType: 'image/png',
+      contentDisposition: `inline; filename="id.png"; filename*=UTF-8''id.png`,
+      cacheControl: 'private, no-store',
+    });
+  });
+
+  it('serves a pdf inline', async () => {
+    const { service, storageService } = createService(
+      committedFile({ mime_type: 'application/pdf', original_filename: 'cv.pdf' }),
+    );
+
+    await service.getDownloadUrl('file-1', 'event-1', READ_NORMAL, false);
+
+    const [, headers] = signedHeaders(storageService);
+    expect(headers.contentType).toBe('application/pdf');
+    expect(headers.contentDisposition.startsWith('inline;')).toBe(true);
+  });
+
+  it('never serves an svg with its own type on the private profile', async () => {
+    const { service, storageService } = createService(
+      committedFile({ mime_type: 'image/svg+xml', original_filename: 'a.svg' }),
+    );
+
+    await service.getDownloadUrl('file-1', 'event-1', READ_NORMAL, false);
+
+    const [, headers] = signedHeaders(storageService);
+    expect(headers.contentType).toBe('application/octet-stream');
+    expect(headers.contentDisposition.startsWith('attachment;')).toBe(true);
+  });
+
+  it('forces an attachment (keeping the type) when download is requested', async () => {
+    const { service, storageService } = createService(
+      committedFile({ mime_type: 'image/png', original_filename: 'id.png' }),
+    );
+
+    await service.getDownloadUrl('file-1', 'event-1', READ_NORMAL, true);
+
+    const [, headers] = signedHeaders(storageService);
+    expect(headers).toEqual({
+      contentType: 'image/png',
+      contentDisposition: `attachment; filename="id.png"; filename*=UTF-8''id.png`,
+      cacheControl: 'private, no-store',
+    });
+  });
+
+  it('writes exactly one FILE_ACCESS audit row with the disposition', async () => {
+    const { service, prisma } = createService(
+      committedFile({ mime_type: 'image/png' }),
+    );
+
+    await service.getDownloadUrl('file-1', 'event-1', READ_NORMAL, false);
+
+    expect(prisma.audit_logs.create).toHaveBeenCalledTimes(1);
+    expect(prisma.audit_logs.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'FILE_ACCESS',
+        entity_id: 'file-1',
+        after: { sensitivity: 'normal', disposition: 'inline' },
+      }),
+    });
+  });
+
+  it('returns 404 for a file that was never committed', async () => {
+    const { service, prisma, storageService } = createService(
+      committedFile({ status: 'STAGED', mime_type: 'image/png' }),
+    );
+
+    await expect(
+      service.getDownloadUrl('file-1', 'event-1', READ_NORMAL, false),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.audit_logs.create).not.toHaveBeenCalled();
+    expect(
+      storageService.getPresignedGetUrlWithResponseHeaders,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('still enforces the sensitivity permission', async () => {
+    const { service, storageService } = createService(
+      committedFile({ sensitivity: 'sensitive', mime_type: 'image/png' }),
+    );
+
+    await expect(
+      service.getDownloadUrl('file-1', 'event-1', READ_NORMAL, false),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(
+      storageService.getPresignedGetUrlWithResponseHeaders,
+    ).not.toHaveBeenCalled();
+  });
+});
+
 describe('FilesService event-wide field ZIP export', () => {
   type ExportServiceOptions = {
     permissions?: string[];
@@ -574,6 +987,59 @@ describe('FilesService event-wide field ZIP export', () => {
     ]);
   });
 
+  it('honours add and remove patches on legacy { data } snapshots when exporting', async () => {
+    const { service, storageService } = createExportService({
+      stepStates: [
+        {
+          application_id: 'app-1',
+          latest_submission_version_id: 'sub-1',
+          email: 'alpha@example.com',
+        },
+        {
+          application_id: 'app-2',
+          latest_submission_version_id: 'sub-2',
+          email: 'beta@example.com',
+        },
+      ],
+      submissions: [
+        {
+          id: 'sub-1',
+          application_id: 'app-1',
+          answers_snapshot: { data: { name: 'Alpha' } },
+        },
+        {
+          id: 'sub-2',
+          application_id: 'app-2',
+          answers_snapshot: { data: { resume: [{ fileObjectId: 'file-2' }] } },
+        },
+      ],
+      patchRows: [
+        {
+          submission_version_id: 'sub-1',
+          ops: [
+            { op: 'add', path: '/resume', value: [{ fileObjectId: 'file-1' }] },
+          ],
+        },
+        {
+          submission_version_id: 'sub-2',
+          ops: [{ op: 'remove', path: '/resume' }],
+        },
+      ],
+    });
+
+    const result = await service.exportEventFieldFilesZip(
+      'event-1',
+      'step-1',
+      'resume',
+    );
+
+    expect(storageService.getObjectBuffer).toHaveBeenCalledTimes(1);
+    const zip = await JSZip.loadAsync(result.buffer);
+    expect(Object.keys(zip.files)).toEqual([
+      'alpha@example.com__app-1__resume__file_1.pdf',
+    ]);
+  });
+
   it('exports only selected application IDs when provided', async () => {
     const { service, prisma, storageService } = createExportService({
       stepStates: [
@@ -968,6 +1434,7 @@ describe('FilesService verifyField', () => {
   function createService(params: {
     answersSnapshot: Record<string, unknown>;
     patches?: Array<{ ops: unknown }>;
+    fields?: Array<Record<string, unknown>>;
   }) {
     const upsert = jest.fn().mockImplementation(({ create }: any) => ({
       id: 'verification-1',
@@ -999,7 +1466,7 @@ describe('FilesService verifyField', () => {
               {
                 id: 'section-1',
                 title: 'Files',
-                fields: [
+                fields: params.fields ?? [
                   {
                     id: 'resume',
                     key: 'resume',
@@ -1026,13 +1493,17 @@ describe('FilesService verifyField', () => {
     return { service, prisma, upsert };
   }
 
-  function callVerify(service: FilesService, fileObjectId: string) {
+  function callVerify(
+    service: FilesService,
+    fileObjectId: string,
+    fieldId = 'resume',
+  ) {
     return service.verifyField(
       'event-1',
       'app-1',
       'step-1',
       'version-1',
-      'resume',
+      fieldId,
       fileObjectId,
       'VERIFIED' as any,
       undefined,
@@ -1087,5 +1558,165 @@ describe('FilesService verifyField', () => {
     await expect(callVerify(service, 'file-unrelated')).rejects.toBeInstanceOf(
       BadRequestException,
     );
+  });
+
+  it('rejects the original file once staff replaced it', async () => {
+    const { service, upsert } = createService({
+      answersSnapshot: { resume: { fileObjectId: 'file-original' } },
+      patches: [
+        {
+          ops: [
+            { op: 'replace', path: '/resume', value: { fileObjectId: 'file-new' } },
+          ],
+        },
+      ],
+    });
+
+    await expect(callVerify(service, 'file-original')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('verifies a file added by staff through an add op', async () => {
+    const { service } = createService({
+      answersSnapshot: { other: 'x' },
+      patches: [
+        {
+          ops: [
+            { op: 'add', path: '/resume', value: [{ fileObjectId: 'file-new' }] },
+          ],
+        },
+      ],
+    });
+
+    await expect(callVerify(service, 'file-new')).resolves.toEqual(
+      expect.objectContaining({ fileObjectId: 'file-new', fieldId: 'resume' }),
+    );
+  });
+
+  it('rejects a file dropped by a remove op', async () => {
+    const { service, upsert } = createService({
+      answersSnapshot: { resume: { fileObjectId: 'file-original' } },
+      patches: [{ ops: [{ op: 'remove', path: '/resume' }] }],
+    });
+
+    await expect(callVerify(service, 'file-original')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('applies a patch whose path escapes "/" in the field key', async () => {
+    const { service, upsert } = createService({
+      answersSnapshot: { 'id/passport': { fileObjectId: 'file-original' } },
+      patches: [
+        {
+          ops: [
+            {
+              op: 'replace',
+              path: '/id~1passport',
+              value: { fileObjectId: 'file-new' },
+            },
+          ],
+        },
+      ],
+      fields: [
+        {
+          id: 'f-passport',
+          key: 'id/passport',
+          type: FieldType.FILE_UPLOAD,
+          label: 'ID / passport',
+        },
+      ],
+    });
+
+    await expect(
+      callVerify(service, 'file-new', 'id/passport'),
+    ).resolves.toEqual(expect.objectContaining({ fileObjectId: 'file-new' }));
+    await expect(
+      callVerify(service, 'file-original', 'id/passport'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('verifies a legacy answer stored under the field id, keyed canonically', async () => {
+    const { service, upsert } = createService({
+      answersSnapshot: { 'f-resume': { fileObjectId: 'file-original' } },
+      fields: [
+        {
+          id: 'f-resume',
+          key: 'resume',
+          type: FieldType.FILE_UPLOAD,
+          label: 'Resume',
+        },
+      ],
+    });
+
+    await expect(
+      callVerify(service, 'file-original', 'f-resume'),
+    ).resolves.toEqual(expect.objectContaining({ fieldId: 'resume' }));
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          submission_version_id_field_id_file_object_id: {
+            submission_version_id: 'version-1',
+            field_id: 'resume',
+            file_object_id: 'file-original',
+          },
+        },
+      }),
+    );
+  });
+
+  it('queries only the active patches of the version, oldest first', async () => {
+    const { service, prisma } = createService({
+      answersSnapshot: { resume: { fileObjectId: 'file-original' } },
+    });
+
+    await callVerify(service, 'file-original');
+
+    expect(prisma.admin_change_patches.findMany).toHaveBeenCalledWith({
+      where: { submission_version_id: 'version-1', is_active: true },
+      select: { ops: true },
+      orderBy: { created_at: 'asc' },
+    });
+  });
+});
+
+describe('FilesService getEffectiveAnswersForVersion', () => {
+  it('normalizes the snapshot and applies active patches in order', async () => {
+    const prisma = {
+      admin_change_patches: {
+        findMany: jest.fn().mockResolvedValue([
+          { ops: [{ op: 'replace', path: '/name', value: 'Grace' }] },
+          {
+            ops: [
+              { op: 'add', path: '/city', value: 'Fes' },
+              { op: 'remove', path: '/school' },
+              { op: 'replace', path: '/name', value: 'Grace Hopper' },
+            ],
+          },
+        ]),
+      },
+    };
+    const service = new FilesService(prisma as any, {} as any, {} as any);
+
+    await expect(
+      service.getEffectiveAnswersForVersion('version-1', {
+        data: { name: 'Ada', school: 'Lycee' },
+      }),
+    ).resolves.toEqual({ name: 'Grace Hopper', city: 'Fes' });
+  });
+
+  it('returns {} for a missing snapshot without patches', async () => {
+    const prisma = {
+      admin_change_patches: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new FilesService(prisma as any, {} as any, {} as any);
+
+    await expect(
+      service.getEffectiveAnswersForVersion('version-1', null),
+    ).resolves.toEqual({});
   });
 });
