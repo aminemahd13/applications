@@ -1,4 +1,5 @@
 import { Permission } from '@event-platform/shared';
+import { ZodError } from 'zod';
 import { PERMISSIONS_KEY } from '../common/decorators/require-permission.decorator';
 import { ReviewsController } from './reviews.controller';
 
@@ -127,5 +128,63 @@ describe('ReviewsController reviewer-assignment endpoints', () => {
     expect(releaseClaim).toEqual({ data: { queueItemId: 'q-2' } });
     expect(override).toEqual({ data: { queueItemId: 'q-1' } });
     expect(release).toEqual({ data: { released: 2 } });
+  });
+});
+
+describe('ReviewsController review-queue item context endpoint', () => {
+  const QUEUE_ITEM_ID = '9b2f6f4e-2f0c-4d8a-9b1e-3c4d5e6f7a8b';
+
+  it('requires event.application.read_full permission (not read_basic)', () => {
+    const handler = Object.getOwnPropertyDescriptor(
+      ReviewsController.prototype,
+      'getReviewQueueItemContext',
+    )?.value as object;
+    const permissions: unknown = Reflect.getMetadata(PERMISSIONS_KEY, handler);
+
+    expect(permissions).toEqual([Permission.EVENT_APPLICATION_READ_FULL]);
+  });
+
+  it('delegates to the queue service and wraps the result in { data }', async () => {
+    const context = { queueItemId: QUEUE_ITEM_ID, steps: [], files: [] };
+    const queueService = {
+      getQueueItemContext: jest.fn().mockResolvedValue(context),
+    };
+    const controller = new ReviewsController(
+      {} as any,
+      queueService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    const result = await controller.getReviewQueueItemContext(
+      'event-1',
+      QUEUE_ITEM_ID,
+    );
+
+    expect(queueService.getQueueItemContext).toHaveBeenCalledWith(
+      'event-1',
+      QUEUE_ITEM_ID,
+    );
+    expect(result).toEqual({ data: context });
+  });
+
+  it('rejects a non-uuid queue item id before calling the service', async () => {
+    const queueService = { getQueueItemContext: jest.fn() };
+    const controller = new ReviewsController(
+      {} as any,
+      queueService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await expect(
+      controller.getReviewQueueItemContext('event-1', 'not-a-uuid'),
+    ).rejects.toBeInstanceOf(ZodError);
+    await expect(
+      controller.getReviewQueueItemContext('event-1', `${QUEUE_ITEM_ID}x`),
+    ).rejects.toBeInstanceOf(ZodError);
+    expect(queueService.getQueueItemContext).not.toHaveBeenCalled();
   });
 });

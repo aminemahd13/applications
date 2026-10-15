@@ -10,6 +10,7 @@ import {
   UseGuards,
   GoneException,
 } from '@nestjs/common';
+import { z } from 'zod';
 import { ReviewsService } from './reviews.service';
 import { ReviewQueueService } from './review-queue.service';
 import { PatchesService } from './patches.service';
@@ -136,6 +137,21 @@ export class ReviewsController {
       eventId,
       queueItemId,
     );
+    return { data };
+  }
+
+  /**
+   * Read-only applicant context for a queue item (review panel).
+   * READ_FULL, not READ_BASIC: check-in staff hold READ_BASIC.
+   */
+  @Get('review-queue/items/:queueItemId/context')
+  @RequirePermission(Permission.EVENT_APPLICATION_READ_FULL)
+  async getReviewQueueItemContext(
+    @Param('eventId') eventId: string,
+    @Param('queueItemId') queueItemId: string,
+  ) {
+    const id = z.string().uuid().parse(queueItemId);
+    const data = await this.queueService.getQueueItemContext(eventId, id);
     return { data };
   }
 

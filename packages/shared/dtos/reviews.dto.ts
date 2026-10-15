@@ -382,6 +382,108 @@ export interface ReviewQueueItem {
     isResubmission: boolean;
 }
 
+// ============================================================
+// REVIEW QUEUE ITEM CONTEXT (applicant-info panel)
+// ============================================================
+
+/**
+ * Applicant profile fields shown to reviewers in the review-queue panel.
+ * Live profile (not a snapshot taken at submission time).
+ */
+export interface ReviewContextApplicant {
+    email: string;
+    firstName: string | null;
+    lastName: string | null;
+    /** first + last name, falling back to the legacy full_name column. */
+    fullName: string | null;
+    institution: string | null;
+    city: string | null;
+    country: string | null;
+    /** Date-only `YYYY-MM-DD`, or null when unknown. */
+    dateOfBirth: string | null;
+}
+
+export interface ReviewContextEditedField {
+    /** Literal key in the (normalized) answers object. */
+    key: string;
+    /** Value the applicant submitted before staff patches; `undefined` when the field was added by staff. */
+    originalValue?: unknown;
+}
+
+export interface ReviewContextSubmission {
+    submissionVersionId: string;
+    versionNumber: number;
+    submittedAt: Date;
+    /** Form definition the submission was made against (its own form version). */
+    formDefinition: Record<string, unknown> | null;
+    /** Normalized submitted answers with active staff patches applied. */
+    answers: Record<string, unknown>;
+    /** Fields whose value was changed by an active staff patch. */
+    editedFields: ReviewContextEditedField[];
+}
+
+export interface ReviewContextStep {
+    stepId: string;
+    stepIndex: number;
+    title: string;
+    category: string;
+    /** null when the applicant has no state row for this step yet. */
+    status: StepStatus | null;
+    /** True for the step of the queue item being reviewed (its answers are shown in the main card). */
+    isQueueItemStep: boolean;
+    /** Latest SUBMITTED version (drafts are never included); null when never submitted. */
+    submission: ReviewContextSubmission | null;
+}
+
+export interface ReviewContextFile {
+    fileObjectId: string;
+    stepId: string;
+    fieldKey: string;
+    originalFilename: string;
+    mimeType: string;
+    sizeBytes: number;
+}
+
+export interface ReviewContextNote {
+    /** Stable id within the notes blob (line based). */
+    id: string;
+    /** ISO timestamp, or null for legacy lines without the `[ISO] Author:` prefix. */
+    createdAt: string | null;
+    /** Author display name, or null for legacy lines. */
+    authorName: string | null;
+    content: string;
+}
+
+export interface ReviewQueueItemContext {
+    queueItemId: string;
+    applicationId: string;
+    stepId: string;
+    submissionVersionId: string;
+    applicant: ReviewContextApplicant;
+    /** Every workflow step of the event, in workflow order. */
+    steps: ReviewContextStep[];
+    /** Metadata for every file referenced by the returned submissions (no signed URLs). */
+    files: ReviewContextFile[];
+    /** Internal staff notes, newest first. */
+    internalNotes: ReviewContextNote[];
+}
+
+export const INTERNAL_NOTE_CONTENT_MAX_LENGTH = 2000;
+export const INTERNAL_NOTES_MAX_LENGTH = 20000;
+
+export const AppendInternalNoteSchema = z
+    .object({
+        content: z.string().trim().min(1).max(INTERNAL_NOTE_CONTENT_MAX_LENGTH),
+    })
+    .strict();
+
+export type AppendInternalNoteDto = z.infer<typeof AppendInternalNoteSchema>;
+
+export interface AppendInternalNoteResponse {
+    /** All notes after the append, newest first (includes concurrent appends). */
+    notes: ReviewContextNote[];
+}
+
 export interface ReviewerAssignmentContextResponse {
     steps: Array<{
         stepId: string;

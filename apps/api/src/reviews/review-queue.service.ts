@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
 import * as crypto from 'crypto';
@@ -14,8 +18,54 @@ import {
   ReviewQueueSavedViewFilterDto,
   UpdateReviewQueueSavedViewDto,
   Permission,
+  type ReviewContextApplicant,
+  type ReviewContextEditedField,
+  type ReviewContextFile,
+  type ReviewContextSubmission,
+  type ReviewQueueItemContext,
 } from '@event-platform/shared';
 import { ReviewerAssignmentService } from './reviewer-assignment.service';
+import {
+  applyPatchOpsToAnswers,
+  collectFileFieldRefs,
+  normalizeAnswersShape,
+} from '../common/utils/effective-answers.util';
+import { parseInternalNotes } from '../applications/internal-notes.util';
+
+type QueueItemVisibilityFields = {
+  queue_mode: string;
+  assigned_reviewer_id: string | null;
+  assignment_expires_at: Date | null;
+  completed_at: Date | null;
+  completed_by: string | null;
+};
+
+function toNullableTrimmedString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function toDateOnlyString(value: unknown): string | null {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) return null;
+  return value.toISOString().split('T')[0];
+}
+
+function toFormDefinitionRecord(
+  schema: unknown,
+): Record<string, unknown> | null {
+  let candidate = schema;
+  if (typeof candidate === 'string') {
+    try {
+      candidate = JSON.parse(candidate);
+    } catch {
+      return null;
+    }
+  }
+  return candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+    ? (candidate as Record<string, unknown>)
+    : null;
+}
 
 @Injectable()
 export class ReviewQueueService {
@@ -68,10 +118,7 @@ export class ReviewQueueService {
   ): Promise<PaginatedResponse<ReviewQueueItem>> {
     const { cursor, limit, stepId, assignedTo, status, tags } = filter;
     const reviewerId = this.cls.get('actorId') as string;
-    const permissions = (this.cls.get('permissions') ?? []) as string[];
-    const canViewAll =
-      Boolean(this.cls.get('isGlobalAdmin')) ||
-      permissions.includes(Permission.EVENT_UPDATE);
+    const canViewAll = this.canViewAllQueueItems();
 
     const reviewableSteps = await this.prisma.workflow_steps.findMany({
       where: {
@@ -320,6 +367,295 @@ export class ReviewQueueService {
             : null,
         hasMore,
       },
+    };
+  }
+
+  /** Global admins and organizers (EVENT_UPDATE) see every queue item. */
+  private canViewAllQueueItems(): boolean {
+    const permissions = (this.cls.get('permissions') ?? []) as string[];
+    return (
+      Boolean(this.cls.get('isGlobalAdmin')) ||
+      permissions.includes(Permission.EVENT_UPDATE)
+    );
+  }
+
+  /**
+   * Read-side visibility of a single queue item, mirroring what `getQueue`
+   * lists for the actor (mine + shared; expired direct items are listed as
+   * shared). Completed items stay readable by the reviewer who completed them.
+   */
+  private assertCanReadQueueItem(item: QueueItemVisibilityFields): void {
+    if (this.canViewAllQueueItems()) return;
+
+    const actorId = this.cls.get('actorId') as string | undefined;
+
+    if (item.completed_at) {
+      if (actorId && item.completed_by === actorId) return;
+      throw new NotFoundException({
+        code: 'QUEUE_ITEM_NOT_FOUND',
+        message: 'Queue item not found',
+      });
+    }
+
+    if (item.queue_mode === 'shared') return;
+
+    if (item.queue_mode === 'direct') {
+      if (actorId && item.assigned_reviewer_id === actorId) return;
+      if (
+        item.assignment_expires_at &&
+        item.assignment_expires_at.getTime() < Date.now()
+      ) {
+        return;
+      }
+    }
+
+    throw new ForbiddenException({
+      code: 'QUEUE_ITEM_NOT_ASSIGNED_TO_YOU',
+      message: 'This queue item is assigned to another reviewer',
+    });
+  }
+
+  /**
+   * Read-only applicant context for one queue item (review panel): live
+   * applicant profile, every workflow step with its latest SUBMITTED version
+   * (staff patches applied; drafts are never read), referenced file metadata
+   * and internal notes. Never writes and never syncs/releases queue items.
+   */
+  async getQueueItemContext(
+    eventId: string,
+    queueItemId: string,
+  ): Promise<ReviewQueueItemContext> {
+    const [queueItem, workflowSteps] = await Promise.all([
+      this.prisma.review_queue_items.findFirst({
+        where: { id: queueItemId, event_id: eventId },
+        select: {
+          id: true,
+          application_id: true,
+          step_id: true,
+          submission_version_id: true,
+          queue_mode: true,
+          assigned_reviewer_id: true,
+          assignment_expires_at: true,
+          completed_at: true,
+          completed_by: true,
+          applications: {
+            select: {
+              id: true,
+              internal_notes: true,
+              users_applications_applicant_user_idTousers: {
+                select: {
+                  email: true,
+                  applicant_profiles: {
+                    select: {
+                      first_name: true,
+                      last_name: true,
+                      full_name: true,
+                      institution: true,
+                      city: true,
+                      country: true,
+                      date_of_birth: true,
+                    },
+                  },
+                },
+              },
+              application_step_states: {
+                select: {
+                  step_id: true,
+                  status: true,
+                  latest_submission_version_id: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+      this.prisma.workflow_steps.findMany({
+        where: { event_id: eventId },
+        orderBy: { step_index: 'asc' },
+        select: { id: true, title: true, step_index: true, category: true },
+      }),
+    ]);
+
+    if (!queueItem) {
+      throw new NotFoundException({
+        code: 'QUEUE_ITEM_NOT_FOUND',
+        message: 'Queue item not found',
+      });
+    }
+    this.assertCanReadQueueItem(queueItem);
+
+    const application = queueItem.applications;
+    const workflowStepIds = new Set(workflowSteps.map((step) => step.id));
+    const stateByStepId = new Map(
+      application.application_step_states.map((state) => [
+        state.step_id,
+        state,
+      ]),
+    );
+    const latestVersionIds = Array.from(
+      new Set(
+        application.application_step_states
+          .filter((state) => workflowStepIds.has(state.step_id))
+          .map((state) => state.latest_submission_version_id)
+          .filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+          ),
+      ),
+    );
+
+    const [versions, patches] =
+      latestVersionIds.length === 0
+        ? [[], []]
+        : await Promise.all([
+            this.prisma.step_submission_versions.findMany({
+              where: {
+                id: { in: latestVersionIds },
+                application_id: application.id,
+              },
+              select: {
+                id: true,
+                step_id: true,
+                version_number: true,
+                submitted_at: true,
+                answers_snapshot: true,
+                form_versions: { select: { schema: true } },
+              },
+            }),
+            this.prisma.admin_change_patches.findMany({
+              where: {
+                submission_version_id: { in: latestVersionIds },
+                application_id: application.id,
+                is_active: true,
+              },
+              select: { submission_version_id: true, ops: true },
+              orderBy: { created_at: 'asc' },
+            }),
+          ]);
+
+    const patchOpsByVersionId = new Map<string, unknown[]>();
+    for (const patch of patches) {
+      const list = patchOpsByVersionId.get(patch.submission_version_id) ?? [];
+      list.push(patch.ops);
+      patchOpsByVersionId.set(patch.submission_version_id, list);
+    }
+
+    const submissionByStepId = new Map<string, ReviewContextSubmission>();
+    const fileRefs: Array<{
+      stepId: string;
+      fieldKey: string;
+      fileObjectId: string;
+    }> = [];
+
+    for (const version of versions) {
+      const state = stateByStepId.get(version.step_id);
+      if (!state || state.latest_submission_version_id !== version.id) continue;
+
+      const original = normalizeAnswersShape(version.answers_snapshot);
+      const { answers, editedKeys } = applyPatchOpsToAnswers(
+        original,
+        patchOpsByVersionId.get(version.id) ?? [],
+      );
+      const editedFields: ReviewContextEditedField[] = editedKeys.map((key) =>
+        Object.prototype.hasOwnProperty.call(original, key)
+          ? { key, originalValue: original[key] }
+          : { key },
+      );
+      const formDefinition = toFormDefinitionRecord(
+        version.form_versions?.schema,
+      );
+
+      submissionByStepId.set(version.step_id, {
+        submissionVersionId: version.id,
+        versionNumber: version.version_number,
+        submittedAt: version.submitted_at,
+        formDefinition,
+        answers,
+        editedFields,
+      });
+    }
+
+    // File refs in workflow order (step, then form order).
+    for (const step of workflowSteps) {
+      const submission = submissionByStepId.get(step.id);
+      if (!submission) continue;
+      for (const ref of collectFileFieldRefs(
+        submission.formDefinition,
+        submission.answers,
+      )) {
+        fileRefs.push({ stepId: step.id, ...ref });
+      }
+    }
+
+    const fileObjectIds = Array.from(
+      new Set(fileRefs.map((ref) => ref.fileObjectId)),
+    );
+    const fileObjects =
+      fileObjectIds.length === 0
+        ? []
+        : await this.prisma.file_objects.findMany({
+            where: { id: { in: fileObjectIds }, event_id: eventId },
+            select: {
+              id: true,
+              original_filename: true,
+              mime_type: true,
+              size_bytes: true,
+            },
+          });
+    const fileObjectById = new Map(
+      fileObjects.map((fileObject) => [fileObject.id, fileObject]),
+    );
+    const files: ReviewContextFile[] = [];
+    for (const ref of fileRefs) {
+      const fileObject = fileObjectById.get(ref.fileObjectId);
+      if (!fileObject) continue;
+      files.push({
+        fileObjectId: ref.fileObjectId,
+        stepId: ref.stepId,
+        fieldKey: ref.fieldKey,
+        originalFilename: fileObject.original_filename,
+        mimeType: fileObject.mime_type,
+        sizeBytes: Number(fileObject.size_bytes),
+      });
+    }
+
+    const applicantUser =
+      application.users_applications_applicant_user_idTousers;
+    const profile = applicantUser?.applicant_profiles ?? null;
+    const firstName = toNullableTrimmedString(profile?.first_name);
+    const lastName = toNullableTrimmedString(profile?.last_name);
+    const applicant: ReviewContextApplicant = {
+      email: applicantUser?.email ?? '',
+      firstName,
+      lastName,
+      fullName:
+        [firstName, lastName].filter(Boolean).join(' ') ||
+        toNullableTrimmedString(profile?.full_name),
+      institution: toNullableTrimmedString(profile?.institution),
+      city: toNullableTrimmedString(profile?.city),
+      country: toNullableTrimmedString(profile?.country),
+      dateOfBirth: toDateOnlyString(profile?.date_of_birth),
+    };
+
+    return {
+      queueItemId: queueItem.id,
+      applicationId: application.id,
+      stepId: queueItem.step_id,
+      submissionVersionId: queueItem.submission_version_id,
+      applicant,
+      steps: workflowSteps.map((step) => {
+        const state = stateByStepId.get(step.id);
+        return {
+          stepId: step.id,
+          stepIndex: step.step_index,
+          title: step.title,
+          category: step.category,
+          status: state ? (state.status as StepStatus) : null,
+          isQueueItemStep: step.id === queueItem.step_id,
+          submission: submissionByStepId.get(step.id) ?? null,
+        };
+      }),
+      files,
+      internalNotes: parseInternalNotes(application.internal_notes),
     };
   }
 

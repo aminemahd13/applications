@@ -1,5 +1,10 @@
 import type { ReactNode } from "react";
 import { FileAnswerLinks } from "@/components/files/FileAnswerLinks";
+import {
+  extractFileAnswerRefs,
+  type AnswerEntry,
+  type FileAnswerRef,
+} from "@/lib/answer-entries";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -40,36 +45,36 @@ function renderFileLike(value: Record<string, unknown>): ReactNode | null {
   );
 }
 
-interface FileAnswerRef {
-  fileObjectId: string;
-  originalFilename?: string;
-  sizeBytes?: number;
+export interface AnswerFileVerification {
+  applicationId: string;
+  stepId: string;
+  submissionVersionId: string;
+  fieldKey: string;
 }
 
-interface RenderAnswerOptions {
-  eventId?: string;
-  verification?: {
-    applicationId: string;
-    stepId: string;
-    submissionVersionId: string;
-    fieldKey: string;
-  };
-}
-
-function extractFileAnswerRef(value: Record<string, unknown>): FileAnswerRef | null {
-  if (typeof value.fileObjectId !== "string" || value.fileObjectId.trim().length === 0) {
-    return null;
-  }
-
-  return {
-    fileObjectId: value.fileObjectId,
-    originalFilename:
-      typeof value.originalFilename === "string" ? value.originalFilename : undefined,
-    sizeBytes: typeof value.sizeBytes === "number" ? value.sizeBytes : undefined,
-  };
-}
+/**
+ * Either the default file rendering (FileAnswerLinks, optionally verifying the
+ * file on view/download) or a caller-supplied `renderFile`. The two are
+ * mutually exclusive so a view-only surface can't accidentally verify files.
+ */
+export type RenderAnswerOptions =
+  | {
+      eventId?: string;
+      verification?: AnswerFileVerification;
+      renderFile?: never;
+    }
+  | {
+      eventId?: string;
+      /** Renders each file ref instead of FileAnswerLinks; no verification side effects. */
+      renderFile: (ref: FileAnswerRef) => ReactNode;
+      verification?: never;
+    };
 
 function renderFileAnswerRef(fileRef: FileAnswerRef, options?: RenderAnswerOptions): ReactNode {
+  if (options?.renderFile) {
+    return options.renderFile(fileRef);
+  }
+
   if (options?.eventId) {
     return (
       <FileAnswerLinks
@@ -120,7 +125,7 @@ export function renderAnswerValue(value: unknown, options?: RenderAnswerOptions)
   }
 
   if (isRecord(value)) {
-    const fileRef = extractFileAnswerRef(value);
+    const [fileRef] = extractFileAnswerRefs(value);
     if (fileRef) return renderFileAnswerRef(fileRef, options);
 
     const fileLike = renderFileLike(value);
@@ -134,4 +139,44 @@ export function renderAnswerValue(value: unknown, options?: RenderAnswerOptions)
   }
 
   return <span>{String(value)}</span>;
+}
+
+/**
+ * Renders an entry from `buildOrderedAnswerEntries`: its mapped display value
+ * (option labels, Yes/No, formatted date) when there is one, otherwise the raw
+ * value through `renderAnswerValue` (files, numbers, free text, objects).
+ */
+export function renderAnswerEntryValue(
+  entry: AnswerEntry,
+  options?: RenderAnswerOptions,
+): ReactNode {
+  const { displayValue } = entry;
+
+  if (typeof displayValue === "string") {
+    return (
+      <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+        {displayValue}
+      </span>
+    );
+  }
+
+  if (Array.isArray(displayValue)) {
+    if (displayValue.length === 0) {
+      return <span className="text-muted-foreground">-</span>;
+    }
+    return (
+      <ul className="space-y-1">
+        {displayValue.map((label, idx) => (
+          <li
+            key={idx}
+            className="rounded bg-muted/40 px-2 py-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+          >
+            {label}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  return renderAnswerValue(entry.value, options);
 }

@@ -47,11 +47,19 @@ import {
   UpdateDecisionTemplateDto,
   PaginatedResponse,
   matchesFieldAnswer,
+  INTERNAL_NOTES_MAX_LENGTH,
+  type AppendInternalNoteResponse,
   type ApplicantDeadlineContext,
   type DeadlineRule,
 } from '@event-platform/shared';
 import { StepStateService } from './step-state.service';
 import { StepDeadlineService } from './step-deadline.service';
+import {
+  appendInternalNoteLine,
+  formatInternalNoteLine,
+  normalizeInternalNoteContent,
+  parseInternalNotes,
+} from './internal-notes.util';
 import * as jwt from 'jsonwebtoken';
 import { createHmac } from 'node:crypto';
 import {
@@ -2537,6 +2545,69 @@ export class ApplicationsService {
     });
 
     return this.findById(eventId, applicationId);
+  }
+
+  /**
+   * Append one internal staff note (server-stamped time + author).
+   * Locks the application row so concurrent appends never overwrite each
+   * other, and never rewrites existing lines.
+   */
+  async appendInternalNote(
+    eventId: string,
+    applicationId: string,
+    content: string,
+  ): Promise<AppendInternalNoteResponse> {
+    if (normalizeInternalNoteContent(content).length === 0) {
+      throw new BadRequestException('Note content is required');
+    }
+
+    const actorId = this.cls.get('actorId');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT 1 FROM applications WHERE id = ${applicationId}::uuid AND event_id = ${eventId}::uuid FOR UPDATE`;
+
+      const row = await tx.applications.findFirst({
+        where: { id: applicationId, event_id: eventId },
+        select: { internal_notes: true },
+      });
+      if (!row) throw new NotFoundException('Application not found');
+
+      const actor = actorId
+        ? await tx.users.findUnique({
+            where: { id: actorId },
+            select: {
+              email: true,
+              applicant_profiles: {
+                select: { first_name: true, last_name: true, full_name: true },
+              },
+            },
+          })
+        : null;
+      const authorName =
+        ApplicationsService.getDisplayName(actor?.applicant_profiles) ||
+        actor?.email?.trim() ||
+        'Staff';
+
+      const line = formatInternalNoteLine({
+        at: new Date(),
+        authorName,
+        content,
+      });
+      const next = appendInternalNoteLine(row.internal_notes, line);
+      if (next.length > INTERNAL_NOTES_MAX_LENGTH) {
+        throw new BadRequestException(
+          'Internal notes are full; delete older notes first.',
+        );
+      }
+
+      // Prisma delegate (not raw SQL) so the audit middleware records the change.
+      await tx.applications.update({
+        where: { id: applicationId },
+        data: { internal_notes: next, updated_at: new Date() },
+      });
+
+      return { notes: parseInternalNotes(next) };
+    });
   }
 
   /**

@@ -2144,3 +2144,304 @@ describe('ApplicationsService decision template variables', () => {
     );
   });
 });
+
+describe('ApplicationsService appendInternalNote', () => {
+  const EVENT_ID = '0b6f4f5e-1f0a-4c55-9a43-5f3f2b7f9a10';
+  const APPLICATION_ID = '37a2125b-fdd0-42e2-a273-89d2f8010e4c';
+  const ACTOR_ID = 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a';
+  const NOW = new Date('2026-10-15T09:30:00.000Z');
+
+  let service: ApplicationsService;
+  let mockPrisma: any;
+  let tx: any;
+
+  function setup(options: { actorId?: string | null } = {}) {
+    const actorId = options.actorId === undefined ? ACTOR_ID : options.actorId;
+    tx = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      $executeRawUnsafe: jest.fn(),
+      $queryRaw: jest.fn(),
+      applications: {
+        findFirst: jest.fn().mockResolvedValue({ internal_notes: null }),
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn(),
+      },
+      users: {
+        findUnique: jest.fn().mockResolvedValue({
+          email: 'ada@example.com',
+          applicant_profiles: {
+            first_name: 'Ada',
+            last_name: 'Lovelace',
+            full_name: 'Augusta Ada King',
+          },
+        }),
+      },
+    };
+    mockPrisma = {
+      $transaction: jest.fn(async (fn: (client: unknown) => unknown) => fn(tx)),
+      $executeRaw: jest.fn(),
+      applications: {
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
+    };
+    const cls = {
+      get: jest.fn((key: string) => (key === 'actorId' ? actorId : undefined)),
+    };
+    service = new ApplicationsService(mockPrisma, cls as any, {} as any);
+  }
+
+  function writtenNotes(): string {
+    return tx.applications.update.mock.calls[0][0].data.internal_notes;
+  }
+
+  beforeEach(() => {
+    jest.useFakeTimers({
+      now: NOW,
+      doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate'],
+    });
+    setup();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('locks the application row (scoped to the event) before reading it', async () => {
+    await service.appendInternalNote(EVENT_ID, APPLICATION_ID, 'Looks good');
+
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    const [strings, ...values] = tx.$executeRaw.mock.calls[0];
+    const sql = Array.from(strings as string[]).join('?');
+    expect(sql).toBe(
+      'SELECT 1 FROM applications WHERE id = ?::uuid AND event_id = ?::uuid FOR UPDATE',
+    );
+    expect(values).toEqual([APPLICATION_ID, EVENT_ID]);
+    expect(tx.applications.findFirst).toHaveBeenCalledWith({
+      where: { id: APPLICATION_ID, event_id: EVENT_ID },
+      select: { internal_notes: true },
+    });
+    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.applications.findFirst.mock.invocationCallOrder[0],
+    );
+    expect(tx.applications.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.applications.update.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('throws 404 and writes nothing when the application is not in the event', async () => {
+    tx.applications.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.appendInternalNote(EVENT_ID, APPLICATION_ID, 'Looks good'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(tx.applications.update).not.toHaveBeenCalled();
+    expect(tx.users.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('stamps the note with the actor profile name and the server time', async () => {
+    const result = await service.appendInternalNote(
+      EVENT_ID,
+      APPLICATION_ID,
+      'Looks good',
+    );
+
+    expect(tx.users.findUnique).toHaveBeenCalledWith({
+      where: { id: ACTOR_ID },
+      select: {
+        email: true,
+        applicant_profiles: {
+          select: { first_name: true, last_name: true, full_name: true },
+        },
+      },
+    });
+    expect(writtenNotes()).toBe(
+      '[2026-10-15T09:30:00.000Z] Ada Lovelace: Looks good',
+    );
+    expect(result).toEqual({
+      notes: [
+        {
+          id: 'note-0',
+          createdAt: '2026-10-15T09:30:00.000Z',
+          authorName: 'Ada Lovelace',
+          content: 'Looks good',
+        },
+      ],
+    });
+  });
+
+  it.each([
+    [
+      'full_name when first/last are empty',
+      {
+        email: 'ada@example.com',
+        applicant_profiles: {
+          first_name: ' ',
+          last_name: null,
+          full_name: 'Augusta Ada King',
+        },
+      },
+      'Augusta Ada King',
+    ],
+    [
+      'email when the profile has no name',
+      {
+        email: 'ada@example.com',
+        applicant_profiles: {
+          first_name: null,
+          last_name: null,
+          full_name: null,
+        },
+      },
+      'ada@example.com',
+    ],
+    [
+      'email when there is no profile',
+      { email: 'ada@example.com', applicant_profiles: null },
+      'ada@example.com',
+    ],
+    ['Staff when the actor row is missing', null, 'Staff'],
+  ])('falls back to %s', async (_label, actorRow, expectedAuthor) => {
+    tx.users.findUnique.mockResolvedValue(actorRow);
+
+    await service.appendInternalNote(EVENT_ID, APPLICATION_ID, 'Noted');
+
+    expect(writtenNotes()).toBe(
+      `[2026-10-15T09:30:00.000Z] ${expectedAuthor}: Noted`,
+    );
+  });
+
+  it('uses Staff without a user lookup when there is no actor in context', async () => {
+    setup({ actorId: null });
+
+    await service.appendInternalNote(EVENT_ID, APPLICATION_ID, 'Noted');
+
+    expect(tx.users.findUnique).not.toHaveBeenCalled();
+    expect(writtenNotes()).toBe('[2026-10-15T09:30:00.000Z] Staff: Noted');
+  });
+
+  it('strips characters that would break the line format from the author name', async () => {
+    tx.users.findUnique.mockResolvedValue({
+      email: 'bob@example.com',
+      applicant_profiles: {
+        first_name: 'Dr: [Bob]',
+        last_name: 'Smith',
+        full_name: null,
+      },
+    });
+
+    await service.appendInternalNote(EVENT_ID, APPLICATION_ID, 'Noted');
+
+    expect(writtenNotes()).toBe(
+      '[2026-10-15T09:30:00.000Z] Dr Bob Smith: Noted',
+    );
+  });
+
+  it('appends after existing lines without rewriting them (legacy lines preserved)', async () => {
+    const existing = [
+      'Legacy unprefixed note',
+      '[2026-10-01T08:00:00.000Z] Grace Hopper: see [ref] note: x',
+    ].join('\n');
+    tx.applications.findFirst.mockResolvedValue({
+      internal_notes: `${existing}\n\n`,
+    });
+
+    const result = await service.appendInternalNote(
+      EVENT_ID,
+      APPLICATION_ID,
+      'Second look done',
+    );
+
+    expect(writtenNotes()).toBe(
+      `${existing}\n[2026-10-15T09:30:00.000Z] Ada Lovelace: Second look done`,
+    );
+    expect(result.notes).toEqual([
+      {
+        id: 'note-2',
+        createdAt: '2026-10-15T09:30:00.000Z',
+        authorName: 'Ada Lovelace',
+        content: 'Second look done',
+      },
+      {
+        id: 'note-1',
+        createdAt: '2026-10-01T08:00:00.000Z',
+        authorName: 'Grace Hopper',
+        content: 'see [ref] note: x',
+      },
+      {
+        id: 'note-0',
+        createdAt: null,
+        authorName: null,
+        content: 'Legacy unprefixed note',
+      },
+    ]);
+  });
+
+  it('collapses whitespace and line breaks in the content', async () => {
+    await service.appendInternalNote(
+      EVENT_ID,
+      APPLICATION_ID,
+      '  first line\n\n   second\tline  ',
+    );
+
+    expect(writtenNotes()).toBe(
+      '[2026-10-15T09:30:00.000Z] Ada Lovelace: first line second line',
+    );
+  });
+
+  it('rejects whitespace-only content before opening a transaction', async () => {
+    await expect(
+      service.appendInternalNote(EVENT_ID, APPLICATION_ID, ' \n\t '),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    expect(tx.applications.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 400 and writes nothing when the notes would exceed 20000 characters', async () => {
+    const existing = `[2026-10-01T08:00:00.000Z] Grace Hopper: ${'x'.repeat(19950)}`;
+    tx.applications.findFirst.mockResolvedValue({ internal_notes: existing });
+
+    const attempt = service.appendInternalNote(
+      EVENT_ID,
+      APPLICATION_ID,
+      'one more note',
+    );
+    await expect(attempt).rejects.toBeInstanceOf(BadRequestException);
+    await expect(attempt).rejects.toThrow(
+      'Internal notes are full; delete older notes first.',
+    );
+    expect(tx.applications.update).not.toHaveBeenCalled();
+  });
+
+  it('allows an append that lands exactly on the 20000 character cap', async () => {
+    const line = '[2026-10-15T09:30:00.000Z] Ada Lovelace: ok';
+    const existing = 'x'.repeat(20000 - 1 - line.length);
+    tx.applications.findFirst.mockResolvedValue({ internal_notes: existing });
+
+    await service.appendInternalNote(EVENT_ID, APPLICATION_ID, 'ok');
+
+    expect(writtenNotes()).toHaveLength(20000);
+    expect(writtenNotes().endsWith(`\n${line}`)).toBe(true);
+  });
+
+  it('writes through the applications.update delegate (audited), not raw SQL', async () => {
+    await service.appendInternalNote(EVENT_ID, APPLICATION_ID, 'Looks good');
+
+    expect(tx.applications.update).toHaveBeenCalledTimes(1);
+    expect(tx.applications.update).toHaveBeenCalledWith({
+      where: { id: APPLICATION_ID },
+      data: {
+        internal_notes: '[2026-10-15T09:30:00.000Z] Ada Lovelace: Looks good',
+        updated_at: NOW,
+      },
+    });
+    // The only raw statement is the row lock; there is no raw write.
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$executeRawUnsafe).not.toHaveBeenCalled();
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(tx.applications.updateMany).not.toHaveBeenCalled();
+    expect(mockPrisma.applications.update).not.toHaveBeenCalled();
+    expect(mockPrisma.$executeRaw).not.toHaveBeenCalled();
+  });
+});

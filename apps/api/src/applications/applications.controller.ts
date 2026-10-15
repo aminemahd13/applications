@@ -38,6 +38,7 @@ import {
   PublishDecisionsSchema,
   ResolveApplicationsByEmailsSchema,
   UpdateApplicationSavedViewSchema,
+  AppendInternalNoteSchema,
 } from '@event-platform/shared';
 import { ClsService } from 'nestjs-cls';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -356,6 +357,26 @@ export class ApplicationsController {
       dto.internalNotes,
     );
     return { data: application };
+  }
+
+  /**
+   * Append one internal note (author + timestamp stamped server-side)
+   */
+  @Post(':applicationId/internal-notes')
+  @RequirePermission(Permission.EVENT_APPLICATION_NOTES_MANAGE)
+  async appendInternalNote(
+    @Param('eventId') eventId: string,
+    @Param('applicationId') applicationId: string,
+    @Body() body: unknown,
+  ) {
+    const id = z.string().uuid().parse(applicationId);
+    const dto = AppendInternalNoteSchema.parse(body);
+    const result = await this.applicationsService.appendInternalNote(
+      eventId,
+      id,
+      dto.content,
+    );
+    return { data: result };
   }
 
   /**

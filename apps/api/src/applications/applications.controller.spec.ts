@@ -555,3 +555,100 @@ describe('ApplicationsController resolve-by-emails', () => {
     expect(applicationsService.resolveByEmails).not.toHaveBeenCalled();
   });
 });
+
+describe('ApplicationsController append internal note', () => {
+  const APPLICATION_ID = '37a2125b-fdd0-42e2-a273-89d2f8010e4c';
+  const notesResponse = {
+    notes: [
+      {
+        id: 'note-0',
+        createdAt: '2026-10-15T09:30:00.000Z',
+        authorName: 'Ada Lovelace',
+        content: 'Looks good',
+      },
+    ],
+  };
+
+  function createController() {
+    const applicationsService = {
+      appendInternalNote: jest.fn().mockResolvedValue(notesResponse),
+      updateInternalNotes: jest.fn(),
+    };
+
+    const controller = new ApplicationsController(
+      applicationsService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    return { controller, applicationsService };
+  }
+
+  it('requires event.application.notes.manage permission metadata', () => {
+    const permissions = Reflect.getMetadata(
+      PERMISSIONS_KEY,
+      ApplicationsController.prototype.appendInternalNote,
+    );
+    expect(permissions).toEqual([Permission.EVENT_APPLICATION_NOTES_MANAGE]);
+  });
+
+  it('delegates trimmed content to the service and wraps the result in data', async () => {
+    const { controller, applicationsService } = createController();
+
+    await expect(
+      controller.appendInternalNote('event-1', APPLICATION_ID, {
+        content: '  Looks good  ',
+      }),
+    ).resolves.toEqual({ data: notesResponse });
+
+    expect(applicationsService.appendInternalNote).toHaveBeenCalledWith(
+      'event-1',
+      APPLICATION_ID,
+      'Looks good',
+    );
+    expect(applicationsService.updateInternalNotes).not.toHaveBeenCalled();
+  });
+
+  it('accepts content at the 2000 character limit', async () => {
+    const { controller, applicationsService } = createController();
+    const content = 'a'.repeat(2000);
+
+    await controller.appendInternalNote('event-1', APPLICATION_ID, { content });
+
+    expect(applicationsService.appendInternalNote).toHaveBeenCalledWith(
+      'event-1',
+      APPLICATION_ID,
+      content,
+    );
+  });
+
+  it.each([
+    ['empty content', { content: '' }],
+    ['whitespace-only content', { content: '   \n\t ' }],
+    ['content over 2000 characters', { content: 'a'.repeat(2001) }],
+    ['missing content', {}],
+    ['non-string content', { content: 42 }],
+    ['extra keys', { content: 'Looks good', authorName: 'Someone else' }],
+    ['a null body', null],
+  ])('rejects %s', async (_label, body) => {
+    const { controller, applicationsService } = createController();
+
+    await expect(
+      controller.appendInternalNote('event-1', APPLICATION_ID, body),
+    ).rejects.toBeInstanceOf(ZodError);
+    expect(applicationsService.appendInternalNote).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-uuid application id before calling the service', async () => {
+    const { controller, applicationsService } = createController();
+
+    await expect(
+      controller.appendInternalNote('event-1', 'not-a-uuid', {
+        content: 'Looks good',
+      }),
+    ).rejects.toBeInstanceOf(ZodError);
+    expect(applicationsService.appendInternalNote).not.toHaveBeenCalled();
+  });
+});

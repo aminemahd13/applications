@@ -4,6 +4,7 @@ import { E2EAppHandle, createE2EApp } from './test-app.factory';
 
 const EVENT_ID = '00000000-0000-4000-8000-000000000001';
 const APPLICATION_ID = '00000000-0000-4000-8000-000000000002';
+const QUEUE_ITEM_ID = '00000000-0000-4000-8000-000000000003';
 
 const DOMAIN_ROUTES: Array<{
   domain: string;
@@ -23,6 +24,10 @@ const DOMAIN_ROUTES: Array<{
   {
     domain: 'reviews',
     path: `/api/v1/events/${EVENT_ID}/review-queue`,
+  },
+  {
+    domain: 'reviews-queue-item-context',
+    path: `/api/v1/events/${EVENT_ID}/review-queue/items/${QUEUE_ITEM_ID}/context`,
   },
   {
     domain: 'check-in',

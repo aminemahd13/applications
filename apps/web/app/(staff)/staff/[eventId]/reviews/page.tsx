@@ -9,6 +9,8 @@ import {
   ChevronRight,
   Filter,
   Loader2,
+  PanelRightClose,
+  PanelRightOpen,
   Save,
   Trash2,
 } from "lucide-react";
@@ -41,8 +43,13 @@ import { PageHeader, EmptyState, CardSkeleton } from "@/components/shared";
 import { apiClient } from "@/lib/api";
 import { useAuth, usePermissions } from "@/lib/auth-context";
 import { toast } from "sonner";
-import { renderAnswerValue } from "@/lib/render-answer-value";
-import { getRequiredFieldKeySet } from "@/lib/file-answer-utils";
+import { renderAnswerEntryValue } from "@/lib/render-answer-value";
+import {
+  buildOrderedAnswerEntries,
+  groupAnswerEntriesBySection,
+  parseFormDefinition,
+  type AnswerEntry,
+} from "@/lib/answer-entries";
 import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
@@ -58,8 +65,14 @@ import {
   shouldAutoLoadNext,
   type ReviewQueueResponse,
 } from "@/lib/review-queue-pagination";
+import { useMediaQuery } from "@/hooks/use-media-query";
+import { cn } from "@/lib/utils";
 import { QueueStatsBar } from "./queue-stats-bar";
 import { VerdictWorkspace, type VerdictDraft } from "./verdict-workspace";
+import {
+  APPLICANT_CONTEXT_PANEL_ID,
+  ApplicantContextPanel,
+} from "./applicant-context-panel";
 
 interface ReviewItem {
   id: string;
@@ -108,25 +121,6 @@ interface RequestFieldOption {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseFormDefinition(
-  definition: unknown,
-): Record<string, unknown> | null {
-  if (!definition) return null;
-  if (typeof definition === "string") {
-    try {
-      const parsed = JSON.parse(definition);
-      return isRecord(parsed) ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
-  if (!isRecord(definition)) return null;
-  if (isRecord(definition.schema)) {
-    return definition.schema;
-  }
-  return definition;
 }
 
 function extractRequestFieldOptions(
@@ -231,6 +225,14 @@ export default function ReviewsPage() {
   const [isSavingView, setIsSavingView] = useState(false);
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [autoAdvance, setAutoAdvanceState] = useState(false);
+  // Applicant-info panel: open state is independent of `current` so it stays
+  // open across Previous/Next/auto-advance. Not persisted (default closed).
+  const [contextOpen, setContextOpen] = useState(false);
+  const contextTriggerRef = useRef<HTMLButtonElement>(null);
+  const focusContextOnOpenRef = useRef(false);
+  // Same unit/value as Tailwind v4's `lg` breakpoint (64rem) so the JS layout
+  // switch and the `lg:` classes always flip together.
+  const isDesktop = useMediaQuery("(min-width: 64rem)");
   const queueRequestVersionRef = useRef(0);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(false);
@@ -238,6 +240,10 @@ export default function ReviewsPage() {
 
   const canSendMessages = hasPermission(Permission.EVENT_MESSAGES_SEND);
   const canManageAssignments = hasPermission(Permission.EVENT_UPDATE);
+  const canViewApplicantContext = hasPermission(
+    Permission.EVENT_APPLICATION_READ_FULL,
+  );
+  const isContextOpen = contextOpen && canViewApplicantContext;
 
   useEffect(() => {
     hasMoreRef.current = hasMore;
@@ -411,7 +417,14 @@ export default function ReviewsPage() {
   }, [isLoading, loadQueue]);
 
   const current = queue[currentIndex];
-  const requiredFieldKeys = getRequiredFieldKeySet(current?.formDefinition);
+  const answerEntries = useMemo(
+    () => buildOrderedAnswerEntries(current?.formDefinition, current?.answers),
+    [current?.formDefinition, current?.answers],
+  );
+  const answerGroups = useMemo(
+    () => groupAnswerEntriesBySection(answerEntries),
+    [answerEntries],
+  );
   const requestFieldOptions = useMemo(
     () => extractRequestFieldOptions(current?.formDefinition, current?.answers),
     [current?.formDefinition, current?.answers],
@@ -429,6 +442,49 @@ export default function ReviewsPage() {
   const canActOnCurrentItem = Boolean(
     current && (canManageAssignments || isCurrentAssignedToActor),
   );
+
+  function renderCurrentAnswerEntry(entry: AnswerEntry) {
+    if (!current) return null;
+    return (
+      <div
+        key={entry.key}
+        className={entry.hiddenByLogic ? "opacity-70" : undefined}
+      >
+        <p className="text-muted-foreground mb-1 flex flex-wrap items-center gap-2 text-xs font-medium uppercase tracking-wider">
+          <span className="break-words [overflow-wrap:anywhere]" title={entry.key}>
+            {entry.label}
+          </span>
+          {entry.isRequired && (
+            <span
+              className="text-destructive text-sm leading-none"
+              aria-label="Required field"
+              title="Required"
+            >
+              *
+            </span>
+          )}
+          {entry.hiddenByLogic && (
+            <span className="text-[11px] font-normal normal-case tracking-normal">
+              Hidden by form conditions
+            </span>
+          )}
+        </p>
+        <div className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+          {renderAnswerEntryValue(entry, {
+            eventId,
+            verification: current.submissionVersionId
+              ? {
+                  applicationId: current.applicationId,
+                  stepId: current.stepId,
+                  submissionVersionId: current.submissionVersionId,
+                  fieldKey: entry.key,
+                }
+              : undefined,
+          })}
+        </div>
+      </div>
+    );
+  }
 
   async function saveCurrentView() {
     if (!saveViewName.trim()) {
@@ -880,12 +936,41 @@ export default function ReviewsPage() {
                           {current.applicantEmail}
                         </CardDescription>
                       </div>
-                      <Badge
-                        variant="secondary"
-                        className="max-w-[45%] shrink-0 truncate"
-                      >
-                        {current.stepTitle}
-                      </Badge>
+                      <div className="flex max-w-[55%] shrink-0 flex-wrap items-center justify-end gap-2">
+                        <Badge
+                          variant="secondary"
+                          className="max-w-full truncate"
+                        >
+                          {current.stepTitle}
+                        </Badge>
+                        {canViewApplicantContext && (
+                          <Button
+                            ref={contextTriggerRef}
+                            type="button"
+                            variant={isContextOpen ? "secondary" : "outline"}
+                            size="sm"
+                            aria-expanded={isContextOpen}
+                            aria-controls={
+                              isContextOpen
+                                ? APPLICANT_CONTEXT_PANEL_ID
+                                : undefined
+                            }
+                            onClick={() => {
+                              if (!isContextOpen) {
+                                focusContextOnOpenRef.current = true;
+                              }
+                              setContextOpen((open) => !open);
+                            }}
+                          >
+                            {isContextOpen ? (
+                              <PanelRightClose aria-hidden="true" />
+                            ) : (
+                              <PanelRightOpen aria-hidden="true" />
+                            )}
+                            Applicant info
+                          </Button>
+                        )}
+                      </div>
                     </div>
                     <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
                       <span>
@@ -951,37 +1036,29 @@ export default function ReviewsPage() {
                   </CardHeader>
                   <CardContent className="min-w-0 overflow-hidden">
                     <div className="max-h-[60vh] overflow-y-auto overflow-x-hidden pr-2">
-                      <div className="space-y-4">
-                        {Object.entries(current.answers).map(([key, val]) => (
-                          <div key={key}>
-                            <p className="text-muted-foreground mb-1 flex flex-wrap items-center gap-2 text-xs font-medium uppercase tracking-wider">
-                              <span className="break-all">{key}</span>
-                              {requiredFieldKeys.has(key) && (
-                                <span
-                                  className="text-destructive text-sm leading-none"
-                                  aria-label="Required field"
-                                  title="Required"
-                                >
-                                  *
-                                </span>
-                              )}
-                            </p>
-                            <div className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                              {renderAnswerValue(val, {
-                                eventId,
-                                verification: current.submissionVersionId
-                                  ? {
-                                      applicationId: current.applicationId,
-                                      stepId: current.stepId,
-                                      submissionVersionId: current.submissionVersionId,
-                                      fieldKey: key,
-                                    }
-                                  : undefined,
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                      {answerEntries.length === 0 ? (
+                        <p className="text-muted-foreground text-sm">
+                          No answers in this submission.
+                        </p>
+                      ) : answerGroups.length > 1 ? (
+                        <div className="space-y-6">
+                          {answerGroups.map((group, groupIndex) => (
+                            <section
+                              key={`${groupIndex}:${group.title}`}
+                              className="space-y-4"
+                            >
+                              <h3 className="text-foreground border-b pb-1 text-sm font-semibold">
+                                {group.title}
+                              </h3>
+                              {group.entries.map(renderCurrentAnswerEntry)}
+                            </section>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {answerEntries.map(renderCurrentAnswerEntry)}
+                        </div>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -1018,22 +1095,38 @@ export default function ReviewsPage() {
             </div>
           </div>
 
-          <div className="space-y-4 lg:col-span-2">
-            <VerdictWorkspace
-              currentItemId={current.id}
-              currentQueueMode={current.queueMode}
-              canActOnCurrentItem={canActOnCurrentItem}
-              isCurrentAssignedToActor={isCurrentAssignedToActor}
-              canSendMessages={canSendMessages}
-              requestFieldOptions={requestFieldOptions}
-              onClaim={claimCurrentItem}
-              onRelease={releaseCurrentItem}
-              onSubmit={submitReview}
-              isSubmittingReview={isSubmittingReview}
-              autoAdvance={autoAdvance}
-              setAutoAdvance={setAutoAdvance}
-              nextPreview={nextPreview}
-            />
+          <div className="min-w-0 lg:col-span-2">
+            {/* Hidden (not unmounted) on desktop while the applicant panel
+                covers this column, so an in-progress verdict draft survives. */}
+            <div className={cn("space-y-4", isContextOpen && "lg:hidden")}>
+              <VerdictWorkspace
+                currentItemId={current.id}
+                currentQueueMode={current.queueMode}
+                canActOnCurrentItem={canActOnCurrentItem}
+                isCurrentAssignedToActor={isCurrentAssignedToActor}
+                canSendMessages={canSendMessages}
+                requestFieldOptions={requestFieldOptions}
+                onClaim={claimCurrentItem}
+                onRelease={releaseCurrentItem}
+                onSubmit={submitReview}
+                isSubmittingReview={isSubmittingReview}
+                autoAdvance={autoAdvance}
+                setAutoAdvance={setAutoAdvance}
+                nextPreview={nextPreview}
+              />
+            </div>
+            {canViewApplicantContext && currentQueueItemId && (
+              <ApplicantContextPanel
+                eventId={eventId}
+                queueItemId={currentQueueItemId}
+                applicantName={current.applicantName ?? current.applicantEmail}
+                open={isContextOpen}
+                onOpenChange={setContextOpen}
+                isDesktop={isDesktop}
+                triggerRef={contextTriggerRef}
+                focusOnOpenRef={focusContextOnOpenRef}
+              />
+            )}
           </div>
         </div>
       ) : null}
