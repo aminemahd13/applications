@@ -5,11 +5,6 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import {
-  resolveRequiredFileGate,
-  type RequiredFileGate,
-  type RequiredFileRef,
-} from '../common/utils/effective-answers.util';
 import { ClsService } from 'nestjs-cls';
 import {
   CreateFormDto,
@@ -395,42 +390,50 @@ export class FormsService {
   }
 
   /**
-   * Required file refs (canonical field key + fileObjectId) for the given
-   * answers: every file in a required `file_upload` field. Pass the
-   * EFFECTIVE answers (snapshot + active staff patches) — see
-   * FilesService.getEffectiveAnswersForVersion. The input is normalized
-   * defensively; a legacy answer stored under the field id is read too.
+   * Get required file refs (fieldId + fileObjectId) from answers based on schema
+   * Returns list of { fieldId, fileObjectId } for all files in required file_upload fields.
    */
   async getRequiredFileRefsForAnswers(
     formVersionId: string,
-    answers: Record<string, unknown>,
-  ): Promise<RequiredFileRef[]> {
-    return (await this.getRequiredFileGate(formVersionId, answers)).refs;
-  }
-
-  /**
-   * Approve-gate inputs: the required file refs of the effective answers plus
-   * the required file fields that staff patches emptied (files in the
-   * submitted snapshot, none in the effective answers). Pass the normalized
-   * submitted snapshot as `originalAnswers` to detect removals.
-   */
-  async getRequiredFileGate(
-    formVersionId: string,
-    effectiveAnswers: Record<string, unknown>,
-    originalAnswers?: Record<string, unknown>,
-  ): Promise<RequiredFileGate> {
+    answers: Record<string, any>,
+  ): Promise<Array<{ fieldId: string; fileObjectId: string }>> {
     const version = await this.prisma.form_versions.findUnique({
       where: { id: formVersionId },
     });
-    if (!version) return { refs: [], removedFields: [] };
+    if (!version) return [];
 
-    return resolveRequiredFileGate(
+    const refs: Array<{ fieldId: string; fileObjectId: string }> = [];
+
+    const allFields = getFormFields(
       version.schema as FormDefinition | undefined,
-      effectiveAnswers,
-      originalAnswers,
     );
-  }
 
+    if (allFields.length > 0) {
+      for (const field of allFields) {
+        // Check if field is file_upload and required
+        // Note: Ignoring conditional logic and minFiles for now as per MVP scope,
+        // treating "required: true" as "all uploaded files must be verified".
+        // If minFiles > 1, we expect at least that many, but here we just collect what was uploaded to verify it.
+        // Wait, user said: "A file_upload field is effectively required if... it has minFiles >= 1... and the applicant provided at least minFiles".
+        // And "every fileObjectId included in that required field must have a field_verifications row".
+
+        // Logic:
+        // 1. If field is required (validation.required)
+        // 2. Get file IDs from answers[field.key]
+        // 3. Add all file IDs to refs
+
+        if (field.type === 'file_upload' && field.validation?.required) {
+          const fieldKey = field.key || field.id;
+          const fileIds = this.extractFileObjectIds(answers[fieldKey]);
+          for (const fileId of fileIds) {
+            refs.push({ fieldId: fieldKey, fileObjectId: fileId });
+          }
+        }
+      }
+    }
+
+    return refs;
+  }
   async getRequiredFileFields(
     formVersionId: string,
   ): Promise<Array<{ key: string; label: string }>> {
@@ -451,5 +454,20 @@ export class FormsService {
       }
     }
     return requiredFields;
+  }
+
+  private extractFileObjectIds(value: any): string[] {
+    if (!value) return [];
+    if (Array.isArray(value)) {
+      return value.flatMap((v) => this.extractFileObjectIds(v));
+    }
+    if (typeof value === 'string') return [value];
+    if (typeof value === 'object') {
+      if (typeof value.fileObjectId === 'string') return [value.fileObjectId];
+      if (Array.isArray(value.fileObjectIds)) {
+        return value.fileObjectIds.filter((v: any) => typeof v === 'string');
+      }
+    }
+    return [];
   }
 }

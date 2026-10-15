@@ -12,12 +12,6 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createHash } from 'crypto';
 
-export interface PresignedGetResponseHeaders {
-  contentType?: string;
-  contentDisposition?: string;
-  cacheControl?: string;
-}
-
 @Injectable()
 export class StorageService implements OnModuleInit {
   private s3Client: S3Client;
@@ -201,13 +195,8 @@ export class StorageService implements OnModuleInit {
     return getSignedUrl(this.signingS3Client, command, { expiresIn: expiry });
   }
 
-  /**
-   * Signed GET with no response overrides. Only for server-generated objects
-   * (certificate PDFs, export ZIPs); user uploads must go through
-   * getPresignedGetUrlWithResponseHeaders + resolveSafeResponseHeaders.
-   */
   async getPresignedGetUrl(key: string, expiry = 3600): Promise<string> {
-    return this.getPresignedGetUrlWithResponseHeaders(key, {}, expiry);
+    return this.getPresignedGetUrlWithDisposition(key, undefined, expiry);
   }
 
   async getPresignedGetUrlWithDisposition(
@@ -215,29 +204,10 @@ export class StorageService implements OnModuleInit {
     responseContentDisposition?: string,
     expiry = 3600,
   ): Promise<string> {
-    return this.getPresignedGetUrlWithResponseHeaders(
-      key,
-      { contentDisposition: responseContentDisposition },
-      expiry,
-    );
-  }
-
-  /**
-   * Signed GET whose response headers are overridden by storage
-   * (`response-content-type`, `response-content-disposition`,
-   * `response-cache-control`), regardless of the type stored with the object.
-   */
-  async getPresignedGetUrlWithResponseHeaders(
-    key: string,
-    responseHeaders: PresignedGetResponseHeaders,
-    expiry = 3600,
-  ): Promise<string> {
     const command = new GetObjectCommand({
       Bucket: this.bucket,
       Key: key,
-      ResponseContentType: responseHeaders.contentType,
-      ResponseContentDisposition: responseHeaders.contentDisposition,
-      ResponseCacheControl: responseHeaders.cacheControl,
+      ResponseContentDisposition: responseContentDisposition,
     });
     return getSignedUrl(this.signingS3Client, command, { expiresIn: expiry });
   }

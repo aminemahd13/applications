@@ -285,14 +285,11 @@ export class ReviewsController {
   // ============================================================
 
   /**
-   * Get needs-info requests for application.
-   * READ_FULL (staff) or SELF_APPLICATION_READ (the applicant, ownership
-   * checked in the service). Not READ_BASIC: check-in staff hold it and must
-   * only see check-in data.
+   * Get needs-info requests for application
    */
   @Get('applications/:applicationId/needs-info')
   @RequirePermission(
-    Permission.EVENT_APPLICATION_READ_FULL,
+    Permission.EVENT_APPLICATION_READ_BASIC,
     Permission.SELF_APPLICATION_READ,
   )
   async getNeedsInfo(

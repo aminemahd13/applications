@@ -49,18 +49,17 @@ import {
   matchesFieldAnswer,
   INTERNAL_NOTES_MAX_LENGTH,
   type AppendInternalNoteResponse,
-  type DeleteInternalNotesResponse,
-  type ReviewContextNote,
   type ApplicantDeadlineContext,
   type DeadlineRule,
+} from '@event-platform/shared';
+import { StepStateService } from './step-state.service';
+import { StepDeadlineService } from './step-deadline.service';
+import {
   appendInternalNoteLine,
   formatInternalNoteLine,
   normalizeInternalNoteContent,
   parseInternalNotes,
-  removeInternalNotes,
-} from '@event-platform/shared';
-import { StepStateService } from './step-state.service';
-import { StepDeadlineService } from './step-deadline.service';
+} from './internal-notes.util';
 import * as jwt from 'jsonwebtoken';
 import { createHmac } from 'node:crypto';
 import {
@@ -70,11 +69,6 @@ import {
   resolveAppBaseUrl,
   resolvePublicAppBaseUrl,
 } from '../common/utils/export-csv.util';
-import {
-  groupPatchOpsByVersionId,
-  normalizeAnswersShape,
-  resolveEffectiveAnswers,
-} from '../common/utils/effective-answers.util';
 
 type ApplicationsListRecord = {
   id: string;
@@ -1292,7 +1286,7 @@ export class ApplicationsService {
       for (const stepState of sortedStepStates) {
         const submissionVersionId = stepState.latest_submission_version_id;
         if (!submissionVersionId) continue;
-        const effectiveAnswers = normalizeAnswersShape(
+        const effectiveAnswers = this.normalizeAnswersShape(
           effectiveAnswersBySubmissionVersionId.get(submissionVersionId),
         );
         this.collectFileObjectIds(effectiveAnswers, fileIds);
@@ -2526,31 +2520,31 @@ export class ApplicationsService {
   }
 
   /**
-   * Run `fn` inside a transaction that holds the application row lock, with
-   * the current notes blob. Every notes write goes through here, so appends
-   * and deletes on the same application are serialized and never overwrite
-   * each other. 404s (and writes nothing) when the application is not in the
-   * event.
+   * Update internal notes blob (staff)
    */
-  private async withLockedInternalNotes<T>(
+  async updateInternalNotes(
     eventId: string,
     applicationId: string,
-    fn: (
-      tx: Prisma.TransactionClient,
-      internalNotes: string | null,
-    ) => Promise<T>,
-  ): Promise<T> {
-    return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT 1 FROM applications WHERE id = ${applicationId}::uuid AND event_id = ${eventId}::uuid FOR UPDATE`;
-
-      const row = await tx.applications.findFirst({
-        where: { id: applicationId, event_id: eventId },
-        select: { internal_notes: true },
-      });
-      if (!row) throw new NotFoundException('Application not found');
-
-      return fn(tx, row.internal_notes);
+    internalNotes: string | null,
+  ): Promise<ApplicationDetail> {
+    const app = await this.prisma.applications.findFirst({
+      where: { id: applicationId, event_id: eventId },
+      select: { id: true },
     });
+    if (!app) throw new NotFoundException('Application not found');
+
+    await this.prisma.applications.update({
+      where: { id: applicationId },
+      data: {
+        internal_notes:
+          internalNotes && internalNotes.trim().length > 0
+            ? internalNotes
+            : null,
+        updated_at: new Date(),
+      },
+    });
+
+    return this.findById(eventId, applicationId);
   }
 
   /**
@@ -2569,85 +2563,51 @@ export class ApplicationsService {
 
     const actorId = this.cls.get('actorId');
 
-    return this.withLockedInternalNotes(
-      eventId,
-      applicationId,
-      async (tx, internalNotes) => {
-        const actor = actorId
-          ? await tx.users.findUnique({
-              where: { id: actorId },
-              select: {
-                email: true,
-                applicant_profiles: {
-                  select: {
-                    first_name: true,
-                    last_name: true,
-                    full_name: true,
-                  },
-                },
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT 1 FROM applications WHERE id = ${applicationId}::uuid AND event_id = ${eventId}::uuid FOR UPDATE`;
+
+      const row = await tx.applications.findFirst({
+        where: { id: applicationId, event_id: eventId },
+        select: { internal_notes: true },
+      });
+      if (!row) throw new NotFoundException('Application not found');
+
+      const actor = actorId
+        ? await tx.users.findUnique({
+            where: { id: actorId },
+            select: {
+              email: true,
+              applicant_profiles: {
+                select: { first_name: true, last_name: true, full_name: true },
               },
-            })
-          : null;
-        const authorName =
-          ApplicationsService.getDisplayName(actor?.applicant_profiles) ||
-          actor?.email?.trim() ||
-          'Staff';
+            },
+          })
+        : null;
+      const authorName =
+        ApplicationsService.getDisplayName(actor?.applicant_profiles) ||
+        actor?.email?.trim() ||
+        'Staff';
 
-        const line = formatInternalNoteLine({
-          at: new Date(),
-          authorName,
-          content,
-        });
-        const next = appendInternalNoteLine(internalNotes, line);
-        if (next.length > INTERNAL_NOTES_MAX_LENGTH) {
-          throw new BadRequestException(
-            'Internal notes are full; delete older notes first.',
-          );
-        }
-
-        // Prisma delegate (not raw SQL) so the audit middleware records the change.
-        await tx.applications.update({
-          where: { id: applicationId },
-          data: { internal_notes: next, updated_at: new Date() },
-        });
-
-        return { notes: parseInternalNotes(next) };
-      },
-    );
-  }
-
-  /**
-   * Delete internal staff notes the caller has seen.
-   * Each target is matched by its parsed fields (the line id is only a hint,
-   * since ids shift when earlier lines are deleted), so a stale page never
-   * deletes a note it did not show and never drops notes appended meanwhile.
-   * Targets already gone are reported as `missing`; deleting is idempotent.
-   */
-  async deleteInternalNotes(
-    eventId: string,
-    applicationId: string,
-    targets: ReadonlyArray<ReviewContextNote>,
-  ): Promise<DeleteInternalNotesResponse> {
-    return this.withLockedInternalNotes(
-      eventId,
-      applicationId,
-      async (tx, internalNotes) => {
-        const { next, removed, missing } = removeInternalNotes(
-          internalNotes,
-          targets,
+      const line = formatInternalNoteLine({
+        at: new Date(),
+        authorName,
+        content,
+      });
+      const next = appendInternalNoteLine(row.internal_notes, line);
+      if (next.length > INTERNAL_NOTES_MAX_LENGTH) {
+        throw new BadRequestException(
+          'Internal notes are full; delete older notes first.',
         );
+      }
 
-        if (removed > 0) {
-          // Prisma delegate (not raw SQL) so the audit middleware records the change.
-          await tx.applications.update({
-            where: { id: applicationId },
-            data: { internal_notes: next, updated_at: new Date() },
-          });
-        }
+      // Prisma delegate (not raw SQL) so the audit middleware records the change.
+      await tx.applications.update({
+        where: { id: applicationId },
+        data: { internal_notes: next, updated_at: new Date() },
+      });
 
-        return { notes: parseInternalNotes(next), removed, missing };
-      },
-    );
+      return { notes: parseInternalNotes(next) };
+    });
   }
 
   /**
@@ -3620,7 +3580,7 @@ export class ApplicationsService {
               : ss.workflow_steps?.instructions_rich?.html || undefined,
           formDefinition: ss.workflow_steps?.form_versions?.schema || undefined,
           answers: answersByStepId[ss.step_id]
-            ? normalizeAnswersShape(answersByStepId[ss.step_id])
+            ? this.normalizeAnswersShape(answersByStepId[ss.step_id])
             : undefined,
           answersSource: answersSourceByStepId[ss.step_id] ?? null,
           currentDraftId: ss.current_draft_id,
@@ -3751,7 +3711,6 @@ export class ApplicationsService {
           submission_version_id: { in: latestSubmissionIds },
           is_active: true,
         },
-        select: { submission_version_id: true, ops: true },
         orderBy: { created_at: 'asc' },
       }),
       this.prisma.step_drafts.findMany({
@@ -3760,17 +3719,25 @@ export class ApplicationsService {
       }),
     ]);
 
-    const snapshotsById = new Map<string, unknown>(
-      submissions.map((s) => [s.id, s.answers_snapshot]),
+    const submissionsById = new Map(
+      submissions.map((s) => [
+        s.id,
+        this.normalizeAnswersShape(s.answers_snapshot as Record<string, any>),
+      ]),
     );
     const draftsById = new Map(
       drafts.map((draft) => [
         draft.id,
-        normalizeAnswersShape(draft.answers_draft) as Record<string, any>,
+        this.normalizeAnswersShape(draft.answers_draft as Record<string, any>),
       ]),
     );
 
-    const patchOpsByVersionId = groupPatchOpsByVersionId(patches);
+    const patchesByVersionId = new Map<string, any[]>();
+    for (const patch of patches) {
+      const list = patchesByVersionId.get(patch.submission_version_id) ?? [];
+      list.push(patch);
+      patchesByVersionId.set(patch.submission_version_id, list);
+    }
 
     const answersByStepId: Record<string, Record<string, any>> = {};
     const answersSourceByStepId: Record<string, 'SUBMISSION' | 'DRAFT'> = {};
@@ -3787,10 +3754,12 @@ export class ApplicationsService {
 
       const versionId = state.latest_submission_version_id;
       if (!versionId) continue;
-      answersByStepId[state.step_id] = resolveEffectiveAnswers(
-        snapshotsById.get(versionId),
-        patchOpsByVersionId.get(versionId),
-      ).answers as Record<string, any>;
+      const baseAnswers = submissionsById.get(versionId) ?? {};
+      const effectiveAnswers = this.applyPatches(
+        baseAnswers,
+        patchesByVersionId.get(versionId) ?? [],
+      );
+      answersByStepId[state.step_id] = effectiveAnswers;
       answersSourceByStepId[state.step_id] = 'SUBMISSION';
     }
 
@@ -3820,17 +3789,23 @@ export class ApplicationsService {
       }),
     ]);
 
-    const patchOpsByVersionId = groupPatchOpsByVersionId(patches);
+    const patchesByVersionId = new Map<string, Array<{ ops: any }>>();
+    for (const patch of patches) {
+      const list = patchesByVersionId.get(patch.submission_version_id) ?? [];
+      list.push({ ops: patch.ops });
+      patchesByVersionId.set(patch.submission_version_id, list);
+    }
 
     const effectiveByVersionId = new Map<string, Record<string, any>>();
     for (const submission of submissions) {
-      effectiveByVersionId.set(
-        submission.id,
-        resolveEffectiveAnswers(
-          submission.answers_snapshot,
-          patchOpsByVersionId.get(submission.id),
-        ).answers,
+      const baseAnswers = this.normalizeAnswersShape(
+        submission.answers_snapshot as Record<string, any>,
       );
+      const effectiveAnswers = this.applyPatches(
+        baseAnswers,
+        patchesByVersionId.get(submission.id) ?? [],
+      );
+      effectiveByVersionId.set(submission.id, effectiveAnswers);
     }
 
     return effectiveByVersionId;
@@ -4164,6 +4139,56 @@ export class ApplicationsService {
       }
     }
     return selected.length > 0 ? selected : [...availableColumns];
+  }
+
+  private applyPatches(
+    baseAnswers: Record<string, any>,
+    patches: Array<{ ops: any }>,
+  ): Record<string, any> {
+    const effective = { ...this.normalizeAnswersShape(baseAnswers) };
+
+    for (const patch of patches) {
+      const ops = Array.isArray(patch.ops) ? patch.ops : [];
+      for (const op of ops) {
+        if (!op || op.op !== 'replace' || typeof op.path !== 'string') {
+          continue;
+        }
+        const fieldPath = op.path.replace(/^\//, '');
+        if (!fieldPath) continue;
+        effective[fieldPath] = op.value;
+      }
+    }
+
+    return this.normalizeAnswersShape(effective);
+  }
+
+  /**
+   * Backward-compat: unwrap legacy answer envelopes shaped as { data: {...} }.
+   */
+  private normalizeAnswersShape(
+    answers: Record<string, any> | null | undefined,
+  ): Record<string, any> {
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+      return {};
+    }
+
+    const normalized = { ...answers };
+    const nestedData = normalized.data;
+    if (
+      nestedData &&
+      typeof nestedData === 'object' &&
+      !Array.isArray(nestedData)
+    ) {
+      Object.assign(normalized, nestedData as Record<string, any>);
+    }
+    if (
+      'data' in normalized &&
+      Object.keys(normalized).some((key) => key !== 'data')
+    ) {
+      delete normalized.data;
+    }
+
+    return normalized;
   }
 
   private buildDecisionTemplateVariables(

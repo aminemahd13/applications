@@ -1,16 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import {
-  groupPatchOpsByVersionId,
-  resolveEffectiveAnswers,
-} from '../common/utils/effective-answers.util';
 
 /**
  * Loads the *effective* answers for submitted form steps — i.e. the submission
- * snapshot with active admin change-patches applied (shared
- * `resolveEffectiveAnswers` util: replace/add/remove, JSON-pointer decoding) —
- * so messaging audience filtering and conditional step deadlines read the same
- * values staff see on the applications page and in the review queue.
+ * snapshot with active admin change-patches applied. Mirrors the equivalent
+ * logic in ApplicationsService so messaging audience filtering reads the same
+ * values staff see on the applications page.
  */
 @Injectable()
 export class EffectiveAnswersService {
@@ -86,19 +81,69 @@ export class EffectiveAnswersService {
       }),
     ]);
 
-    const patchOpsByVersionId = groupPatchOpsByVersionId(patches);
+    const patchesByVersionId = new Map<string, Array<{ ops: any }>>();
+    for (const patch of patches) {
+      const list = patchesByVersionId.get(patch.submission_version_id) ?? [];
+      list.push({ ops: patch.ops });
+      patchesByVersionId.set(patch.submission_version_id, list);
+    }
 
     const effectiveByVersionId = new Map<string, Record<string, any>>();
     for (const submission of submissions) {
-      effectiveByVersionId.set(
-        submission.id,
-        resolveEffectiveAnswers(
-          submission.answers_snapshot,
-          patchOpsByVersionId.get(submission.id),
-        ).answers,
+      const baseAnswers = this.normalizeAnswersShape(
+        submission.answers_snapshot as Record<string, any>,
       );
+      const effectiveAnswers = this.applyPatches(
+        baseAnswers,
+        patchesByVersionId.get(submission.id) ?? [],
+      );
+      effectiveByVersionId.set(submission.id, effectiveAnswers);
     }
 
     return effectiveByVersionId;
+  }
+
+  private applyPatches(
+    baseAnswers: Record<string, any>,
+    patches: Array<{ ops: any }>,
+  ): Record<string, any> {
+    const effective = { ...this.normalizeAnswersShape(baseAnswers) };
+
+    for (const patch of patches) {
+      const ops = Array.isArray(patch.ops) ? patch.ops : [];
+      for (const op of ops) {
+        if (!op || op.op !== 'replace' || typeof op.path !== 'string') continue;
+        const fieldPath = op.path.replace(/^\//, '');
+        if (!fieldPath) continue;
+        effective[fieldPath] = op.value;
+      }
+    }
+
+    return this.normalizeAnswersShape(effective);
+  }
+
+  /** Unwrap legacy answer envelopes shaped as { data: {...} }. */
+  private normalizeAnswersShape(
+    answers: Record<string, any> | null | undefined,
+  ): Record<string, any> {
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+      return {};
+    }
+    const normalized = { ...answers };
+    const nestedData = normalized.data;
+    if (
+      nestedData &&
+      typeof nestedData === 'object' &&
+      !Array.isArray(nestedData)
+    ) {
+      Object.assign(normalized, nestedData as Record<string, any>);
+    }
+    if (
+      'data' in normalized &&
+      Object.keys(normalized).some((key) => key !== 'data')
+    ) {
+      delete normalized.data;
+    }
+    return normalized;
   }
 }

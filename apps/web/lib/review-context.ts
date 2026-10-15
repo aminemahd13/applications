@@ -4,12 +4,7 @@ import type {
   ReviewContextFile,
   ReviewContextStep,
 } from "@event-platform/shared";
-import {
-  buildOrderedAnswerEntries,
-  describeAnswerValue,
-  formatDateOnly,
-  type FileAnswerRef,
-} from "./answer-entries";
+import { formatDateOnly, type FileAnswerRef } from "./answer-entries";
 
 /**
  * Pure helpers for the review-queue "Applicant info" panel. Rendering lives in
@@ -137,98 +132,6 @@ export function buildEditedFieldMap(
   return map;
 }
 
-/** Originals longer than this are shown inline, not in a tooltip. */
-export const ORIGINAL_TOOLTIP_MAX_LENGTH = 160;
-
-/** How to present the "Edited by staff" marker of one answer. */
-export interface EditedFieldMarker {
-  /** Plain-text summary of the value the applicant originally submitted. */
-  originalText: string;
-  /** Tooltip text (truncated when the original is long). */
-  tooltipText: string;
-  /**
-   * Show the original under the value: touch screens can't hover the
-   * tooltip, below desktop the panel is a sheet, and long originals don't
-   * fit in a tooltip.
-   */
-  showOriginalInline: boolean;
-}
-
-/**
- * Marker for an answer the staff edited; null when `key` was not edited.
- * Shared by the review card and the applicant-info panel.
- */
-export function getEditedFieldMarker(
-  formDefinition: unknown,
-  key: string,
-  editedFields: Map<string, unknown>,
-  options: { isDesktop: boolean; canHover: boolean },
-): EditedFieldMarker | null {
-  if (!editedFields.has(key)) return null;
-  const originalText = describeAnswerValue(
-    formDefinition,
-    key,
-    editedFields.get(key),
-  );
-  const isLong = originalText.length > ORIGINAL_TOOLTIP_MAX_LENGTH;
-  return {
-    originalText,
-    tooltipText: isLong
-      ? `${originalText.slice(0, ORIGINAL_TOOLTIP_MAX_LENGTH)}… (full value below)`
-      : originalText,
-    showOriginalInline: !options.isDesktop || !options.canHover || isLong,
-  };
-}
-
-export interface RemovedFieldRow {
-  /** Literal answers key the staff patch removed. */
-  key: string;
-  /** Form label; the raw key when the field is not in the form. */
-  label: string;
-  /** Plain-text summary of the value the applicant originally submitted. */
-  originalText: string;
-}
-
-/**
- * Fields a staff patch removed: edited keys that existed in the submission
- * (an `originalValue` property is present) but are absent from the effective
- * answers. In form order, then unknown keys. Fields staff added and later
- * removed are skipped (nothing to show).
- */
-export function buildRemovedFieldRows(
-  formDefinition: unknown,
-  editedFields: ReviewContextEditedField[] | null | undefined,
-  answers: Record<string, unknown> | null | undefined,
-): RemovedFieldRow[] {
-  const present =
-    answers && typeof answers === "object" && !Array.isArray(answers)
-      ? answers
-      : {};
-  const removedOriginals: Record<string, unknown> = {};
-  let hasRemoved = false;
-  for (const field of editedFields ?? []) {
-    if (!field || typeof field.key !== "string") continue;
-    // `data` would be read back as a legacy answers envelope; skip it.
-    if (field.key === "data" || field.key === "__proto__") continue;
-    if (!Object.prototype.hasOwnProperty.call(field, "originalValue")) continue;
-    if (Object.prototype.hasOwnProperty.call(present, field.key)) continue;
-    if (Object.prototype.hasOwnProperty.call(removedOriginals, field.key)) {
-      continue;
-    }
-    removedOriginals[field.key] = field.originalValue;
-    hasRemoved = true;
-  }
-  if (!hasRemoved) return [];
-
-  return buildOrderedAnswerEntries(formDefinition, removedOriginals).map(
-    (entry) => ({
-      key: entry.key,
-      label: entry.label,
-      originalText: describeAnswerValue(formDefinition, entry.key, entry.value),
-    }),
-  );
-}
-
 /* ---------- Applicant profile ---------- */
 
 export interface ApplicantProfileRow {
@@ -294,9 +197,6 @@ export function buildApplicantProfileRows(
 
 /* ---------- Files ---------- */
 
-// Keep in sync with PRIVATE_INLINE_MIME_TYPES in
-// apps/api/src/common/storage/safe-response-headers.util.ts: the API serves
-// only these types inline; everything else is signed as an attachment.
 export const PREVIEWABLE_MIME_TYPES = [
   "image/png",
   "image/jpeg",

@@ -58,16 +58,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { formatRelative, formatExactTimestamp } from "@/lib/relative-time";
-import {
-  Permission,
-  type ReviewContextEditedField,
-  type ReviewQueueStats,
-} from "@event-platform/shared";
-import {
-  buildEditedFieldMap,
-  buildRemovedFieldRows,
-  getEditedFieldMarker,
-} from "@/lib/review-context";
+import { Permission, type ReviewQueueStats } from "@event-platform/shared";
 import {
   appendUniqueQueueItems,
   normalizeReviewQueueResponse,
@@ -82,12 +73,6 @@ import {
   APPLICANT_CONTEXT_PANEL_ID,
   ApplicantContextPanel,
 } from "./applicant-context-panel";
-import {
-  EditedByStaffBadge,
-  EditedByStaffOriginal,
-  RemovedByStaffFields,
-  useCanHover,
-} from "./edited-by-staff-marker";
 
 interface ReviewItem {
   id: string;
@@ -100,10 +85,7 @@ interface ReviewItem {
   submissionVersionId?: string;
   status: string;
   submittedAt: string;
-  /** Effective answers: normalized snapshot + active staff patches. */
   answers: Record<string, unknown>;
-  /** Fields changed by staff patches (absent from older API builds). */
-  editedFields?: ReviewContextEditedField[];
   formDefinition?: Record<string, unknown> | null;
   assignedReviewerId: string | null;
   assignedReviewerEmail?: string | null;
@@ -251,7 +233,6 @@ export default function ReviewsPage() {
   // Same unit/value as Tailwind v4's `lg` breakpoint (64rem) so the JS layout
   // switch and the `lg:` classes always flip together.
   const isDesktop = useMediaQuery("(min-width: 64rem)");
-  const canHover = useCanHover();
   const queueRequestVersionRef = useRef(0);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(false);
@@ -444,19 +425,6 @@ export default function ReviewsPage() {
     () => groupAnswerEntriesBySection(answerEntries),
     [answerEntries],
   );
-  const editedFieldMap = useMemo(
-    () => buildEditedFieldMap(current?.editedFields),
-    [current?.editedFields],
-  );
-  const removedFieldRows = useMemo(
-    () =>
-      buildRemovedFieldRows(
-        current?.formDefinition,
-        current?.editedFields,
-        current?.answers,
-      ),
-    [current?.formDefinition, current?.editedFields, current?.answers],
-  );
   const requestFieldOptions = useMemo(
     () => extractRequestFieldOptions(current?.formDefinition, current?.answers),
     [current?.formDefinition, current?.answers],
@@ -477,18 +445,12 @@ export default function ReviewsPage() {
 
   function renderCurrentAnswerEntry(entry: AnswerEntry) {
     if (!current) return null;
-    const editedMarker = getEditedFieldMarker(
-      current.formDefinition,
-      entry.key,
-      editedFieldMap,
-      { isDesktop, canHover },
-    );
     return (
       <div
         key={entry.key}
         className={entry.hiddenByLogic ? "opacity-70" : undefined}
       >
-        <div className="text-muted-foreground mb-1 flex flex-wrap items-center gap-2 text-xs font-medium uppercase tracking-wider">
+        <p className="text-muted-foreground mb-1 flex flex-wrap items-center gap-2 text-xs font-medium uppercase tracking-wider">
           <span className="break-words [overflow-wrap:anywhere]" title={entry.key}>
             {entry.label}
           </span>
@@ -501,13 +463,12 @@ export default function ReviewsPage() {
               *
             </span>
           )}
-          {editedMarker && <EditedByStaffBadge marker={editedMarker} />}
           {entry.hiddenByLogic && (
             <span className="text-[11px] font-normal normal-case tracking-normal">
               Hidden by form conditions
             </span>
           )}
-        </div>
+        </p>
         <div className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
           {renderAnswerEntryValue(entry, {
             eventId,
@@ -521,7 +482,6 @@ export default function ReviewsPage() {
               : undefined,
           })}
         </div>
-        {editedMarker && <EditedByStaffOriginal marker={editedMarker} />}
       </div>
     );
   }
@@ -1075,34 +1035,31 @@ export default function ReviewsPage() {
                     </div>
                   </CardHeader>
                   <CardContent className="min-w-0 overflow-hidden">
-                    <TooltipProvider delayDuration={200}>
-                      <div className="max-h-[60vh] space-y-4 overflow-y-auto overflow-x-hidden pr-2">
-                        {answerEntries.length === 0 ? (
-                          <p className="text-muted-foreground text-sm">
-                            No answers in this submission.
-                          </p>
-                        ) : answerGroups.length > 1 ? (
-                          <div className="space-y-6">
-                            {answerGroups.map((group, groupIndex) => (
-                              <section
-                                key={`${groupIndex}:${group.title}`}
-                                className="space-y-4"
-                              >
-                                <h3 className="text-foreground border-b pb-1 text-sm font-semibold">
-                                  {group.title}
-                                </h3>
-                                {group.entries.map(renderCurrentAnswerEntry)}
-                              </section>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="space-y-4">
-                            {answerEntries.map(renderCurrentAnswerEntry)}
-                          </div>
-                        )}
-                        <RemovedByStaffFields rows={removedFieldRows} />
-                      </div>
-                    </TooltipProvider>
+                    <div className="max-h-[60vh] overflow-y-auto overflow-x-hidden pr-2">
+                      {answerEntries.length === 0 ? (
+                        <p className="text-muted-foreground text-sm">
+                          No answers in this submission.
+                        </p>
+                      ) : answerGroups.length > 1 ? (
+                        <div className="space-y-6">
+                          {answerGroups.map((group, groupIndex) => (
+                            <section
+                              key={`${groupIndex}:${group.title}`}
+                              className="space-y-4"
+                            >
+                              <h3 className="text-foreground border-b pb-1 text-sm font-semibold">
+                                {group.title}
+                              </h3>
+                              {group.entries.map(renderCurrentAnswerEntry)}
+                            </section>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {answerEntries.map(renderCurrentAnswerEntry)}
+                        </div>
+                      )}
+                    </div>
                   </CardContent>
                 </Card>
               </motion.div>

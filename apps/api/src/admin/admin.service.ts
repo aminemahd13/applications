@@ -21,11 +21,6 @@ import {
   buildCsvContent,
   resolveAppBaseUrl,
 } from '../common/utils/export-csv.util';
-import {
-  groupPatchOpsByVersionId,
-  normalizeAnswersShape,
-  resolveEffectiveAnswers,
-} from '../common/utils/effective-answers.util';
 
 const STAFF_INVITE_FALLBACK_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
 
@@ -1220,7 +1215,7 @@ export class AdminService {
       for (const stepState of sortedStepStates) {
         const versionId = stepState.latest_submission_version_id;
         if (!versionId) continue;
-        const effectiveAnswers = normalizeAnswersShape(
+        const effectiveAnswers = this.normalizeAnswersShape(
           effectiveAnswersBySubmissionVersionId.get(versionId),
         );
         this.collectFileObjectIds(effectiveAnswers, fileIds);
@@ -2611,16 +2606,34 @@ export class AdminService {
       }),
     ]);
 
-    const patchOpsByVersionId = groupPatchOpsByVersionId(patches);
+    const patchesByVersionId = new Map<string, Array<{ ops: any }>>();
+    for (const patch of patches) {
+      const list = patchesByVersionId.get(patch.submission_version_id) ?? [];
+      list.push({ ops: patch.ops });
+      patchesByVersionId.set(patch.submission_version_id, list);
+    }
 
     const effectiveByVersionId = new Map<string, Record<string, any>>();
     for (const submission of submissions) {
+      const effectiveAnswers = {
+        ...this.normalizeAnswersShape(
+          submission.answers_snapshot as Record<string, any>,
+        ),
+      };
+      for (const patch of patchesByVersionId.get(submission.id) ?? []) {
+        const ops = Array.isArray(patch.ops) ? patch.ops : [];
+        for (const op of ops) {
+          if (!op || op.op !== 'replace' || typeof op.path !== 'string') {
+            continue;
+          }
+          const fieldPath = op.path.replace(/^\//, '');
+          if (!fieldPath) continue;
+          effectiveAnswers[fieldPath] = op.value;
+        }
+      }
       effectiveByVersionId.set(
         submission.id,
-        resolveEffectiveAnswers(
-          submission.answers_snapshot,
-          patchOpsByVersionId.get(submission.id),
-        ).answers,
+        this.normalizeAnswersShape(effectiveAnswers),
       );
     }
 
@@ -2734,6 +2747,34 @@ export class AdminService {
     } catch {
       return String(value);
     }
+  }
+
+  /**
+   * Backward-compat: unwrap legacy answer envelopes shaped as { data: {...} }.
+   */
+  private normalizeAnswersShape(
+    answers: Record<string, any> | null | undefined,
+  ): Record<string, any> {
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+      return {};
+    }
+
+    const normalized = { ...answers };
+    const nestedData = normalized.data;
+    if (
+      nestedData &&
+      typeof nestedData === 'object' &&
+      !Array.isArray(nestedData)
+    ) {
+      const hasTopLevelAnswerKeys =
+        Object.keys(normalized).some((key) => key !== 'data') &&
+        Object.keys(normalized).length > 1;
+      if (!hasTopLevelAnswerKeys) {
+        return { ...(nestedData as Record<string, any>) };
+      }
+    }
+
+    return normalized;
   }
 
   private toIsoString(value: unknown): string {

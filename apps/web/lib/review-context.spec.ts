@@ -7,14 +7,11 @@ import type {
 import {
   EMPTY_VALUE_PLACEHOLDER,
   LEGACY_NOTE_AUTHOR,
-  ORIGINAL_TOOLTIP_MAX_LENGTH,
   PREVIEWABLE_MIME_TYPES,
   SIGNED_URL_EXPIRY_SKEW_MS,
   buildApplicantProfileRows,
   buildContextStepRows,
   buildEditedFieldMap,
-  buildRemovedFieldRows,
-  getEditedFieldMarker,
   contextFileKey,
   describeMimeType,
   formatFileSize,
@@ -200,149 +197,6 @@ describe("buildEditedFieldMap", () => {
 
   it("handles missing input", () => {
     expect(buildEditedFieldMap(undefined).size).toBe(0);
-  });
-});
-
-describe("getEditedFieldMarker", () => {
-  const form = {
-    sections: [
-      {
-        id: "s1",
-        title: "Main",
-        fields: [
-          {
-            id: "f-region",
-            key: "region",
-            type: "select",
-            label: "Region",
-            ui: {
-              options: [
-                { value: "north", label: "North" },
-                { value: "south", label: "South" },
-              ],
-            },
-          },
-          { id: "f-cv", key: "cv", type: "file_upload", label: "CV" },
-        ],
-      },
-    ],
-  };
-  const desktop = { isDesktop: true, canHover: true };
-
-  it("returns null for a field staff did not edit", () => {
-    expect(
-      getEditedFieldMarker(form, "region", new Map([["cv", null]]), desktop),
-    ).toBeNull();
-  });
-
-  it("describes the original with option labels and file names in a tooltip", () => {
-    const edited = buildEditedFieldMap([
-      { key: "region", originalValue: "south" },
-      {
-        key: "cv",
-        originalValue: [{ fileObjectId: FILE_1, originalFilename: "old-cv.pdf" }],
-      },
-    ]);
-
-    expect(getEditedFieldMarker(form, "region", edited, desktop)).toEqual({
-      originalText: "South",
-      tooltipText: "South",
-      showOriginalInline: false,
-    });
-    expect(getEditedFieldMarker(form, "cv", edited, desktop)?.originalText).toBe(
-      "old-cv.pdf",
-    );
-  });
-
-  it('says "(not answered)" for a field staff added', () => {
-    const edited = buildEditedFieldMap([{ key: "region" }]);
-    expect(getEditedFieldMarker(form, "region", edited, desktop)).toMatchObject({
-      originalText: "(not answered)",
-    });
-  });
-
-  it("shows the original inline on touch screens, below desktop and when long", () => {
-    const edited = buildEditedFieldMap([{ key: "region", originalValue: "south" }]);
-    expect(
-      getEditedFieldMarker(form, "region", edited, {
-        isDesktop: true,
-        canHover: false,
-      })?.showOriginalInline,
-    ).toBe(true);
-    expect(
-      getEditedFieldMarker(form, "region", edited, {
-        isDesktop: false,
-        canHover: true,
-      })?.showOriginalInline,
-    ).toBe(true);
-
-    const long = "x".repeat(ORIGINAL_TOOLTIP_MAX_LENGTH + 5);
-    const marker = getEditedFieldMarker(
-      form,
-      "essay",
-      buildEditedFieldMap([{ key: "essay", originalValue: long }]),
-      desktop,
-    );
-    expect(marker?.showOriginalInline).toBe(true);
-    expect(marker?.originalText).toBe(long);
-    expect(marker?.tooltipText).toBe(
-      `${"x".repeat(ORIGINAL_TOOLTIP_MAX_LENGTH)}… (full value below)`,
-    );
-  });
-});
-
-describe("buildRemovedFieldRows", () => {
-  const form = {
-    sections: [
-      {
-        id: "s1",
-        title: "Main",
-        fields: [
-          { id: "f-name", key: "name", type: "text", label: "Full name" },
-          { id: "f-cv", key: "cv", type: "file_upload", label: "CV" },
-        ],
-      },
-    ],
-  };
-
-  it("lists removed fields in form order with labels and original values", () => {
-    const rows = buildRemovedFieldRows(
-      form,
-      [
-        { key: "cv", originalValue: [{ fileObjectId: FILE_1, originalFilename: "cv.pdf" }] },
-        { key: "legacyNote", originalValue: "old note" },
-        { key: "name", originalValue: "Ada" },
-      ],
-      { city: "Fes" },
-    );
-
-    expect(rows).toEqual([
-      { key: "name", label: "Full name", originalText: "Ada" },
-      { key: "cv", label: "CV", originalText: "cv.pdf" },
-      { key: "legacyNote", label: "legacyNote", originalText: "old note" },
-    ]);
-  });
-
-  it("skips replaced fields, staff-added fields and the data envelope key", () => {
-    expect(
-      buildRemovedFieldRows(
-        form,
-        [
-          { key: "name", originalValue: "Ada" },
-          { key: "added" },
-          { key: "data", originalValue: { name: "x" } },
-        ],
-        { name: "Grace" },
-      ),
-    ).toEqual([]);
-  });
-
-  it("keeps a null original as (empty) and tolerates missing input", () => {
-    expect(
-      buildRemovedFieldRows(form, [{ key: "name", originalValue: null }], {}),
-    ).toEqual([{ key: "name", label: "Full name", originalText: "(empty)" }]);
-    expect(buildRemovedFieldRows(form, undefined, undefined)).toEqual([]);
-    expect(buildRemovedFieldRows(null, null, null)).toEqual([]);
   });
 });
 

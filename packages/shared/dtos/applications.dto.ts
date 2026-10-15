@@ -444,6 +444,12 @@ export const UpdateApplicationTagsSchema = z.object({
 
 export type UpdateApplicationTagsDto = z.infer<typeof UpdateApplicationTagsSchema>;
 
+export const UpdateApplicationNotesSchema = z.object({
+    internalNotes: z.string().max(20000).nullable(),
+});
+
+export type UpdateApplicationNotesDto = z.infer<typeof UpdateApplicationNotesSchema>;
+
 export const PublishDecisionsSchema = z.object({
     applicationIds: z.array(z.string().uuid()).optional(),
     filter: ApplicationFilterSchema.optional(), // Bulk publish by filter? For now just explicit IDs

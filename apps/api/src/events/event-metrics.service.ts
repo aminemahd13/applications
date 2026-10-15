@@ -13,10 +13,6 @@ import {
   StepStatus,
 } from '@event-platform/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
-import {
-  groupPatchOpsByVersionId,
-  resolveEffectiveAnswers,
-} from '../common/utils/effective-answers.util';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_TOP_COUNTRIES = 10;
@@ -621,20 +617,56 @@ export class EventMetricsService {
       }),
     ]);
 
-    const patchOpsByVersionId = groupPatchOpsByVersionId(patches);
+    const patchesByVersionId = new Map<string, Array<{ ops: unknown }>>();
+    for (const patch of patches) {
+      const list = patchesByVersionId.get(patch.submission_version_id) ?? [];
+      list.push({ ops: patch.ops });
+      patchesByVersionId.set(patch.submission_version_id, list);
+    }
 
     const effectiveByVersionId = new Map<string, Record<string, unknown>>();
     for (const submission of submissions) {
-      effectiveByVersionId.set(
-        submission.id,
-        resolveEffectiveAnswers(
-          submission.answers_snapshot,
-          patchOpsByVersionId.get(submission.id),
-        ).answers,
+      const baseAnswers = this.normalizeAnswersShape(
+        submission.answers_snapshot as Record<string, unknown>,
       );
+      const effective = { ...baseAnswers };
+      for (const patch of patchesByVersionId.get(submission.id) ?? []) {
+        const ops = Array.isArray(patch.ops) ? patch.ops : [];
+        for (const op of ops) {
+          if (!op || typeof op !== 'object' || Array.isArray(op)) continue;
+          const operation = op as Record<string, unknown>;
+          if (operation.op !== 'replace' || typeof operation.path !== 'string') {
+            continue;
+          }
+          const fieldPath = operation.path.replace(/^\//, '');
+          if (!fieldPath) continue;
+          effective[fieldPath] = operation.value;
+        }
+      }
+      effectiveByVersionId.set(submission.id, this.normalizeAnswersShape(effective));
     }
 
     return effectiveByVersionId;
+  }
+
+  private normalizeAnswersShape(
+    answers: Record<string, unknown> | null | undefined,
+  ): Record<string, unknown> {
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+      return {};
+    }
+    const normalized: Record<string, unknown> = { ...answers };
+    if (
+      normalized.data &&
+      typeof normalized.data === 'object' &&
+      !Array.isArray(normalized.data)
+    ) {
+      Object.assign(normalized, normalized.data as Record<string, unknown>);
+    }
+    if ('data' in normalized && Object.keys(normalized).some((key) => key !== 'data')) {
+      delete normalized.data;
+    }
+    return normalized;
   }
 
   private applyResponseFilters(

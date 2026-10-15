@@ -58,6 +58,7 @@ import { apiClient } from "@/lib/api";
 import { useAuth, usePermissions } from "@/lib/auth-context";
 import {
   buildOrderedAnswerEntries,
+  describeAnswerValue,
   groupAnswerEntriesBySection,
   type AnswerEntry,
   type FileAnswerRef,
@@ -68,9 +69,7 @@ import {
   buildApplicantProfileRows,
   buildContextStepRows,
   buildEditedFieldMap,
-  buildRemovedFieldRows,
   formatTimeAgo,
-  getEditedFieldMarker,
   getNoteAuthorLabel,
   indexContextFiles,
   resolveContextFileMeta,
@@ -78,15 +77,12 @@ import {
   type ContextStepRow,
 } from "@/lib/review-context";
 import { cn } from "@/lib/utils";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { ContextFilePreview } from "./context-file-preview";
-import {
-  EditedByStaffBadge,
-  EditedByStaffOriginal,
-  RemovedByStaffFields,
-  useCanHover,
-} from "./edited-by-staff-marker";
 
 export const APPLICANT_CONTEXT_PANEL_ID = "applicant-context-panel";
+
+const ORIGINAL_TOOLTIP_MAX_LENGTH = 160;
 
 export interface ApplicantContextPanelProps {
   eventId: string;
@@ -719,14 +715,9 @@ function SubmittedStepAnswers({
   );
   const groups = groupAnswerEntriesBySection(entries);
   const editedFields = buildEditedFieldMap(submission.editedFields);
-  const removedRows = buildRemovedFieldRows(
-    submission.formDefinition,
-    submission.editedFields,
-    submission.answers,
-  );
   // Tooltips need a hover-capable pointer; touch screens (any width) get the
   // original value inline instead.
-  const canHover = useCanHover();
+  const canHover = useMediaQuery("(hover: hover) and (pointer: fine)");
 
   // View-only: files render through the preview component, never through
   // FileAnswerLinks/verification (the union type forbids passing both).
@@ -747,12 +738,19 @@ function SubmittedStepAnswers({
   };
 
   const renderEntry = (entry: AnswerEntry) => {
-    const marker = getEditedFieldMarker(
-      submission.formDefinition,
-      entry.key,
-      editedFields,
-      { isDesktop, canHover },
-    );
+    const isEdited = editedFields.has(entry.key);
+    const originalText = isEdited
+      ? describeAnswerValue(
+          submission.formDefinition,
+          entry.key,
+          editedFields.get(entry.key),
+        )
+      : null;
+    const isLongOriginal =
+      originalText !== null &&
+      originalText.length > ORIGINAL_TOOLTIP_MAX_LENGTH;
+    const showOriginalInline =
+      originalText !== null && (!isDesktop || !canHover || isLongOriginal);
 
     return (
       <div key={entry.key} className={cn(entry.hiddenByLogic && "opacity-70")}>
@@ -769,7 +767,26 @@ function SubmittedStepAnswers({
               *
             </span>
           )}
-          {marker && <EditedByStaffBadge marker={marker} />}
+          {originalText !== null && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge
+                  variant="info"
+                  tabIndex={0}
+                  className="cursor-default tracking-normal normal-case"
+                >
+                  <PencilLine aria-hidden="true" />
+                  Edited by staff
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs break-words [overflow-wrap:anywhere]">
+                Originally submitted:{" "}
+                {isLongOriginal
+                  ? `${originalText.slice(0, ORIGINAL_TOOLTIP_MAX_LENGTH)}… (full value below)`
+                  : originalText}
+              </TooltipContent>
+            </Tooltip>
+          )}
           {entry.hiddenByLogic && (
             <span className="text-[11px] font-normal tracking-normal normal-case">
               Hidden by form conditions
@@ -779,19 +796,20 @@ function SubmittedStepAnswers({
         <div className="text-sm break-words whitespace-pre-wrap [overflow-wrap:anywhere]">
           {renderAnswerEntryValue(entry, { eventId, renderFile })}
         </div>
-        {marker && <EditedByStaffOriginal marker={marker} />}
+        {showOriginalInline && (
+          // Touch screens can't hover the tooltip, and long originals don't
+          // fit in one; show the original inline.
+          <p className="text-muted-foreground mt-1 text-xs break-words [overflow-wrap:anywhere]">
+            Originally submitted: {originalText}
+          </p>
+        )}
       </div>
     );
   };
 
-  const removed = <RemovedByStaffFields rows={removedRows} />;
-
   if (entries.length === 0) {
     return (
-      <div className="space-y-3">
-        <p className="text-muted-foreground text-sm">No answers in this submission.</p>
-        {removed}
-      </div>
+      <p className="text-muted-foreground text-sm">No answers in this submission.</p>
     );
   }
 
@@ -806,17 +824,11 @@ function SubmittedStepAnswers({
             {group.entries.map(renderEntry)}
           </section>
         ))}
-        {removed}
       </div>
     );
   }
 
-  return (
-    <div className="space-y-3">
-      {entries.map(renderEntry)}
-      {removed}
-    </div>
-  );
+  return <div className="space-y-3">{entries.map(renderEntry)}</div>;
 }
 
 /* ---------- Notes ---------- */

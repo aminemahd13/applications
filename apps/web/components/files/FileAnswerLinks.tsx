@@ -49,12 +49,7 @@ export function FileAnswerLinks({
   const [isOpening, setIsOpening] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
-  // Tied to the exact version/field/file: if a reload swaps in a different
-  // (e.g. staff-patched) file at the same position, it must be verified again.
-  const verifyKey = verification
-    ? `${verification.submissionVersionId}:${verification.fieldKey}:${fileObjectId}`
-    : null;
-  const [verifiedKey, setVerifiedKey] = useState<string | null>(null);
+  const [isVerified, setIsVerified] = useState(false);
 
   const displayName = originalFilename?.trim() || `file-${fileObjectId}`;
   const displaySize = formatBytes(sizeBytes);
@@ -68,7 +63,7 @@ export function FileAnswerLinks({
   }
 
   async function ensureVerified(): Promise<boolean> {
-    if (!verification || verifiedKey === verifyKey) return true;
+    if (!verification || isVerified) return true;
 
     setIsVerifying(true);
     try {
@@ -84,7 +79,7 @@ export function FileAnswerLinks({
           csrfToken: csrfToken ?? undefined,
         },
       );
-      setVerifiedKey(verifyKey);
+      setIsVerified(true);
       return true;
     } catch {
       return false;

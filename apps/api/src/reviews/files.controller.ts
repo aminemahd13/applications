@@ -20,19 +20,6 @@ import {
 } from '@event-platform/shared';
 import { ClsService } from 'nestjs-cls';
 
-/** Same slug rule as microsite/certificate asset keys. */
-function toStorageKeyFilename(originalFilename: unknown): string {
-  const raw =
-    typeof originalFilename === 'string' && originalFilename.trim()
-      ? originalFilename
-      : 'upload';
-  return raw
-    .toLowerCase()
-    .replace(/[^a-z0-9.\-_]+/g, '-')
-    .replace(/-+/g, '-')
-    .slice(0, 120);
-}
-
 @Controller('events/:eventId')
 @UseGuards(PermissionsGuard)
 export class FilesController {
@@ -69,10 +56,8 @@ export class FilesController {
       );
     }
     const sensitivity = body.sensitivity || FileSensitivity.NORMAL;
-    // Storage key: events/:eventId/uploads/:uuid-:safe-filename. The raw name
-    // stays in original_filename; the key only gets a slug so `/`, `?`, `#`
-    // and friends can't alter the object path or break URL signing.
-    const storageKey = `events/${eventId}/uploads/${crypto.randomUUID()}-${toStorageKeyFilename(body.originalFilename)}`;
+    // Storage key: events/:eventId/uploads/:uuid-:filename
+    const storageKey = `events/${eventId}/uploads/${crypto.randomUUID()}-${body.originalFilename}`;
 
     return await this.filesService.registerUpload(eventId, {
       originalFilename: body.originalFilename,

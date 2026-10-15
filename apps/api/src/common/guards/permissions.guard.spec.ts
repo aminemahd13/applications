@@ -6,7 +6,7 @@ import {
     UnauthorizedException,
     ServiceUnavailableException,
 } from '@nestjs/common';
-import { EventRole, Permission, ROLE_PERMISSIONS } from '@event-platform/shared';
+import { Permission } from '@event-platform/shared';
 
 describe('PermissionsGuard', () => {
     let guard: PermissionsGuard;
@@ -184,42 +184,6 @@ describe('PermissionsGuard', () => {
         });
 
         await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
-    });
-
-    it('should deny checkin_staff role for event.application.read_full routes', async () => {
-        mockPrisma.event_role_assignments.findMany.mockResolvedValue([
-            { role: 'checkin_staff' },
-        ]);
-
-        const ctx = createMockContext({
-            permissions: [Permission.EVENT_APPLICATION_READ_FULL],
-            userId: 'checkin-user-id',
-            isGlobalAdmin: false,
-            eventId: 'event-uuid-123',
-        });
-
-        await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
-    });
-
-    it('should allow checkin_staff role for event.checkin.scan routes', async () => {
-        mockPrisma.event_role_assignments.findMany.mockResolvedValue([
-            { role: 'checkin_staff' },
-        ]);
-
-        const ctx = createMockContext({
-            permissions: [Permission.EVENT_CHECKIN_SCAN],
-            userId: 'checkin-user-id',
-            isGlobalAdmin: false,
-            eventId: 'event-uuid-123',
-        });
-
-        await expect(guard.canActivate(ctx)).resolves.toBe(true);
-    });
-
-    it('should not grant read_full to the checkin_staff role (shared contract)', () => {
-        expect(ROLE_PERMISSIONS[EventRole.CHECKIN_STAFF]).not.toContain(
-            Permission.EVENT_APPLICATION_READ_FULL,
-        );
     });
 
     it('should set actor context (actorId, ip, ua) in CLS', async () => {

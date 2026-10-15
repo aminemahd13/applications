@@ -11,11 +11,6 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
 import { StorageService } from '../common/storage/storage.service';
 import {
-  isActiveContentMimeType,
-  normalizeMimeEssence,
-  resolveSafeResponseHeaders,
-} from '../common/storage/safe-response-headers.util';
-import {
   CertificateLayoutSchema,
   type CertificateLayout,
   type CertificateSignatureSlot,
@@ -93,24 +88,6 @@ const CERTIFICATE_FONT_MIME_BY_FORMAT = {
   ],
   woff2: ['font/woff2', 'application/font-woff2'],
 } as const satisfies Record<string, readonly string[]>;
-// Image kinds (background/signature/logo/image) are limited to what the PDF
-// renderer and the studio canvas understand. SVG is served as an attachment
-// with its real type (see resolveCertificateAssetUrl) so it never renders as
-// a page on the app origin.
-const CERTIFICATE_IMAGE_ASSET_MIME_TYPES: readonly string[] = [
-  'image/png',
-  'image/jpeg',
-  'image/webp',
-  'image/gif',
-  'image/svg+xml',
-];
-const CERTIFICATE_BLOCKED_EXECUTABLE_MIME_TYPES: readonly string[] = [
-  'application/x-msdownload',
-  'application/x-sh',
-  'application/x-php',
-  'application/x-dosexec',
-];
-const CERTIFICATE_ASSET_PUBLIC_URL_TTL_SECONDS = 3600;
 const CERTIFICATE_FONT_DATA_MIME_BY_FORMAT = {
   ttf: 'font/ttf',
   otf: 'font/otf',
@@ -2704,10 +2681,6 @@ export class CertificatesService implements OnModuleDestroy {
     dto: RegisterCertificateAssetUploadDto,
   ) {
     const userId = this.getActorId();
-    const mimeError = this.getCertificateAssetMimeError(dto.kind, dto.mimeType);
-    if (mimeError) {
-      throw new BadRequestException(mimeError);
-    }
     const safeName = (dto.originalFilename || 'upload')
       .toLowerCase()
       .replace(/[^a-z0-9.\-_]+/g, '-')
@@ -2757,35 +2730,6 @@ export class CertificatesService implements OnModuleDestroy {
       // ignore
     }
     await this.prisma.file_objects.delete({ where: { id: fileId } });
-  }
-
-  /**
-   * Upload-time type gate for certificate assets (served publicly from the app
-   * origin). Image kinds: PNG/JPEG/WebP/GIF/SVG only. Fonts: never active
-   * content or executables (their bytes are verified at commit).
-   * Returns an error message, or null when the type is acceptable.
-   */
-  private getCertificateAssetMimeError(
-    kind: CertificateAssetKind,
-    rawMimeType: unknown,
-  ): string | null {
-    const essence = normalizeMimeEssence(rawMimeType);
-    if (!essence) {
-      return 'File type not allowed.';
-    }
-    if (kind === 'font') {
-      if (
-        CERTIFICATE_BLOCKED_EXECUTABLE_MIME_TYPES.includes(essence) ||
-        isActiveContentMimeType(essence)
-      ) {
-        return 'File type not allowed.';
-      }
-      return null;
-    }
-    if (!CERTIFICATE_IMAGE_ASSET_MIME_TYPES.includes(essence)) {
-      return 'Unsupported image type. Upload PNG, JPEG, WebP, GIF or SVG files.';
-    }
-    return null;
   }
 
   async commitAssetUpload(eventId: string, fileId: string) {
@@ -2847,10 +2791,15 @@ export class CertificatesService implements OnModuleDestroy {
       );
     }
 
-    const mimeError = this.getCertificateAssetMimeError(assetKind, actualMime);
-    if (mimeError) {
+    const blockedTypes = [
+      'application/x-msdownload',
+      'application/x-sh',
+      'application/x-php',
+      'application/x-dosexec',
+    ];
+    if (blockedTypes.includes(actualMime)) {
       await this.cleanupFailedUpload(file.storage_key, file.id);
-      throw new BadRequestException(mimeError);
+      throw new BadRequestException('File type not allowed.');
     }
 
     if (assetKind === 'font') {
@@ -5029,30 +4978,13 @@ export class CertificatesService implements OnModuleDestroy {
       },
       select: {
         id: true,
-        mime_type: true,
-        original_filename: true,
       },
     });
     if (!asset) {
       throw new NotFoundException('Asset not found');
     }
 
-    // Served from the app origin: never echo the stored type for anything
-    // that could render as a document (SVG keeps its type but downloads).
-    const responseHeaders = resolveSafeResponseHeaders({
-      mimeType: asset.mime_type,
-      filename: asset.original_filename,
-      profile: 'public-asset',
-    });
-    return this.storageService.getPresignedGetUrlWithResponseHeaders(
-      storageKey,
-      {
-        contentType: responseHeaders.contentType,
-        contentDisposition: responseHeaders.contentDisposition,
-        cacheControl: 'public, max-age=3600',
-      },
-      CERTIFICATE_ASSET_PUBLIC_URL_TTL_SECONDS,
-    );
+    return this.storageService.getPresignedGetUrl(storageKey, 3600);
   }
 
   async listApplicationCertificates(

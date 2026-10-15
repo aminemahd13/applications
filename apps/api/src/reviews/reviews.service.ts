@@ -20,26 +20,6 @@ import { ApplicationsService } from '../applications/applications.service';
 import { FilesService } from './files.service';
 import { FormsService } from '../workflow/forms.service';
 import { ReviewerAssignmentService } from './reviewer-assignment.service';
-import {
-  normalizeAnswersShape,
-  type RemovedRequiredFileField,
-} from '../common/utils/effective-answers.util';
-
-export const REQUIRED_FILE_REMOVED_BY_STAFF_CODE =
-  'REQUIRED_FILE_REMOVED_BY_STAFF';
-export const REQUIRED_FILES_NOT_VERIFIED_CODE = 'REQUIRED_FILES_NOT_VERIFIED';
-
-function describeRemovedRequiredFileFields(
-  fields: RemovedRequiredFileField[],
-): string {
-  return fields
-    .map((field) =>
-      field.label && field.label !== field.key
-        ? `${field.label} (${field.key})`
-        : field.key,
-    )
-    .join(', ');
-}
 
 @Injectable()
 export class ReviewsService {
@@ -121,37 +101,20 @@ export class ReviewsService {
     }
 
     if (dto.outcome === ReviewOutcome.APPROVE) {
-      // Gate on the EFFECTIVE answers (snapshot + active staff patches), the
-      // same values the review queue shows and verifyField checks against.
-      const effectiveAnswers =
-        await this.filesService.getEffectiveAnswersForVersion(
-          versionId,
-          version.answers_snapshot,
+      const requiredRefs =
+        await this.formsService.getRequiredFileRefsForAnswers(
+          version.form_version_id,
+          version.answers_snapshot as Record<string, any>,
         );
-      const gate = await this.formsService.getRequiredFileGate(
-        version.form_version_id,
-        effectiveAnswers,
-        normalizeAnswersShape(version.answers_snapshot),
-      );
-
-      if (gate.removedFields.length > 0) {
-        throw new BadRequestException({
-          code: REQUIRED_FILE_REMOVED_BY_STAFF_CODE,
-          message: `Required file removed by staff — upload a replacement before approving: ${describeRemovedRequiredFileFields(gate.removedFields)}.`,
-          fieldKeys: gate.removedFields.map((field) => field.key),
-        });
-      }
 
       const allVerified = await this.filesService.checkVerificationStatus(
         versionId,
-        gate.refs,
+        requiredRefs,
       );
       if (!allVerified) {
-        throw new BadRequestException({
-          code: REQUIRED_FILES_NOT_VERIFIED_CODE,
-          message:
-            'Required file uploads must be verified before approval. Please review file answers.',
-        });
+        throw new BadRequestException(
+          'Required file uploads must be verified before approval. Please review file answers.',
+        );
       }
     }
 
@@ -400,8 +363,8 @@ export class ReviewsService {
 
     const actorId = this.cls.get('actorId');
     const permissions = (this.cls.get('permissions') ?? []) as string[];
-    // READ_BASIC alone (check-in staff) is deliberately not enough.
     const canReadAnyApplication =
+      permissions.includes(Permission.EVENT_APPLICATION_READ_BASIC) ||
       permissions.includes(Permission.EVENT_APPLICATION_READ_FULL) ||
       permissions.includes(Permission.EVENT_APPLICATION_READ_SENSITIVE) ||
       permissions.includes(Permission.ADMIN_EVENTS_MANAGE);

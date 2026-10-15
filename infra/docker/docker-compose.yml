@@ -61,6 +61,9 @@ services:
       /bin/sh -c "
       /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin;
       /usr/bin/mc mb myminio/uploads;
+      /usr/bin/mc policy set download myminio/uploads;
+      /usr/bin/mc mb myminio/public-assets;
+      /usr/bin/mc policy set public myminio/public-assets;
       exit 0;
       "
 

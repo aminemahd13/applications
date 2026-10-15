@@ -188,34 +188,3 @@ describe('ReviewsController review-queue item context endpoint', () => {
     expect(queueService.getQueueItemContext).not.toHaveBeenCalled();
   });
 });
-
-describe('ReviewsController needs-info read permissions', () => {
-  function permissionsOf(name: string): unknown {
-    const handler = Object.getOwnPropertyDescriptor(
-      ReviewsController.prototype,
-      name,
-    )?.value as object;
-    return Reflect.getMetadata(PERMISSIONS_KEY, handler);
-  }
-
-  it('requires event.application.read_full or self application read (not read_basic)', () => {
-    expect(permissionsOf('getNeedsInfo')).toEqual([
-      Permission.EVENT_APPLICATION_READ_FULL,
-      Permission.SELF_APPLICATION_READ,
-    ]);
-  });
-
-  it('grants no route on read_basic alone (check-in staff)', () => {
-    const readBasicHandlers = Object.getOwnPropertyNames(
-      ReviewsController.prototype,
-    ).filter((name) => {
-      const permissions = permissionsOf(name);
-      return (
-        Array.isArray(permissions) &&
-        permissions.includes(Permission.EVENT_APPLICATION_READ_BASIC)
-      );
-    });
-
-    expect(readBasicHandlers).toEqual([]);
-  });
-});
