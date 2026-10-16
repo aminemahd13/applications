@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  classifySessionResponse,
+  type SessionValidationResult,
+} from "./lib/session-validation";
+import { resolveApiUpstreamCandidates } from "./lib/api-upstream";
 
 export const config = {
-  matcher: ["/((?!api/|_next/|_static/|_vercel|[\\w-]+\\.\\w+).*)"],
+  // `uploads/` must stay excluded: when this proxy matches a request, Next
+  // copies its body with a 10 MiB cap, which truncates large file uploads.
+  matcher: ["/((?!api/|uploads/|_next/|_static/|_vercel|[\\w-]+\\.\\w+).*)"],
 };
 
 const PUBLIC_FILE_RE = /\.[^/]+$/;
@@ -11,35 +18,8 @@ const ROUTING_MODE = (process.env.NEXT_PUBLIC_ROUTING_MODE || "path") as
   | "subdomain";
 const ROOT_DOMAIN = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost:3000";
 
-function normalizeAbsoluteApiUrl(value: string | undefined): string | null {
-  const raw = (value ?? "").trim().replace(/\/+$/, "");
-  if (!raw) return null;
-  if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
-    return null;
-  }
-  return raw;
-}
-
-const API_URL_CANDIDATES = Array.from(
-  new Set([
-    normalizeAbsoluteApiUrl(process.env.INTERNAL_API_URL),
-    normalizeAbsoluteApiUrl(process.env.NEXT_PUBLIC_API_URL),
-    ...(process.env.NODE_ENV === "production"
-      ? [
-          "http://api:3000/api/v1",
-          "http://localhost:3000/api/v1",
-          "http://api:3001/api/v1",
-          "http://localhost:3001/api/v1",
-        ]
-      : [
-          "http://localhost:3001/api/v1",
-          "http://api:3001/api/v1",
-          "http://localhost:3000/api/v1",
-          "http://api:3000/api/v1",
-        ]),
-  ].filter((value): value is string => Boolean(value)),
-  ),
-);
+// Production: only the internal API (never this web server itself).
+const API_URL_CANDIDATES = resolveApiUpstreamCandidates(process.env);
 const SESSION_VALIDATION_TIMEOUT_MS = Math.max(
   Number(process.env.SESSION_VALIDATION_TIMEOUT_MS || "2000"),
   250,
@@ -192,17 +172,6 @@ function isProtectedRoute(pathname: string): boolean {
   return PROTECTED_SEGMENTS.has(first);
 }
 
-function hasAuthenticatedUser(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object") return false;
-
-  const root = payload as Record<string, unknown>;
-  const candidate = "user" in root ? root.user : root;
-  if (!candidate || typeof candidate !== "object") return false;
-
-  const user = candidate as Record<string, unknown>;
-  return typeof user.id === "string" && user.id.length > 0;
-}
-
 async function fetchWithTimeout(
   input: string,
   init: RequestInit,
@@ -248,7 +217,9 @@ function markApiCandidateHealthy(candidate: string) {
   apiCandidateCooldownUntil.delete(candidate);
 }
 
-async function validateSession(req: NextRequest): Promise<boolean> {
+async function validateSession(
+  req: NextRequest,
+): Promise<SessionValidationResult> {
   const cookie = req.headers.get("cookie") ?? "";
 
   for (const apiUrl of getOrderedApiCandidates()) {
@@ -276,24 +247,12 @@ async function validateSession(req: NextRequest): Promise<boolean> {
 
         if (!sessionRes.ok) {
           markApiCandidateHealthy(apiUrl);
-          return false;
+          return classifySessionResponse(sessionRes.status, null);
         }
 
         const payload = await sessionRes.json().catch(() => null);
         markApiCandidateHealthy(apiUrl);
-        if (
-          payload &&
-          typeof payload === "object" &&
-          "authenticated" in payload &&
-          typeof (payload as { authenticated?: unknown }).authenticated ===
-            "boolean"
-        ) {
-          return Boolean(
-            (payload as { authenticated: boolean }).authenticated,
-          );
-        }
-
-        return hasAuthenticatedUser(payload);
+        return classifySessionResponse(sessionRes.status, payload);
       }
       markApiCandidateHealthy(apiUrl);
       shouldFallbackToAuthMe = true;
@@ -327,20 +286,21 @@ async function validateSession(req: NextRequest): Promise<boolean> {
 
       if (!res.ok) {
         markApiCandidateHealthy(apiUrl);
-        return false;
+        return classifySessionResponse(res.status, null);
       }
 
       const payload = await res.json().catch(() => null);
       markApiCandidateHealthy(apiUrl);
-      return hasAuthenticatedUser(payload);
+      return classifySessionResponse(res.status, payload);
     } catch {
       markApiCandidateFailure(apiUrl);
       continue;
     }
   }
 
-  // If the auth service is temporarily unreachable, fail closed: require re-login.
-  return false;
+  // No API answered (timeout, network error, 5xx). That says nothing about
+  // the session, so don't log the user out; the API still enforces auth.
+  return "unknown";
 }
 
 function sidMarker(sidValue: string): string {
@@ -417,8 +377,8 @@ export default async function proxy(req: NextRequest) {
       existingMarker !== expectedMarker &&
       !hasRecentSessionValidation(expectedMarker, now)
     ) {
-      const isValid = await validateSession(req);
-      if (!isValid) {
+      const validation = await validateSession(req);
+      if (validation === "invalid") {
         const loginUrl = new URL("/login", req.url);
         loginUrl.searchParams.set(
           "returnUrl",
@@ -431,8 +391,11 @@ export default async function proxy(req: NextRequest) {
         response.cookies.delete(SESSION_VALIDATION_COOKIE);
         return response;
       }
-      refreshSessionValidationMarker = expectedMarker;
-      rememberSessionValidation(expectedMarker, now);
+      if (validation === "valid") {
+        refreshSessionValidationMarker = expectedMarker;
+        rememberSessionValidation(expectedMarker, now);
+      }
+      // "unknown": let the request through without touching cookies or the cache.
     } else if (existingMarker !== expectedMarker) {
       refreshSessionValidationMarker = expectedMarker;
     }

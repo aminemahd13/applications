@@ -85,14 +85,18 @@ import { renderAnswerValue } from "@/lib/render-answer-value";
 import { getRequiredFieldKeySet } from "@/lib/file-answer-utils";
 import { FileUpload, type FileUploadValue } from "@/components/forms/FileUpload";
 import { FormMarkdown } from "@/components/forms/form-markdown";
-import { Permission } from "@event-platform/shared";
-
-interface NoteEntry {
-  id: string;
-  content: string;
-  authorName: string;
-  createdAt: string;
-}
+import { getNoteAuthorLabel } from "@/lib/review-context";
+import { describeNoteDeletion, notesFromResponse } from "@/lib/internal-notes";
+import {
+  INTERNAL_NOTE_CONTENT_MAX_LENGTH,
+  INTERNAL_NOTES_DELETE_MAX_ENTRIES,
+  Permission,
+  parseInternalNotes,
+  toInternalNoteRef,
+  type AppendInternalNoteResponse,
+  type DeleteInternalNotesResponse,
+  type ReviewContextNote,
+} from "@event-platform/shared";
 
 interface ApplicantProfile {
   fullName?: string;
@@ -129,7 +133,8 @@ interface ApplicationDetail {
     };
   } | null;
   tags: string[];
-  notes: NoteEntry[];
+  /** Internal staff notes, newest first (shared parser). */
+  notes: ReviewContextNote[];
   steps: Array<{
     id: string;
     title: string;
@@ -260,45 +265,6 @@ interface StaffStepDraftSaveResult {
   submission?: {
     id: string;
   };
-}
-
-function parseInternalNotes(rawNotes: unknown): NoteEntry[] {
-  if (typeof rawNotes !== "string" || !rawNotes.trim()) return [];
-
-  const entries = rawNotes
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, idx) => {
-      const match = line.match(/^\[(.+)\]\s([^:]+):\s([\s\S]+)$/);
-      if (!match) {
-        return {
-          id: `legacy-${idx}`,
-          content: line,
-          authorName: "Staff",
-          createdAt: new Date().toISOString(),
-        };
-      }
-      const [, createdAt, authorName, content] = match;
-      return {
-        id: `note-${idx}-${createdAt}`,
-        content,
-        authorName,
-        createdAt,
-      };
-    });
-
-  return entries.reverse();
-}
-
-function serializeInternalNotes(notes: NoteEntry[]): string {
-  return [...notes]
-    .reverse()
-    .map(
-      (note) =>
-        `[${new Date(note.createdAt).toISOString()}] ${note.authorName}: ${note.content.replace(/\s+/g, " ").trim()}`
-    )
-    .join("\n");
 }
 
 function normalizeApplicantProfile(raw: unknown): ApplicantProfile | null {
@@ -823,7 +789,7 @@ export default function ApplicationDetailPage() {
   const eventId = params.eventId as string;
   const appId = params.applicationId as string;
   const basePath = useEventBasePath();
-  const { csrfToken, user } = useAuth();
+  const { csrfToken } = useAuth();
   const { hasPermission } = usePermissions(eventId);
 
   const [app, setApp] = useState<ApplicationDetail | null>(null);
@@ -846,6 +812,11 @@ export default function ApplicationDetailPage() {
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const [isClearingNotes, setIsClearingNotes] = useState(false);
+  const [showClearNotesConfirm, setShowClearNotesConfirm] = useState(false);
+  // Snapshot of the notes shown when "Clear all" was clicked; only these are deleted.
+  const [clearNotesSnapshot, setClearNotesSnapshot] = useState<
+    ReviewContextNote[]
+  >([]);
   const [isUnpublishing, setIsUnpublishing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [pendingDeleteNeedsInfoId, setPendingDeleteNeedsInfoId] = useState<
@@ -911,6 +882,10 @@ export default function ApplicationDetailPage() {
   const canManageDecisions = canDraftDecision || canPublishDecision;
   const canManageTags = hasPermission(Permission.EVENT_APPLICATION_TAGS_MANAGE);
   const canManageNotes = hasPermission(Permission.EVENT_APPLICATION_NOTES_MANAGE);
+  // One notes request at a time: each response replaces the whole list, so an
+  // older response landing last would otherwise show stale notes.
+  const isMutatingNotes =
+    isAddingNote || deletingNoteId !== null || isClearingNotes;
   const canPatchSteps = hasPermission(Permission.EVENT_STEP_PATCH);
   const canDeleteApplication = hasPermission(Permission.EVENT_APPLICATION_DELETE);
   const canDeleteNeedsInfo = canDeleteApplication;
@@ -1276,91 +1251,106 @@ export default function ApplicationDetailPage() {
     }
   }
 
+  /**
+   * Replace the notes with the server's list from a notes response; when the
+   * response carries none, reload the application instead of guessing.
+   */
+  async function applyNotesResponse(
+    response: unknown
+  ): Promise<ReviewContextNote[] | null> {
+    const notes = notesFromResponse(response);
+    if (notes) {
+      setApp((prev) => (prev ? { ...prev, notes } : prev));
+    } else {
+      await loadApplication(true);
+    }
+    return notes;
+  }
+
   async function addNote() {
     if (!canManageNotes) {
       toast.error("You do not have permission to edit notes.");
       return;
     }
-    if (!app || !newNote.trim()) return;
+    const content = newNote.trim();
+    if (!app || !content || isMutatingNotes) return;
     setIsAddingNote(true);
     try {
-      const authorName =
-        user?.fullName?.trim() ||
-        user?.email?.trim() ||
-        "Staff";
-      const note: NoteEntry = {
-        id: String(Date.now()),
-        content: newNote.trim(),
-        authorName,
-        createdAt: new Date().toISOString(),
-      };
-      const nextNotes = [note, ...app.notes];
-      const res = await apiClient<any>(
+      // The server stamps author + time and appends under a row lock.
+      const res = await apiClient<{ data?: AppendInternalNoteResponse }>(
         `/events/${eventId}/applications/${appId}/internal-notes`,
         {
-          method: "PATCH",
-          body: { internalNotes: serializeInternalNotes(nextNotes) },
+          method: "POST",
+          body: { content },
           csrfToken: csrfToken ?? undefined,
         }
       );
-      const updated = res?.data ?? res;
-      setApp((prev) =>
-        prev
-          ? {
-              ...prev,
-              notes:
-                updated &&
-                typeof updated === "object" &&
-                "internalNotes" in updated
-                  ? parseInternalNotes(updated.internalNotes)
-                  : nextNotes,
-            }
-          : prev
-      );
-      setNewNote("");
+      await applyNotesResponse(res);
+      // Keep anything typed while the request was in flight.
+      setNewNote((current) => (current.trim() === content ? "" : current));
       toast.success("Note added");
     } catch {
-      /* handled */
+      /* apiClient already surfaced the error; keep the draft for a retry */
     } finally {
       setIsAddingNote(false);
     }
   }
 
-  async function deleteNote(noteId: string) {
-    if (!canManageNotes) {
-      toast.error("You do not have permission to edit notes.");
-      return;
-    }
-    if (!app) return;
-    setDeletingNoteId(noteId);
-    try {
-      const nextNotes = app.notes.filter((note) => note.id !== noteId);
-      const res = await apiClient<any>(
+  /**
+   * Delete exactly the given notes (as this page parsed them). The server
+   * keeps notes added meanwhile and reports notes already deleted as missing.
+   */
+  async function deleteNotes(
+    notes: ReviewContextNote[],
+    mode: "single" | "clear"
+  ) {
+    // The API takes at most INTERNAL_NOTES_DELETE_MAX_ENTRIES notes per request
+    // (a very long legacy notes blob can exceed it), so send them in batches.
+    const refs = notes.map(toInternalNoteRef);
+    let removed = 0;
+    let missing = 0;
+    let remaining: ReviewContextNote[] | null = null;
+    for (
+      let offset = 0;
+      offset < refs.length;
+      offset += INTERNAL_NOTES_DELETE_MAX_ENTRIES
+    ) {
+      const res = await apiClient<{ data?: DeleteInternalNotesResponse }>(
         `/events/${eventId}/applications/${appId}/internal-notes`,
         {
-          method: "PATCH",
+          method: "DELETE",
           body: {
-            internalNotes:
-              nextNotes.length > 0 ? serializeInternalNotes(nextNotes) : null,
+            notes: refs.slice(offset, offset + INTERNAL_NOTES_DELETE_MAX_ENTRIES),
           },
           csrfToken: csrfToken ?? undefined,
         }
       );
-      const updated = res?.data ?? res;
-      setApp((prev) =>
-        prev
-          ? {
-              ...prev,
-              notes:
-                updated &&
-                typeof updated === "object" &&
-                "internalNotes" in updated
-                  ? parseInternalNotes(updated.internalNotes)
-                  : nextNotes,
-            }
-          : prev
-      );
-      toast.success("Note deleted");
+      remaining = await applyNotesResponse(res);
+      removed += res?.data?.removed ?? 0;
+      missing += res?.data?.missing ?? 0;
+    }
+    const outcome = describeNoteDeletion({
+      mode,
+      removed,
+      missing,
+      remaining: remaining?.length ?? 0,
+    });
+    if (outcome.kind === "success") {
+      toast.success(outcome.message);
+    } else {
+      toast.info(outcome.message);
+    }
+  }
+
+  async function deleteNote(note: ReviewContextNote) {
+    if (!canManageNotes) {
+      toast.error("You do not have permission to edit notes.");
+      return;
+    }
+    if (!app || isMutatingNotes) return;
+    setDeletingNoteId(note.id);
+    try {
+      await deleteNotes([note], "single");
     } catch {
       /* handled */
     } finally {
@@ -1368,37 +1358,16 @@ export default function ApplicationDetailPage() {
     }
   }
 
-  async function clearNotes() {
+  async function clearNotes(seenNotes: ReviewContextNote[]) {
     if (!canManageNotes) {
       toast.error("You do not have permission to edit notes.");
       return;
     }
-    if (!app || app.notes.length === 0) return;
+    // Only the notes the user saw are deleted; notes added meanwhile are kept.
+    if (!app || seenNotes.length === 0 || isMutatingNotes) return;
     setIsClearingNotes(true);
     try {
-      const res = await apiClient<any>(
-        `/events/${eventId}/applications/${appId}/internal-notes`,
-        {
-          method: "PATCH",
-          body: { internalNotes: null },
-          csrfToken: csrfToken ?? undefined,
-        }
-      );
-      const updated = res?.data ?? res;
-      setApp((prev) =>
-        prev
-          ? {
-              ...prev,
-              notes:
-                updated &&
-                typeof updated === "object" &&
-                "internalNotes" in updated
-                  ? parseInternalNotes(updated.internalNotes)
-                  : [],
-            }
-          : prev
-      );
-      toast.success("All notes cleared");
+      await deleteNotes(seenNotes, "clear");
     } catch {
       /* handled */
     } finally {
@@ -2811,8 +2780,11 @@ export default function ApplicationDetailPage() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={clearNotes}
-                    disabled={!canManageNotes || isClearingNotes}
+                    onClick={() => {
+                      setClearNotesSnapshot(app.notes);
+                      setShowClearNotesConfirm(true);
+                    }}
+                    disabled={!canManageNotes || isMutatingNotes}
                     className="h-7 px-2 text-xs"
                   >
                     {isClearingNotes ? "Clearing..." : "Clear all"}
@@ -2833,12 +2805,24 @@ export default function ApplicationDetailPage() {
                   placeholder="Add a note..."
                   rows={3}
                   className="text-xs"
+                  maxLength={INTERNAL_NOTE_CONTENT_MAX_LENGTH}
+                  aria-label="New internal note"
+                  aria-describedby="internal-note-hint"
                   disabled={!canManageNotes}
                 />
+                <p
+                  id="internal-note-hint"
+                  className="text-xs text-muted-foreground"
+                >
+                  Staff only. Line breaks aren&apos;t kept.{" "}
+                  <span className="tabular-nums">
+                    {newNote.length}/{INTERNAL_NOTE_CONTENT_MAX_LENGTH}
+                  </span>
+                </p>
                 <Button
                   size="sm"
                   onClick={addNote}
-                  disabled={!canManageNotes || isAddingNote || !newNote.trim()}
+                  disabled={!canManageNotes || isMutatingNotes || !newNote.trim()}
                   className="w-full"
                 >
                   {isAddingNote ? (
@@ -2855,19 +2839,25 @@ export default function ApplicationDetailPage() {
                   {app.notes.map((note) => (
                     <div key={note.id} className="text-xs">
                       <div className="flex items-center justify-between mb-1 gap-2">
-                        <span className="font-medium">{note.authorName}</span>
+                        <span className="font-medium">{getNoteAuthorLabel(note)}</span>
                         <div className="flex items-center gap-2">
-                          <span className="text-muted-foreground">
-                            {new Date(note.createdAt).toLocaleDateString("en-GB")}
-                          </span>
+                          {note.createdAt && (
+                            <span className="text-muted-foreground">
+                              {new Date(note.createdAt).toLocaleDateString("en-GB")}
+                            </span>
+                          )}
                           <button
                             type="button"
-                            onClick={() => deleteNote(note.id)}
-                            disabled={!canManageNotes || deletingNoteId === note.id}
-                            className="text-muted-foreground hover:text-destructive transition-colors"
+                            onClick={() => deleteNote(note)}
+                            disabled={!canManageNotes || isMutatingNotes}
+                            className="text-muted-foreground hover:text-destructive transition-colors disabled:pointer-events-none disabled:opacity-50"
                             aria-label="Delete note"
                           >
-                            <Trash2 className="h-3 w-3" />
+                            {deletingNoteId === note.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
                           </button>
                         </div>
                       </div>
@@ -3414,6 +3404,23 @@ export default function ApplicationDetailPage() {
         confirmLabel="Publish"
         onConfirm={publishDecision}
         variant="destructive"
+      />
+
+      <ConfirmDialog
+        open={showClearNotesConfirm}
+        onOpenChange={setShowClearNotesConfirm}
+        title="Clear all internal notes?"
+        description={`This permanently deletes the ${
+          clearNotesSnapshot.length === 1
+            ? "note"
+            : `${clearNotesSnapshot.length} notes`
+        } shown here. Notes other staff added after you loaded this page are kept.`}
+        confirmLabel="Clear notes"
+        variant="destructive"
+        onConfirm={() => {
+          setShowClearNotesConfirm(false);
+          void clearNotes(clearNotesSnapshot);
+        }}
       />
 
       <ConfirmDialog

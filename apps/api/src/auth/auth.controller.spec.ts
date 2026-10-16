@@ -1,15 +1,27 @@
-import { AuthController } from './auth.controller';
-import { BadRequestException } from '@nestjs/common';
+import {
+  AuthController,
+  emailVerificationRequestTracker,
+} from './auth.controller';
+import {
+  BadRequestException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { ThrottlerException, ThrottlerGuard } from '@nestjs/throttler';
+import { RateLimitExceededException } from '../common/exceptions/rate-limit-exceeded.exception';
+import { SafeThrottlerStorage } from '../common/throttling/safe-throttler-storage';
 
 describe('AuthController', () => {
   const makeController = () => {
     const authService = {
       getUserEventRoles: jest.fn(),
       getUserEmailVerificationState: jest.fn(),
+      signup: jest.fn(),
     } as any;
 
     const passwordResetService = {} as any;
     const emailVerificationService = {
+      requestVerification: jest.fn(),
       requestVerificationByEmail: jest.fn(),
       verifyEmail: jest.fn(),
     } as any;
@@ -72,6 +84,181 @@ describe('AuthController', () => {
         }),
       );
       expect(typeof session.authMeCache.fetchedAt).toBe('number');
+    });
+  });
+
+  describe('signup', () => {
+    const body = { email: 'new@example.com', password: 'StrongPass123!' };
+    const pending = {
+      id: 'user-1',
+      email: 'new@example.com',
+      verificationRequired: true,
+      wasExistingUnverified: false,
+    };
+    let warnSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it('reports that the verification email was sent', async () => {
+      const { controller, authService, emailVerificationService } =
+        makeController();
+      authService.signup.mockResolvedValue(pending);
+      emailVerificationService.requestVerification.mockResolvedValue({
+        success: true,
+      });
+
+      await expect(controller.signup(body, {} as any)).resolves.toEqual({
+        ...pending,
+        verificationEmailSent: true,
+      });
+      expect(emailVerificationService.requestVerification).toHaveBeenCalledWith(
+        'user-1',
+      );
+    });
+
+    it('stays successful but says no email was sent when the per-email limit is hit', async () => {
+      const { controller, authService, emailVerificationService } =
+        makeController();
+      authService.signup.mockResolvedValue(pending);
+      emailVerificationService.requestVerification.mockRejectedValue(
+        new RateLimitExceededException('Too many', 1800),
+      );
+
+      await expect(controller.signup(body, {} as any)).resolves.toEqual({
+        ...pending,
+        verificationEmailSent: false,
+        verificationRetryAfterSeconds: 1800,
+      });
+      expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it('says no email was sent when delivery fails', async () => {
+      const { controller, authService, emailVerificationService } =
+        makeController();
+      authService.signup.mockResolvedValue(pending);
+      emailVerificationService.requestVerification.mockRejectedValue(
+        new ServiceUnavailableException('smtp down'),
+      );
+
+      await expect(controller.signup(body, {} as any)).resolves.toEqual({
+        ...pending,
+        verificationEmailSent: false,
+      });
+    });
+
+    it('does not send an email when verification is not required', async () => {
+      const { controller, authService, emailVerificationService } =
+        makeController();
+      authService.signup.mockResolvedValue({
+        ...pending,
+        verificationRequired: false,
+      });
+
+      await expect(controller.signup(body, {} as any)).resolves.toEqual({
+        ...pending,
+        verificationRequired: false,
+        verificationEmailSent: false,
+      });
+      expect(
+        emailVerificationService.requestVerification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('propagates the "Email already in use" error without sending email', async () => {
+      const { controller, authService, emailVerificationService } =
+        makeController();
+      authService.signup.mockRejectedValue(
+        new BadRequestException('Email already in use'),
+      );
+
+      await expect(controller.signup(body, {} as any)).rejects.toThrow(
+        'Email already in use',
+      );
+      expect(
+        emailVerificationService.requestVerification,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('email verification throttling', () => {
+    const handlerOf = (name: keyof AuthController): object =>
+      Reflect.get(AuthController.prototype, name) as object;
+    const read = (key: string, handler: object) =>
+      Reflect.getMetadata(`THROTTLER:${key}default`, handler);
+
+    it('keys the logged-in resend button by session user, not by IP', () => {
+      expect(
+        emailVerificationRequestTracker({
+          ip: '203.0.113.7',
+          session: { user: { id: 'user-a' } },
+        }),
+      ).toBe('user:user-a');
+      expect(
+        emailVerificationRequestTracker({
+          ip: '203.0.113.7',
+          session: { user: { id: 'user-b' } },
+        }),
+      ).toBe('user:user-b');
+      expect(emailVerificationRequestTracker({ ip: '203.0.113.7' })).toBe(
+        'ip:203.0.113.7',
+      );
+    });
+
+    it('allows 10 resend requests per 15 min per user, blocking for the whole window', () => {
+      const handler = handlerOf('requestEmailVerification');
+      expect(read('LIMIT', handler)).toBe(10);
+      expect(read('TTL', handler)).toBe(900000);
+      expect(read('BLOCK_DURATION', handler)).toBe(900000);
+      expect(read('TRACKER', handler)).toBe(emailVerificationRequestTracker);
+    });
+
+    it('gives two users behind the same IP separate budgets', async () => {
+      const storage = new SafeThrottlerStorage();
+      const guard = new ThrottlerGuard(
+        { throttlers: [{ name: 'default', ttl: 60_000, limit: 1000 }], storage },
+        storage,
+        new Reflector(),
+      );
+      await guard.onModuleInit();
+      const contextFor = (userId: string) =>
+        ({
+          getHandler: () => handlerOf('requestEmailVerification'),
+          getClass: () => AuthController,
+          switchToHttp: () => ({
+            getRequest: () => ({
+              ip: '198.51.100.20',
+              headers: {},
+              session: { user: { id: userId } },
+            }),
+            getResponse: () => ({ header: jest.fn() }),
+          }),
+        }) as any;
+
+      for (let i = 0; i < 10; i++) {
+        await expect(guard.canActivate(contextFor('user-a'))).resolves.toBe(
+          true,
+        );
+      }
+      await expect(guard.canActivate(contextFor('user-a'))).rejects.toBeInstanceOf(
+        ThrottlerException,
+      );
+      await expect(guard.canActivate(contextFor('user-b'))).resolves.toBe(true);
+    });
+
+    it('allows 30 verification link clicks per 15 min', () => {
+      for (const handler of [
+        handlerOf('verifyEmail'),
+        handlerOf('verifyEmailAlias'),
+      ]) {
+        expect(read('LIMIT', handler)).toBe(30);
+        expect(read('TTL', handler)).toBe(900000);
+      }
     });
   });
 

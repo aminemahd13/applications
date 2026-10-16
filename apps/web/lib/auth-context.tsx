@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { resolvePublicApiBaseUrl } from "@/lib/public-api-url";
 import { useI18n } from "@/lib/i18n";
 import { resolveHttpErrorMessage } from "@/lib/http-errors";
+import { parseSignupOutcome, type SignupOutcome } from "@/lib/signup-outcome";
 
 /* ---------- Types ---------- */
 
@@ -45,7 +46,8 @@ interface AuthState {
 
 interface AuthContextValue extends AuthState {
   login: (email: string, password: string) => Promise<User | null>;
-  signup: (email: string, password: string) => Promise<boolean>;
+  /** Resolves to the signup outcome, or null when signup failed. */
+  signup: (email: string, password: string) => Promise<SignupOutcome | null>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -176,7 +178,7 @@ export function AuthProvider({
 
   /** Signup */
   const signup = useCallback(
-    async (email: string, password: string): Promise<boolean> => {
+    async (email: string, password: string): Promise<SignupOutcome | null> => {
       try {
         let token = state.csrfToken;
         if (!token) token = await fetchCsrf();
@@ -194,12 +196,12 @@ export function AuthProvider({
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           toast.error(resolveHttpErrorMessage(res.status, err, t("Signup failed")));
-          return false;
+          return null;
         }
-        return true;
+        return parseSignupOutcome(await res.json().catch(() => null));
       } catch {
         toast.error(t("Network error. Please try again."));
-        return false;
+        return null;
       }
     },
     [state.csrfToken, fetchCsrf, t],

@@ -133,6 +133,20 @@ export class RateLimiterService implements OnModuleDestroy {
   }
 
   /**
+   * Seconds until the email verification window for this email resets, or
+   * null when no window is active. Read-only (does not count an attempt).
+   */
+  async getEmailVerificationRetryAfterSeconds(
+    email: string,
+  ): Promise<number | null> {
+    const normalizedEmail = email.toLowerCase().trim();
+    const ttlMs = await this.redis.pttl(
+      `ratelimit:emailverify:${normalizedEmail}`,
+    );
+    return ttlMs > 0 ? Math.ceil(ttlMs / 1000) : null;
+  }
+
+  /**
    * Check login rate limit (email-keyed).
    */
   async checkLoginLimit(email: string): Promise<boolean> {

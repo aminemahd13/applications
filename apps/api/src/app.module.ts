@@ -26,6 +26,7 @@ import { CsrfGuard } from './common/guards/csrf.guard';
 import { EventScopeInterceptor } from './common/interceptors/event-scope.interceptor';
 import { TestSecurityController } from './common/controllers/test-security.controller';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { SafeThrottlerStorage } from './common/throttling/safe-throttler-storage';
 
 const THROTTLE_TTL_MS = Math.max(
   Number(process.env.THROTTLE_TTL_MS ?? 60_000),
@@ -44,13 +45,21 @@ const THROTTLE_LIMIT = Math.max(Number(process.env.THROTTLE_LIMIT ?? 1000), 60);
           req.headers['x-request-id'] ?? crypto.randomUUID(),
       },
     }),
-    ThrottlerModule.forRoot([
-      {
-        name: 'default',
-        ttl: THROTTLE_TTL_MS,
-        limit: THROTTLE_LIMIT,
-      },
-    ]),
+    ThrottlerModule.forRootAsync({
+      // Factory so each application instance gets its own hit counts.
+      useFactory: () => ({
+        throttlers: [
+          {
+            name: 'default',
+            ttl: THROTTLE_TTL_MS,
+            limit: THROTTLE_LIMIT,
+          },
+        ],
+        // The library's default in-memory storage stops decaying hit counts
+        // once any client's block expires (see SafeThrottlerStorage).
+        storage: new SafeThrottlerStorage(),
+      }),
+    }),
     LoggerModule,
     PrismaModule,
     EmailModule,

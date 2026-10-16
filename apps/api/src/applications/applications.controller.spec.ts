@@ -1,8 +1,21 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  GoneException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ApplicationsController } from './applications.controller';
 import { ZodError } from 'zod';
 import { Permission } from '@event-platform/shared';
 import { PERMISSIONS_KEY } from '../common/decorators/require-permission.decorator';
+
+/** @RequirePermission metadata of a handler, looked up by name. */
+function permissionsOf(name: string): unknown {
+  const handler = Object.getOwnPropertyDescriptor(
+    ApplicationsController.prototype,
+    name,
+  )?.value as object;
+  return Reflect.getMetadata(PERMISSIONS_KEY, handler);
+}
 
 describe('ApplicationsController applicant step visibility', () => {
   function createController(stepIds: string[]) {
@@ -572,7 +585,6 @@ describe('ApplicationsController append internal note', () => {
   function createController() {
     const applicationsService = {
       appendInternalNote: jest.fn().mockResolvedValue(notesResponse),
-      updateInternalNotes: jest.fn(),
     };
 
     const controller = new ApplicationsController(
@@ -587,11 +599,9 @@ describe('ApplicationsController append internal note', () => {
   }
 
   it('requires event.application.notes.manage permission metadata', () => {
-    const permissions = Reflect.getMetadata(
-      PERMISSIONS_KEY,
-      ApplicationsController.prototype.appendInternalNote,
-    );
-    expect(permissions).toEqual([Permission.EVENT_APPLICATION_NOTES_MANAGE]);
+    expect(permissionsOf('appendInternalNote')).toEqual([
+      Permission.EVENT_APPLICATION_NOTES_MANAGE,
+    ]);
   });
 
   it('delegates trimmed content to the service and wraps the result in data', async () => {
@@ -608,7 +618,6 @@ describe('ApplicationsController append internal note', () => {
       APPLICATION_ID,
       'Looks good',
     );
-    expect(applicationsService.updateInternalNotes).not.toHaveBeenCalled();
   });
 
   it('accepts content at the 2000 character limit', async () => {
@@ -650,5 +659,149 @@ describe('ApplicationsController append internal note', () => {
       }),
     ).rejects.toBeInstanceOf(ZodError);
     expect(applicationsService.appendInternalNote).not.toHaveBeenCalled();
+  });
+});
+
+describe('ApplicationsController delete internal notes', () => {
+  const APPLICATION_ID = '37a2125b-fdd0-42e2-a273-89d2f8010e4c';
+  const noteRef = {
+    id: 'note-0',
+    createdAt: '2026-10-15T09:30:00.000Z',
+    authorName: 'Ada Lovelace',
+    content: 'Looks good',
+  };
+  const legacyRef = {
+    id: 'note-1',
+    createdAt: null,
+    authorName: null,
+    content: 'Legacy unprefixed note',
+  };
+  const deleteResponse = { notes: [], removed: 2, missing: 0 };
+
+  function createController() {
+    const applicationsService = {
+      deleteInternalNotes: jest.fn().mockResolvedValue(deleteResponse),
+    };
+
+    const controller = new ApplicationsController(
+      applicationsService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    return { controller, applicationsService };
+  }
+
+  it('requires event.application.notes.manage permission metadata', () => {
+    expect(permissionsOf('deleteInternalNotes')).toEqual([
+      Permission.EVENT_APPLICATION_NOTES_MANAGE,
+    ]);
+  });
+
+  it('passes the parsed note refs to the service and wraps the result in data', async () => {
+    const { controller, applicationsService } = createController();
+
+    await expect(
+      controller.deleteInternalNotes('event-1', APPLICATION_ID, {
+        notes: [noteRef, legacyRef],
+      }),
+    ).resolves.toEqual({ data: deleteResponse });
+
+    expect(applicationsService.deleteInternalNotes).toHaveBeenCalledWith(
+      'event-1',
+      APPLICATION_ID,
+      [noteRef, legacyRef],
+    );
+  });
+
+  it('accepts the maximum number of refs', async () => {
+    const { controller, applicationsService } = createController();
+    const notes = Array.from({ length: 1000 }, (_, index) => ({
+      ...noteRef,
+      id: `note-${index}`,
+    }));
+
+    await controller.deleteInternalNotes('event-1', APPLICATION_ID, { notes });
+
+    expect(applicationsService.deleteInternalNotes).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['an empty notes array', { notes: [] }],
+    [
+      'more than 1000 refs',
+      {
+        notes: Array.from({ length: 1001 }, (_, index) => ({
+          ...noteRef,
+          id: `note-${index}`,
+        })),
+      },
+    ],
+    ['a bad id format', { notes: [{ ...noteRef, id: 'legacy-0' }] }],
+    ['extra keys on a ref', { notes: [{ ...noteRef, extra: true }] }],
+    ['extra keys on the body', { notes: [noteRef], eventId: 'event-2' }],
+    [
+      'a missing content',
+      { notes: [{ id: 'note-0', createdAt: null, authorName: null }] },
+    ],
+    [
+      'a missing createdAt',
+      { notes: [{ id: 'note-0', authorName: null, content: 'x' }] },
+    ],
+    ['a missing notes key', {}],
+    ['a null body', null],
+  ])('rejects %s', async (_label, body) => {
+    const { controller, applicationsService } = createController();
+
+    await expect(
+      controller.deleteInternalNotes('event-1', APPLICATION_ID, body),
+    ).rejects.toBeInstanceOf(ZodError);
+    expect(applicationsService.deleteInternalNotes).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-uuid application id before calling the service', async () => {
+    const { controller, applicationsService } = createController();
+
+    await expect(
+      controller.deleteInternalNotes('event-1', 'not-a-uuid', {
+        notes: [noteRef],
+      }),
+    ).rejects.toBeInstanceOf(ZodError);
+    expect(applicationsService.deleteInternalNotes).not.toHaveBeenCalled();
+  });
+});
+
+describe('ApplicationsController retired internal-notes replace', () => {
+  it('keeps the notes-manage permission metadata on the route', () => {
+    expect(permissionsOf('updateInternalNotes')).toEqual([
+      Permission.EVENT_APPLICATION_NOTES_MANAGE,
+    ]);
+  });
+
+  it('throws 410 INTERNAL_NOTES_REPLACE_DISABLED without touching the service', () => {
+    const applicationsService = {};
+    const controller = new ApplicationsController(
+      applicationsService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    let error: unknown;
+    try {
+      controller.updateInternalNotes();
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(GoneException);
+    expect((error as GoneException).getStatus()).toBe(410);
+    expect((error as GoneException).getResponse()).toEqual({
+      code: 'INTERNAL_NOTES_REPLACE_DISABLED',
+      message: 'This page is out of date. Reload it to add or delete notes.',
+    });
   });
 });

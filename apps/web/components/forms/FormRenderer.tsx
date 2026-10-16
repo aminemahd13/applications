@@ -28,6 +28,7 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { PhoneInput } from '../ui/phone-input';
 import { Textarea } from '../ui/textarea';
+import { formatUploadLimitMB, resolveUploadSizeLimit } from '@/lib/file-upload-policy';
 
 type FormValues = Record<string, unknown>;
 
@@ -307,7 +308,7 @@ export function FormRenderer({
                           </p>
                           <p className="text-muted-foreground mt-1 text-xs">
                             Configure limits below:
-                            {` max ${typeof field.ui?.maxFileSizeMB === 'number' ? field.ui.maxFileSizeMB : 50} MB`}
+                            {` max ${formatUploadLimitMB(resolveUploadSizeLimit(field.ui?.maxFileSizeMB))} MB`}
                             {typeof field.ui?.maxFiles === 'number'
                               ? `, up to ${field.ui.maxFiles} file${field.ui.maxFiles === 1 ? '' : 's'}`
                               : ''}

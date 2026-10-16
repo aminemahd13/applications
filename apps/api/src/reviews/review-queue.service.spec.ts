@@ -89,6 +89,9 @@ describe('ReviewQueueService', () => {
           .fn()
           .mockResolvedValue([{ id: 'form-version-1', schema: { fields: [] } }]),
       },
+      admin_change_patches: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       review_queue_saved_views: {
         findMany: jest.fn(),
       },
@@ -201,6 +204,153 @@ describe('ReviewQueueService', () => {
       assignedReviewerId: 'reviewer-77',
       assignedReviewerEmail: 'reviewer@example.com',
       assignedReviewerName: 'Reviewer Name',
+    });
+  });
+
+  describe('effective answers', () => {
+    const FILE_ORIGINAL = '11111111-1111-4111-8111-111111111111';
+    const FILE_REPLACEMENT = '22222222-2222-4222-8222-222222222222';
+
+    function withSnapshot(
+      item: ReturnType<typeof buildQueueItem>,
+      answersSnapshot: unknown,
+    ) {
+      return {
+        ...item,
+        step_submission_versions: {
+          ...item.step_submission_versions,
+          answers_snapshot: answersSnapshot,
+        },
+      };
+    }
+
+    it('returns normalized + patched answers with edited fields', async () => {
+      mockPrisma.review_queue_items.findMany.mockResolvedValueOnce([
+        withSnapshot(buildQueueItem(), {
+          data: {
+            name: 'Ada',
+            resume: { fileObjectId: FILE_ORIGINAL, originalFilename: 'cv.pdf' },
+            school: 'Lycee',
+          },
+        }),
+      ]);
+      mockPrisma.admin_change_patches.findMany.mockResolvedValueOnce([
+        {
+          submission_version_id: 'version-1',
+          ops: [
+            {
+              op: 'replace',
+              path: '/resume',
+              value: { fileObjectId: FILE_REPLACEMENT, originalFilename: 'new.pdf' },
+            },
+          ],
+        },
+        {
+          submission_version_id: 'version-1',
+          ops: [
+            { op: 'add', path: '/city', value: 'Fes' },
+            { op: 'remove', path: '/school' },
+          ],
+        },
+      ]);
+
+      const result = await service.getQueue('event-1', { limit: 20 } as any);
+
+      expect(result.data[0].answers).toEqual({
+        name: 'Ada',
+        resume: { fileObjectId: FILE_REPLACEMENT, originalFilename: 'new.pdf' },
+        city: 'Fes',
+      });
+      expect(result.data[0].editedFields).toEqual([
+        {
+          key: 'resume',
+          originalValue: { fileObjectId: FILE_ORIGINAL, originalFilename: 'cv.pdf' },
+        },
+        { key: 'city' },
+        { key: 'school', originalValue: 'Lycee' },
+      ]);
+    });
+
+    it('returns editedFields: [] and the unwrapped snapshot when nothing was patched', async () => {
+      mockPrisma.review_queue_items.findMany.mockResolvedValueOnce([
+        withSnapshot(buildQueueItem(), { data: { name: 'Ada' } }),
+      ]);
+
+      const result = await service.getQueue('event-1', { limit: 20 } as any);
+
+      expect(result.data[0].answers).toEqual({ name: 'Ada' });
+      expect(result.data[0].editedFields).toEqual([]);
+    });
+
+    it('queries active patches once, only for the visible page, oldest first', async () => {
+      mockPrisma.review_queue_items.findMany.mockResolvedValueOnce([
+        buildQueueItem({
+          id: 'queue-1',
+          submissionVersionId: 'version-1',
+          updatedAt: '2026-03-09T10:00:00.000Z',
+        }),
+        buildQueueItem({
+          id: 'queue-2',
+          submissionVersionId: 'version-2',
+          updatedAt: '2026-03-09T09:00:00.000Z',
+        }),
+      ]);
+      mockPrisma.admin_change_patches.findMany.mockResolvedValueOnce([
+        {
+          submission_version_id: 'version-1',
+          ops: [{ op: 'replace', path: '/answer', value: 'patched' }],
+        },
+      ]);
+
+      const result = await service.getQueue('event-1', { limit: 1 } as any);
+
+      expect(result.data).toHaveLength(1);
+      expect(result.meta.hasMore).toBe(true);
+      expect(mockPrisma.admin_change_patches.findMany).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.admin_change_patches.findMany).toHaveBeenCalledWith({
+        where: {
+          submission_version_id: { in: ['version-1'] },
+          is_active: true,
+        },
+        select: { submission_version_id: true, ops: true },
+        orderBy: { created_at: 'asc' },
+      });
+      expect(result.data[0].answers).toEqual({ answer: 'patched' });
+      expect(result.data[0].editedFields).toEqual([
+        { key: 'answer', originalValue: 'value' },
+      ]);
+    });
+
+    it('does not apply one version\'s patches to another item', async () => {
+      mockPrisma.review_queue_items.findMany.mockResolvedValueOnce([
+        buildQueueItem({ id: 'queue-1', submissionVersionId: 'version-1' }),
+        buildQueueItem({ id: 'queue-2', submissionVersionId: 'version-2' }),
+      ]);
+      mockPrisma.admin_change_patches.findMany.mockResolvedValueOnce([
+        {
+          submission_version_id: 'version-2',
+          ops: [{ op: 'remove', path: '/answer' }],
+        },
+      ]);
+
+      const result = await service.getQueue('event-1', { limit: 20 } as any);
+
+      expect(result.data.map((item) => item.answers)).toEqual([
+        { answer: 'value' },
+        {},
+      ]);
+      expect(result.data[1].editedFields).toEqual([
+        { key: 'answer', originalValue: 'value' },
+      ]);
+    });
+
+    it('skips the patch query when the page is empty', async () => {
+      mockPrisma.review_queue_items.findMany.mockResolvedValueOnce([]);
+
+      const result = await service.getQueue('event-1', { limit: 20 } as any);
+
+      expect(result.data).toEqual([]);
+      expect(mockPrisma.admin_change_patches.findMany).not.toHaveBeenCalled();
     });
   });
 

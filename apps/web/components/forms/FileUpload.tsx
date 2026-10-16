@@ -1,8 +1,19 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { apiClient } from '../../lib/api';
 import { useAuth } from '../../lib/auth-context';
+import {
+    describeFailedUploads,
+    fileTooLargeMessage,
+    formatUploadLimitMB,
+    isFileTooLarge,
+    mergeUploadedFiles,
+    putFileToStorage,
+    resolveUploadSizeLimit,
+    uploadOneFile,
+    type FailedUpload,
+} from '../../lib/file-upload-policy';
 
 export interface FileUploadValue {
     fileObjectId: string;
@@ -24,6 +35,8 @@ interface FileUploadProps {
     multiple?: boolean;
     maxFiles?: number;
     maxFileSizeMB?: number;
+    /** Called with true when an upload starts and false when it ends (or this unmounts mid-upload). */
+    onUploadingChange?: (isUploading: boolean) => void;
 }
 
 function normalizeValue(value?: FileUploadSelection): FileUploadValue[] {
@@ -65,74 +78,6 @@ function summarizeMessages(messages: string[]): string {
     return `${messages.slice(0, 2).join(' ')} (+${messages.length - 2} more)`;
 }
 
-/**
- * PUT a file straight to storage (presigned URL) with REAL upload progress and
- * a stall watchdog.
- *
- * `fetch` cannot report upload progress, so the previous implementation left the
- * bar frozen at a hardcoded percentage for the whole transfer — a 10 MB file
- * looked "stuck at 30%" even while uploading fine. XHR exposes
- * `upload.onprogress`. If no bytes move for `stallMs`, the request is aborted so
- * a genuinely stuck upload surfaces an error instead of hanging forever.
- */
-function putFileWithProgress(
-    url: string,
-    file: File,
-    contentType: string,
-    onProgress: (loaded: number, total: number) => void,
-    stallMs = 30000,
-): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        let stallTimer: ReturnType<typeof setTimeout> | undefined;
-        const clearStall = () => {
-            if (stallTimer) clearTimeout(stallTimer);
-        };
-        const armStall = () => {
-            clearStall();
-            stallTimer = setTimeout(() => {
-                xhr.abort();
-                reject(
-                    new Error(
-                        'Upload stalled — no data was sent for a while. Check your connection and try again.',
-                    ),
-                );
-            }, stallMs);
-        };
-
-        xhr.open('PUT', url);
-        xhr.setRequestHeader('Content-Type', contentType);
-        xhr.upload.onloadstart = armStall;
-        xhr.upload.onprogress = (e) => {
-            armStall();
-            if (e.lengthComputable) onProgress(e.loaded, e.total);
-        };
-        // Once the body is fully sent, stop the upload-stall watchdog: it only
-        // guards the transfer of bytes. Otherwise the timer would keep counting
-        // while we wait for the server's response and could falsely abort a
-        // successful upload when MinIO is slow to acknowledge under load.
-        xhr.upload.onload = clearStall;
-        xhr.onload = () => {
-            clearStall();
-            if (xhr.status >= 200 && xhr.status < 300) {
-                resolve();
-            } else {
-                reject(new Error(`Upload to storage failed (${xhr.status}).`));
-            }
-        };
-        xhr.onerror = () => {
-            clearStall();
-            reject(
-                new Error(
-                    'Network error during upload. Check your connection and try again.',
-                ),
-            );
-        };
-        xhr.onabort = clearStall;
-        xhr.send(file);
-    });
-}
-
 export function FileUpload({
     value,
     onChange,
@@ -145,17 +90,21 @@ export function FileUpload({
     multiple,
     maxFiles,
     maxFileSizeMB,
+    onUploadingChange,
 }: FileUploadProps) {
     const [uploading, setUploading] = useState(false);
     const [progress, setProgress] = useState(0);
     const [error, setError] = useState<string | null>(null);
     const { csrfToken } = useAuth();
+    const abortRef = useRef<AbortController | null>(null);
+    const mountedRef = useRef(true);
+    const onUploadingChangeRef = useRef(onUploadingChange);
+    // Latest field value, so a finished upload merges into what the field holds
+    // now rather than the snapshot taken when the upload started.
+    const valueRef = useRef(value);
     const acceptTokens = parseAcceptTokens(accept);
-    const effectiveMaxFileSizeMB =
-        typeof maxFileSizeMB === 'number' && Number.isFinite(maxFileSizeMB) && maxFileSizeMB > 0
-            ? maxFileSizeMB
-            : 50;
-    const effectiveMaxFileSizeBytes = Math.floor(effectiveMaxFileSizeMB * 1024 * 1024);
+    // 10 MB cap; a smaller field max wins.
+    const sizeLimit = resolveUploadSizeLimit(maxFileSizeMB);
     const hasUploadContext =
         typeof applicationId === 'string' &&
         applicationId.length > 0 &&
@@ -163,6 +112,42 @@ export function FileUpload({
         stepId.length > 0 &&
         typeof fieldId === 'string' &&
         fieldId.length > 0;
+
+    useEffect(() => {
+        onUploadingChangeRef.current = onUploadingChange;
+        valueRef.current = value;
+    });
+
+    // Leaving the page (or hiding the field) mid-upload cancels it.
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+            abortRef.current?.abort();
+        };
+    }, []);
+
+    // Tell the parent an upload is running; the cleanup also runs on unmount.
+    useEffect(() => {
+        if (!uploading) return;
+        onUploadingChangeRef.current?.(true);
+        return () => onUploadingChangeRef.current?.(false);
+    }, [uploading]);
+
+    // Warn before closing or reloading the tab mid-upload.
+    useEffect(() => {
+        if (!uploading) return;
+        const handler = (event: BeforeUnloadEvent) => {
+            event.preventDefault();
+            event.returnValue = '';
+        };
+        window.addEventListener('beforeunload', handler);
+        return () => window.removeEventListener('beforeunload', handler);
+    }, [uploading]);
+
+    const handleCancel = () => {
+        abortRef.current?.abort();
+    };
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files ?? []);
@@ -188,9 +173,11 @@ export function FileUpload({
         const acceptedFiles: File[] = [];
         const validationMessages: string[] = [];
         for (const file of filesToUpload) {
-            if (file.size > effectiveMaxFileSizeBytes) {
+            // Checked before registering: an oversized file never hits the network.
+            if (isFileTooLarge(file.size, sizeLimit)) {
+                const tooLarge = fileTooLargeMessage(sizeLimit);
                 validationMessages.push(
-                    `${file.name} exceeds ${effectiveMaxFileSizeMB} MB.`,
+                    filesToUpload.length > 1 ? `${file.name}: ${tooLarge}` : tooLarge,
                 );
                 continue;
             }
@@ -216,87 +203,122 @@ export function FileUpload({
             return;
         }
 
+        const input = e.target;
+        const controller = new AbortController();
+        const { signal } = controller;
+        abortRef.current = controller;
         setUploading(true);
         setError(
             validationMessages.length > 0 ? summarizeMessages(validationMessages) : null,
         );
         setProgress(10);
 
-        try {
-            const uploaded: FileUploadValue[] = [];
+        // Each file is independent: one failure must not discard files of the
+        // same batch that already committed.
+        const uploaded: FileUploadValue[] = [];
+        const failures: FailedUpload[] = [];
 
+        try {
             for (let fileIndex = 0; fileIndex < acceptedFiles.length; fileIndex++) {
+                if (signal.aborted) break;
                 const file = acceptedFiles[fileIndex];
                 const fileMimeType = file.type || 'application/octet-stream';
-                // 1. Register upload (reserve a storage key + presigned PUT URL).
-                const { uploadUrl, id } = await apiClient<{ uploadUrl: string; id: string; storageKey: string }>(
-                    `/events/${eventId}/uploads`,
-                    {
-                        method: 'POST',
-                        body: {
-                            originalFilename: file.name,
-                            mimeType: fileMimeType,
-                            sizeBytes: file.size,
-                            applicationId,
-                            stepId,
-                            fieldId,
-                            sensitivity: 'normal',
+                try {
+                    const id = await uploadOneFile({
+                        // 1. Register upload (reserve a storage key + presigned PUT URL).
+                        // Never retried: each call creates a STAGED row.
+                        register: () =>
+                            apiClient<{ uploadUrl: string; id: string; storageKey: string }>(
+                                `/events/${eventId}/uploads`,
+                                {
+                                    method: 'POST',
+                                    body: {
+                                        originalFilename: file.name,
+                                        mimeType: fileMimeType,
+                                        sizeBytes: file.size,
+                                        applicationId,
+                                        stepId,
+                                        fieldId,
+                                        sensitivity: 'normal',
+                                    },
+                                    csrfToken: csrfToken ?? undefined,
+                                    signal,
+                                },
+                            ),
+                        // 2. Upload straight to storage with real byte-level
+                        // progress; retried on the same presigned URL.
+                        put: (uploadUrl) =>
+                            putFileToStorage(uploadUrl, file, fileMimeType, {
+                                signal,
+                                onProgress: (loaded, totalBytes) => {
+                                    const fraction = totalBytes > 0 ? loaded / totalBytes : 0;
+                                    const overall = (fileIndex + fraction) / acceptedFiles.length;
+                                    // Cap at 98% so the commit step can take it to 100%.
+                                    setProgress(Math.max(5, Math.min(98, Math.round(overall * 100))));
+                                },
+                            }),
+                        // 3. Commit upload (promote STAGED -> ready); idempotent.
+                        // Silent: a failed attempt may be retried; a final failure
+                        // is shown inline below instead of a toast per attempt.
+                        commit: (fileObjectId) =>
+                            apiClient(`/events/${eventId}/uploads/${fileObjectId}/commit`, {
+                                silent: true,
+                                method: 'POST',
+                                body: {
+                                    applicationId,
+                                    stepId,
+                                    fieldId,
+                                },
+                                csrfToken: csrfToken ?? undefined,
+                                signal,
+                            }),
+                        signal,
+                        onRetry: (stage, { attempt, delayMs, error: retryError }) => {
+                            console.warn(
+                                `[FileUpload] ${stage} attempt ${attempt} failed; retrying in ${delayMs} ms`,
+                                retryError,
+                            );
                         },
-                        csrfToken: csrfToken ?? undefined,
-                    },
-                );
-
-                // 2. Upload straight to storage with real byte-level progress so
-                // the bar tracks the actual transfer (no more frozen 30%), and a
-                // stall watchdog so a stuck upload fails fast with a clear message.
-                await putFileWithProgress(
-                    uploadUrl,
-                    file,
-                    fileMimeType,
-                    (loaded, totalBytes) => {
-                        const fraction = totalBytes > 0 ? loaded / totalBytes : 0;
-                        const overall = (fileIndex + fraction) / acceptedFiles.length;
-                        // Cap at 98% so the commit step below can take it to 100%.
-                        setProgress(Math.max(5, Math.min(98, Math.round(overall * 100))));
-                    },
-                );
-
-                // 3. Commit upload (promote STAGED -> ready).
-                await apiClient(`/events/${eventId}/uploads/${id}/commit`, {
-                    method: 'POST',
-                    body: {
-                        applicationId,
-                        stepId,
-                        fieldId,
-                    },
-                    csrfToken: csrfToken ?? undefined,
-                });
-
-                uploaded.push({
-                    fileObjectId: id,
-                    originalFilename: file.name,
-                    sizeBytes: file.size,
-                });
+                    });
+                    uploaded.push({
+                        fileObjectId: id,
+                        originalFilename: file.name,
+                        sizeBytes: file.size,
+                    });
+                } catch (err: unknown) {
+                    // Cancelled: stop quietly, keeping what already committed.
+                    if (signal.aborted) break;
+                    console.error(err);
+                    failures.push({
+                        fileName: file.name,
+                        message: err instanceof Error ? err.message : undefined,
+                    });
+                }
             }
-
-            setProgress(100);
-
-            const next = [...existing, ...uploaded];
-            const output =
-                multiple || (typeof limit === 'number' ? limit > 1 : false)
-                    ? next
-                    : next[0] ?? null;
-
-            onChange(output);
-            if (validationMessages.length > 0) {
-                setError(summarizeMessages(validationMessages));
-            }
-        } catch (err: unknown) {
-            console.error(err);
-            setError(err instanceof Error ? err.message : 'Upload failed');
         } finally {
-            setUploading(false);
-            e.target.value = '';
+            if (abortRef.current === controller) abortRef.current = null;
+            if (mountedRef.current) {
+                setUploading(false);
+                input.value = '';
+                const failureMessage = describeFailedUploads(failures);
+                const messages = failureMessage
+                    ? [failureMessage, ...validationMessages]
+                    : validationMessages;
+                setError(messages.length > 0 ? summarizeMessages(messages) : null);
+                if (uploaded.length > 0) {
+                    setProgress(100);
+                    const next = mergeUploadedFiles(
+                        normalizeValue(valueRef.current),
+                        uploaded,
+                        limit,
+                    );
+                    onChange(
+                        multiple || (typeof limit === 'number' ? limit > 1 : false)
+                            ? next
+                            : next[0] ?? null,
+                    );
+                }
+            }
         }
     };
 
@@ -322,6 +344,9 @@ export function FileUpload({
                             {!readOnly && (
                                 <button
                                     type="button"
+                                    // Not while uploading: the finished batch is merged
+                                    // into the field value and could otherwise race it.
+                                    disabled={uploading}
                                     onClick={() => {
                                         const next = current.filter((f) => f.fileObjectId !== file.fileObjectId);
                                         onChange(
@@ -330,7 +355,7 @@ export function FileUpload({
                                                 : next[0] ?? null,
                                         );
                                     }}
-                                    className="text-destructive hover:text-destructive/80 text-xs underline underline-offset-2"
+                                    className="text-destructive hover:text-destructive/80 text-xs underline underline-offset-2 disabled:pointer-events-none disabled:opacity-50"
                                 >
                                     Remove
                                 </button>
@@ -352,7 +377,7 @@ export function FileUpload({
                     />
                     <p className="text-muted-foreground mt-2 text-xs">
                         {[
-                            `Max ${effectiveMaxFileSizeMB} MB per file`,
+                            `Max ${formatUploadLimitMB(sizeLimit)} MB per file`,
                             typeof limit === 'number'
                                 ? `Up to ${limit} file${limit === 1 ? '' : 's'}`
                                 : null,
@@ -366,7 +391,18 @@ export function FileUpload({
                             )
                             .join(' | ')}
                     </p>
-                    {uploading && <p className="text-primary mt-2 text-xs">Uploading... {progress}%</p>}
+                    {uploading && (
+                        <div className="mt-2 flex items-center gap-3">
+                            <p className="text-primary text-xs">Uploading... {progress}%</p>
+                            <button
+                                type="button"
+                                onClick={handleCancel}
+                                className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    )}
                     {!hasUploadContext && (
                         <p className="text-muted-foreground mt-2 text-xs">
                             Upload unavailable until application step context is loaded.

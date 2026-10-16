@@ -17,6 +17,7 @@ import {
   passwordNeedsRehash,
   verifyPassword,
 } from '../common/security/password.util';
+import { parseDateOnlyStrict } from '../common/utils/date-only.util';
 import * as crypto from 'crypto';
 
 interface UpdateProfileDto {
@@ -55,6 +56,23 @@ const LOGIN_RATE_LIMIT_MESSAGE =
   'Too many login attempts. Please wait before trying again.';
 const SIGNUP_RATE_LIMIT_MESSAGE =
   'Too many signup attempts. Please wait before trying again.';
+const DATE_OF_BIRTH_ERROR_MESSAGE =
+  'Date of birth must be a valid date between 1900-01-01 and today.';
+const DATE_OF_BIRTH_MIN_MS = Date.UTC(1900, 0, 1);
+const MAX_UTC_OFFSET_MS = 14 * 60 * 60 * 1000;
+
+/**
+ * Today's date (UTC midnight) in the time zone furthest ahead (UTC+14), so a
+ * user anywhere can enter their own local "today" without it being in the future.
+ */
+function latestCalendarDateUtcMs(now: Date): number {
+  const ahead = new Date(now.getTime() + MAX_UTC_OFFSET_MS);
+  return Date.UTC(
+    ahead.getUTCFullYear(),
+    ahead.getUTCMonth(),
+    ahead.getUTCDate(),
+  );
+}
 
 @Injectable()
 export class AuthService {
@@ -164,22 +182,10 @@ export class AuthService {
       where: { email: normalizedEmail },
     });
     if (existing) {
-      const isUnverified = !existing.email_verified_at;
-      if (isUnverified && security.emailVerificationRequired) {
-        // Keep signup idempotent for pending-verification accounts.
-        await this.prisma.applicant_profiles.upsert({
-          where: { user_id: existing.id },
-          update: {},
-          create: { user_id: existing.id },
-        });
-        return {
-          id: existing.id,
-          email: existing.email,
-          verificationRequired: security.emailVerificationRequired,
-          wasExistingUnverified: true,
-        };
-      }
-
+      // Same answer for every existing account, verified or not: no email is
+      // sent, nothing is changed and the password is not checked (signup must
+      // not become a password oracle or reveal verification status by timing).
+      // Unverified owners can log in and request a new verification email.
       throw new BadRequestException('Email already in use');
     }
 
@@ -420,6 +426,27 @@ export class AuthService {
     };
   }
 
+  /**
+   * undefined/null/blank → undefined (field left unchanged, as before).
+   * Anything else must be a real "YYYY-MM-DD" date from 1900-01-01 to today;
+   * otherwise 400 instead of letting Prisma reject it with a 500.
+   */
+  private parseDateOfBirthInput(value: unknown): Date | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value === 'string' && value.trim() === '') return undefined;
+
+    const parsed =
+      typeof value === 'string' ? parseDateOnlyStrict(value.trim()) : null;
+    if (
+      !parsed ||
+      parsed.getTime() < DATE_OF_BIRTH_MIN_MS ||
+      parsed.getTime() > latestCalendarDateUtcMs(new Date())
+    ) {
+      throw new BadRequestException(DATE_OF_BIRTH_ERROR_MESSAGE);
+    }
+    return parsed;
+  }
+
   async updateMyProfile(userId: string, dto: UpdateProfileDto) {
     const cleanLinks = Array.isArray(dto.links)
       ? dto.links
@@ -428,8 +455,7 @@ export class AuthService {
           .slice(0, 10)
       : [];
 
-    const parsedDob = dto.dateOfBirth ? new Date(dto.dateOfBirth) : undefined;
-    const dateOfBirth = parsedDob && !Number.isNaN(parsedDob.getTime()) ? parsedDob : undefined;
+    const dateOfBirth = this.parseDateOfBirthInput(dto.dateOfBirth);
 
     // Compute full_name from firstName/lastName for backward compatibility
     const computedFullName = dto.firstName !== undefined || dto.lastName !== undefined

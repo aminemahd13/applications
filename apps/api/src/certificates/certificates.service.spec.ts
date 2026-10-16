@@ -50,6 +50,8 @@ function createServiceHarness() {
   };
   const storageService = {
     getPresignedGetUrl: jest.fn(),
+    getPresignedGetUrlWithResponseHeaders: jest.fn(),
+    getPresignedPutUrl: jest.fn(),
     getHeadObject: jest.fn(),
     getObjectBuffer: jest.fn(),
     putObjectBuffer: jest.fn(),
@@ -361,8 +363,12 @@ describe('CertificatesService public resolvers', () => {
     const storageKey =
       'events/event-1/certificates/assets/background/background.png';
 
-    prisma.file_objects.findFirst.mockResolvedValue({ id: 'asset-1' });
-    storageService.getPresignedGetUrl.mockResolvedValue(
+    prisma.file_objects.findFirst.mockResolvedValue({
+      id: 'asset-1',
+      mime_type: 'image/png',
+      original_filename: 'background.png',
+    });
+    storageService.getPresignedGetUrlWithResponseHeaders.mockResolvedValue(
       'https://storage.example.com/signed-asset',
     );
 
@@ -375,13 +381,68 @@ describe('CertificatesService public resolvers', () => {
       },
       select: {
         id: true,
+        mime_type: true,
+        original_filename: true,
       },
     });
-    expect(storageService.getPresignedGetUrl).toHaveBeenCalledWith(
+    expect(
+      storageService.getPresignedGetUrlWithResponseHeaders,
+    ).toHaveBeenCalledWith(
       storageKey,
+      {
+        contentType: 'image/png',
+        contentDisposition: `inline; filename="background.png"; filename*=UTF-8''background.png`,
+        cacheControl: 'public, max-age=3600',
+      },
       3600,
     );
+    expect(storageService.getPresignedGetUrl).not.toHaveBeenCalled();
     expect(result).toBe('https://storage.example.com/signed-asset');
+  });
+
+  it('serves SVG certificate assets with their type but as an attachment', async () => {
+    const { service, prisma, storageService } = createServiceHarness();
+    const storageKey = 'events/event-1/certificates/assets/logo/logo.svg';
+
+    prisma.file_objects.findFirst.mockResolvedValue({
+      id: 'asset-2',
+      mime_type: 'image/svg+xml',
+      original_filename: 'logo.svg',
+    });
+    storageService.getPresignedGetUrlWithResponseHeaders.mockResolvedValue(
+      'https://storage.example.com/signed-svg',
+    );
+
+    await service.resolveCertificateAssetUrl(storageKey);
+
+    const [, headers] =
+      storageService.getPresignedGetUrlWithResponseHeaders.mock.calls[0];
+    expect(headers).toEqual({
+      contentType: 'image/svg+xml',
+      contentDisposition: `attachment; filename="logo.svg"; filename*=UTF-8''logo.svg`,
+      cacheControl: 'public, max-age=3600',
+    });
+  });
+
+  it('serves legacy HTML certificate assets as octet-stream attachments', async () => {
+    const { service, prisma, storageService } = createServiceHarness();
+    const storageKey = 'events/event-1/certificates/assets/image/page.html';
+
+    prisma.file_objects.findFirst.mockResolvedValue({
+      id: 'asset-3',
+      mime_type: 'text/html',
+      original_filename: 'page.html',
+    });
+    storageService.getPresignedGetUrlWithResponseHeaders.mockResolvedValue(
+      'https://storage.example.com/signed-html',
+    );
+
+    await service.resolveCertificateAssetUrl(storageKey);
+
+    const [, headers] =
+      storageService.getPresignedGetUrlWithResponseHeaders.mock.calls[0];
+    expect(headers.contentType).toBe('application/octet-stream');
+    expect(headers.contentDisposition.startsWith('attachment;')).toBe(true);
   });
 
   it('throws 404 for certificate asset keys outside certificate scope', async () => {
@@ -1676,6 +1737,125 @@ describe('CertificatesService font asset upload validation', () => {
     expect(prisma.file_objects.delete).toHaveBeenCalledWith({
       where: { id: 'file-3' },
     });
+  });
+});
+
+describe('CertificatesService asset upload type validation', () => {
+  function registerAsset(
+    service: CertificatesService,
+    kind: 'background' | 'signature' | 'logo' | 'image' | 'font',
+    mimeType: string,
+  ) {
+    return service.registerAssetUpload('event-1', {
+      originalFilename: 'asset.bin',
+      mimeType,
+      sizeBytes: 1024,
+      kind,
+    });
+  }
+
+  it.each([
+    'image/png',
+    'image/jpeg',
+    'image/jpg',
+    'image/webp',
+    'image/gif',
+    'image/svg+xml',
+  ])('registers %p image assets', async (mimeType) => {
+    const { service, prisma, storageService } = createServiceHarness();
+    prisma.file_objects.create.mockImplementation(({ data }: any) => data);
+    storageService.getPresignedPutUrl.mockResolvedValue('https://put-url');
+
+    await expect(registerAsset(service, 'logo', mimeType)).resolves.toEqual(
+      expect.objectContaining({ uploadUrl: 'https://put-url' }),
+    );
+    expect(storageService.getPresignedPutUrl).toHaveBeenCalledWith(
+      expect.stringMatching(/^events\/event-1\/certificates\/assets\/logo\//),
+      mimeType,
+    );
+  });
+
+  it.each([
+    'text/html',
+    'application/xhtml+xml',
+    'text/xml',
+    'application/javascript',
+    'image/avif',
+    'application/pdf',
+    'garbage',
+  ])('rejects %p for image kinds', async (mimeType) => {
+    const { service, prisma, storageService } = createServiceHarness();
+
+    await expect(
+      registerAsset(service, 'background', mimeType),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.file_objects.create).not.toHaveBeenCalled();
+    expect(storageService.getPresignedPutUrl).not.toHaveBeenCalled();
+  });
+
+  it.each(['text/html', 'image/svg+xml', 'application/x-msdownload'])(
+    'rejects %p for fonts',
+    async (mimeType) => {
+      const { service, prisma } = createServiceHarness();
+
+      await expect(
+        registerAsset(service, 'font', mimeType),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.file_objects.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects text/html for the image kind at commit and cleans up', async () => {
+    const { service, prisma, storageService } = createServiceHarness();
+    const storageKey = 'events/event-1/certificates/assets/image/page.html';
+    prisma.file_objects.findUnique.mockResolvedValue({
+      id: 'file-html',
+      event_id: 'event-1',
+      created_by: 'actor-1',
+      status: 'STAGED',
+      storage_key: storageKey,
+      mime_type: 'text/html',
+    });
+    storageService.getHeadObject.mockResolvedValue({
+      ContentLength: 64,
+      ContentType: 'text/html',
+    });
+
+    await expect(
+      service.commitAssetUpload('event-1', 'file-html'),
+    ).rejects.toThrow('Unsupported image type');
+    expect(storageService.deleteObject).toHaveBeenCalledWith(storageKey);
+    expect(prisma.file_objects.delete).toHaveBeenCalledWith({
+      where: { id: 'file-html' },
+    });
+    expect(prisma.file_objects.update).not.toHaveBeenCalled();
+  });
+
+  it('commits SVG logos', async () => {
+    const { service, prisma, storageService } = createServiceHarness();
+    const storageKey = 'events/event-1/certificates/assets/logo/logo.svg';
+    prisma.file_objects.findUnique.mockResolvedValue({
+      id: 'file-svg',
+      event_id: 'event-1',
+      created_by: 'actor-1',
+      status: 'STAGED',
+      storage_key: storageKey,
+      mime_type: 'image/svg+xml',
+    });
+    storageService.getHeadObject.mockResolvedValue({
+      ContentLength: 64,
+      ContentType: 'image/svg+xml',
+    });
+    storageService.computeSha256.mockResolvedValue('sha-svg');
+    prisma.file_objects.update.mockResolvedValue({
+      id: 'file-svg',
+      storage_key: storageKey,
+      status: 'COMMITTED',
+    });
+
+    await expect(
+      service.commitAssetUpload('event-1', 'file-svg'),
+    ).resolves.toEqual(expect.objectContaining({ status: 'COMMITTED' }));
   });
 });
 

@@ -36,6 +36,11 @@ import { EDUCATION_LEVEL_OPTIONS } from "@event-platform/shared";
 import { apiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { getProfileCompletionStatus } from "@/lib/profile-completion";
+import {
+  DATE_OF_BIRTH_MIN,
+  todayIsoDate,
+  validateDateOfBirthInput,
+} from "@/lib/date-of-birth";
 import { toast } from "sonner";
 
 interface Profile {
@@ -122,6 +127,15 @@ export default function ProfilePage() {
     .toUpperCase() || user?.email?.[0]?.toUpperCase() || "?";
 
   async function onSaveProfile() {
+    const dateOfBirthError = validateDateOfBirthInput(
+      profileForm.getValues("dateOfBirth"),
+    );
+    if (dateOfBirthError) {
+      toast.error(dateOfBirthError);
+      profileForm.setFocus("dateOfBirth");
+      return;
+    }
+
     setIsSaving(true);
     try {
       const values = profileForm.getValues();
@@ -307,6 +321,8 @@ export default function ProfilePage() {
             <Input
               id="dateOfBirth"
               type="date"
+              min={DATE_OF_BIRTH_MIN}
+              max={todayIsoDate()}
               {...profileForm.register("dateOfBirth")}
             />
           </div>

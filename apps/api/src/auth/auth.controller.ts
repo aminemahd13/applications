@@ -23,11 +23,39 @@ import * as express from 'express';
 import * as crypto from 'crypto';
 import { SkipCsrf } from '../common/decorators/skip-csrf.decorator';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
+import { RateLimitExceededException } from '../common/exceptions/rate-limit-exceeded.exception';
 
 const AUTH_ME_CACHE_TTL_MS = Math.max(
   Number(process.env.AUTH_ME_CACHE_TTL_MS || '60000'),
   1_000,
 );
+
+/**
+ * Throttle key for the logged-in "send verification email" button: the
+ * session user, so students behind one school/carrier IP don't share a budget.
+ * Falls back to the IP when there is no session user.
+ */
+export function emailVerificationRequestTracker(
+  req: Record<string, any>,
+): string {
+  const userId = req?.session?.user?.id;
+  if (typeof userId === 'string' && userId.length > 0) {
+    return `user:${userId}`;
+  }
+  return `ip:${req?.ip ?? ''}`;
+}
+
+function readRetryAfterSeconds(error: unknown): number | undefined {
+  if (!(error instanceof RateLimitExceededException)) return undefined;
+  const body = error.getResponse();
+  const value =
+    body && typeof body === 'object'
+      ? (body as { retryAfterSeconds?: unknown }).retryAfterSeconds
+      : undefined;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.ceil(value)
+    : undefined;
+}
 
 type AuthMeVerificationState = {
   emailVerified: boolean;
@@ -119,11 +147,14 @@ export class AuthController {
 
     const signupResult = await this.authService.signup(result.data, req);
 
+    let verificationEmailSent = false;
+    let verificationRetryAfterSeconds: number | undefined;
     if (signupResult.verificationRequired) {
       try {
         await this.emailVerificationService.requestVerification(
           signupResult.id,
         );
+        verificationEmailSent = true;
       } catch (err) {
         // Keep signup successful even if email delivery is rate-limited or fails.
         // Log so ops can detect a degraded email pipeline without failing signup.
@@ -131,10 +162,19 @@ export class AuthController {
           '[auth/signup] verification email send failed:',
           err,
         );
+        verificationRetryAfterSeconds = readRetryAfterSeconds(err);
       }
     }
 
-    return signupResult;
+    // Tell the client whether an email actually went out, so the signup page
+    // doesn't claim "we've sent a link" when it was rate-limited or failed.
+    return {
+      ...signupResult,
+      verificationEmailSent,
+      ...(verificationRetryAfterSeconds
+        ? { verificationRetryAfterSeconds }
+        : {}),
+    };
   }
 
   @Post('login')
@@ -334,7 +374,17 @@ export class AuthController {
 
   // Email Verification Flow
   @Post('email/verify/request')
-  @Throttle({ default: { limit: 3, ttl: 900000 } }) // 3 per 15 min
+  // 10 per 15 min per signed-in user; the block lasts the whole window (a
+  // shorter block would reset the count early). The per-email limit in
+  // EmailVerificationService still caps how many emails are actually sent.
+  @Throttle({
+    default: {
+      limit: 10,
+      ttl: 900000,
+      blockDuration: 900000,
+      getTracker: emailVerificationRequestTracker,
+    },
+  })
   @HttpCode(HttpStatus.OK)
   async requestEmailVerification(@Session() session: any) {
     if (!session.user?.id) {
@@ -367,7 +417,7 @@ export class AuthController {
 
   @Post('email/verify')
   @SkipCsrf()
-  @Throttle({ default: { limit: 5, ttl: 900000 } }) // 5 per 15 min
+  @Throttle({ default: { limit: 30, ttl: 900000 } }) // 30 per 15 min
   @HttpCode(HttpStatus.OK)
   async verifyEmail(@Body() body: { token: string }, @Session() session: any) {
     if (!body.token) throw new BadRequestException('Token is required');
@@ -390,7 +440,7 @@ export class AuthController {
 
   @Post('verify-email')
   @SkipCsrf()
-  @Throttle({ default: { limit: 5, ttl: 900000 } }) // 5 per 15 min
+  @Throttle({ default: { limit: 30, ttl: 900000 } }) // 30 per 15 min
   @HttpCode(HttpStatus.OK)
   async verifyEmailAlias(@Body() body: { token: string }, @Session() session: any) {
     return this.verifyEmail(body, session);

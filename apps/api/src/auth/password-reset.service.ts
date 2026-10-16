@@ -7,9 +7,12 @@ import {
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RateLimiterService } from '../common/services/rate-limiter.service';
 import { EmailService } from '../common/email/email.service';
+import { RateLimitExceededException } from '../common/exceptions/rate-limit-exceeded.exception';
 import * as crypto from 'crypto';
 import { hashPassword } from '../common/security/password.util';
 
+const EMAIL_VERIFICATION_RATE_LIMIT_MESSAGE =
+  'Too many verification emails were requested for this address. Check your inbox and spam folder for an earlier email.';
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 const STAFF_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -237,8 +240,19 @@ export class EmailVerificationService {
       if (options?.suppressRateLimitError) {
         return { success: true };
       }
-      throw new BadRequestException(
-        'Too many verification requests. Please wait before trying again.',
+      // 429 with the remaining wait, so the client can say how long to wait.
+      let retryAfterSeconds: number | null = null;
+      try {
+        retryAfterSeconds =
+          await this.rateLimiter.getEmailVerificationRetryAfterSeconds(
+            user.email,
+          );
+      } catch {
+        retryAfterSeconds = null;
+      }
+      throw new RateLimitExceededException(
+        EMAIL_VERIFICATION_RATE_LIMIT_MESSAGE,
+        retryAfterSeconds ?? undefined,
       );
     }
 

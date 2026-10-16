@@ -1,4 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  API_PROXY_LOOP_HEADER,
+  canTryNextUpstream,
+  describeUpstreamError,
+  resolveApiUpstreamCandidates,
+} from "@/lib/api-upstream";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,40 +27,8 @@ const HOP_BY_HOP_HEADERS = new Set([
   "content-length",
 ]);
 
-function normalizeAbsoluteApiUrl(value: string | undefined): string | null {
-  const raw = (value ?? "").trim().replace(/\/+$/, "");
-  if (!raw) return null;
-  if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
-    return null;
-  }
-  return raw;
-}
-
-function resolveInternalApiBaseUrls(): string[] {
-  const explicitCandidates = [
-    normalizeAbsoluteApiUrl(process.env.INTERNAL_API_URL),
-    normalizeAbsoluteApiUrl(process.env.NEXT_PUBLIC_API_URL),
-  ].filter((value): value is string => Boolean(value));
-
-  const fallbackCandidates =
-    process.env.NODE_ENV === "production"
-      ? [
-          "http://api:3000/api/v1",
-          "http://localhost:3000/api/v1",
-          "http://api:3001/api/v1",
-          "http://localhost:3001/api/v1",
-        ]
-      : [
-          "http://localhost:3001/api/v1",
-          "http://api:3001/api/v1",
-          "http://localhost:3000/api/v1",
-          "http://api:3000/api/v1",
-        ];
-
-  return Array.from(new Set([...explicitCandidates, ...fallbackCandidates]));
-}
-
-const API_BASE_URL_CANDIDATES = resolveInternalApiBaseUrls();
+// Production: only the internal API (never this web server itself).
+const API_BASE_URL_CANDIDATES = resolveApiUpstreamCandidates(process.env);
 const PROXY_UPSTREAM_TIMEOUT_MS = Math.max(
   Number(process.env.PROXY_UPSTREAM_TIMEOUT_MS || "30000"),
   250,
@@ -93,6 +67,8 @@ function buildForwardHeaders(req: NextRequest): Headers {
 
   headers.set("x-forwarded-host", req.headers.get("host") ?? "");
   headers.set("x-forwarded-proto", req.nextUrl.protocol.replace(":", ""));
+  // Marks proxied requests so a request that loops back here is refused.
+  headers.set(API_PROXY_LOOP_HEADER, "1");
 
   return headers;
 }
@@ -167,6 +143,13 @@ function markUpstreamHealthy(candidate: string) {
 async function proxy(req: NextRequest, context: RouteContext): Promise<Response> {
   const { path = [] } = await context.params;
   const method = req.method.toUpperCase();
+  if (req.headers.get(API_PROXY_LOOP_HEADER)) {
+    console.warn(`[api-proxy] loop refused: ${method} /${path.join("/")}`);
+    return NextResponse.json(
+      { message: "API proxy loop detected" },
+      { status: 508 },
+    );
+  }
   const timeoutMs = resolveUpstreamTimeoutMs(path);
   const forwardHeaders = buildForwardHeaders(req);
   const body =
@@ -182,6 +165,7 @@ async function proxy(req: NextRequest, context: RouteContext): Promise<Response>
       body,
     };
 
+    const startedAt = Date.now();
     try {
       const upstream = await fetchWithTimeout(
         targetUrl,
@@ -197,8 +181,20 @@ async function proxy(req: NextRequest, context: RouteContext): Promise<Response>
         statusText: upstream.statusText,
         headers: responseHeaders,
       });
-    } catch {
+    } catch (error) {
       markUpstreamFailure(baseUrl);
+      console.warn(
+        `[api-proxy] ${method} /${path.join("/")} via ${new URL(baseUrl).host} failed: ${describeUpstreamError(error)} after ${Date.now() - startedAt} ms`,
+      );
+      // A timed-out POST/PUT/PATCH/DELETE may already have been processed by
+      // the API: never re-send it to another host (no duplicate uploads or
+      // submissions); report it so the client can retry deliberately.
+      if (!canTryNextUpstream(method, error)) {
+        return NextResponse.json(
+          { message: "The server took too long to respond. Please try again." },
+          { status: 504 },
+        );
+      }
       continue;
     }
   }

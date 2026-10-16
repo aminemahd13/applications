@@ -1,4 +1,5 @@
 import { EmailVerificationService } from './password-reset.service';
+import { RateLimitExceededException } from '../common/exceptions/rate-limit-exceeded.exception';
 import {
   BadRequestException,
   ServiceUnavailableException,
@@ -117,6 +118,51 @@ describe('EmailVerificationService', () => {
     await expect(
       service.requestVerificationByEmail('user@example.com'),
     ).resolves.toEqual(expect.objectContaining({ success: true }));
+  });
+
+  it('answers the per-email limit with a 429 that says how long to wait', async () => {
+    mockPrisma.users.findUnique.mockResolvedValue({
+      id: 'user-1',
+      email: 'User@Example.com',
+      email_verified_at: null,
+    });
+    mockRateLimiter.checkEmailVerificationLimit.mockResolvedValue(false);
+    mockRateLimiter.getEmailVerificationRetryAfterSeconds = jest
+      .fn()
+      .mockResolvedValue(1234);
+
+    const error = await service.requestVerification('user-1').catch((e) => e);
+
+    expect(error).toBeInstanceOf(RateLimitExceededException);
+    expect(error.getStatus()).toBe(429);
+    expect(error.getResponse()).toEqual({
+      statusCode: 429,
+      message:
+        'Too many verification emails were requested for this address. Check your inbox and spam folder for an earlier email.',
+      retryAfterSeconds: 1234,
+    });
+    expect(
+      mockRateLimiter.getEmailVerificationRetryAfterSeconds,
+    ).toHaveBeenCalledWith('User@Example.com');
+    expect(mockPrisma.email_verification_tokens.create).not.toHaveBeenCalled();
+    expect(mockEmailService.sendEmailVerification).not.toHaveBeenCalled();
+  });
+
+  it('still answers 429 when the remaining wait cannot be read', async () => {
+    mockPrisma.users.findUnique.mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      email_verified_at: null,
+    });
+    mockRateLimiter.checkEmailVerificationLimit.mockResolvedValue(false);
+    mockRateLimiter.getEmailVerificationRetryAfterSeconds = jest
+      .fn()
+      .mockRejectedValue(new Error('redis down'));
+
+    const error = await service.requestVerification('user-1').catch((e) => e);
+
+    expect(error).toBeInstanceOf(RateLimitExceededException);
+    expect(error.getResponse()).not.toHaveProperty('retryAfterSeconds');
   });
 
   it('throws when requesting verification for a missing authenticated user', async () => {

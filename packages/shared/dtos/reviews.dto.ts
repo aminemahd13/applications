@@ -369,7 +369,14 @@ export interface ReviewQueueItem {
     submissionVersionNumber: number;
     submittedAt: Date;
     status?: StepStatus;
+    /**
+     * Effective answers: the submitted snapshot normalized (legacy `{ data }`
+     * envelope unwrapped) with active staff patches applied — the same values
+     * the approve gate and file verification use.
+     */
     answers?: Record<string, unknown>;
+    /** Fields changed by an active staff patch (optional for older API builds). */
+    editedFields?: ReviewContextEditedField[];
     formDefinition?: Record<string, unknown> | null;
     assignedReviewerId: string | null;
     assignedReviewerEmail?: string | null;
@@ -482,6 +489,44 @@ export type AppendInternalNoteDto = z.infer<typeof AppendInternalNoteSchema>;
 export interface AppendInternalNoteResponse {
     /** All notes after the append, newest first (includes concurrent appends). */
     notes: ReviewContextNote[];
+}
+
+export const INTERNAL_NOTES_DELETE_MAX_ENTRIES = 1000;
+
+/**
+ * A note exactly as the client parsed it. The server deletes the line whose
+ * parsed note is identical (the id is only a hint, since ids shift on delete).
+ */
+export const InternalNoteRefSchema = z
+    .object({
+        id: z.string().regex(/^note-\d{1,6}$/),
+        createdAt: z.string().max(64).nullable(),
+        // A whole stored line can be up to the blob cap, so author/content may be too.
+        authorName: z.string().max(INTERNAL_NOTES_MAX_LENGTH).nullable(),
+        content: z.string().max(INTERNAL_NOTES_MAX_LENGTH),
+    })
+    .strict();
+
+export type InternalNoteRef = z.infer<typeof InternalNoteRefSchema>;
+
+export const DeleteInternalNotesSchema = z
+    .object({
+        notes: z
+            .array(InternalNoteRefSchema)
+            .min(1)
+            .max(INTERNAL_NOTES_DELETE_MAX_ENTRIES),
+    })
+    .strict();
+
+export type DeleteInternalNotesDto = z.infer<typeof DeleteInternalNotesSchema>;
+
+export interface DeleteInternalNotesResponse {
+    /** All notes after the delete, newest first (includes concurrent appends). */
+    notes: ReviewContextNote[];
+    /** Notes actually deleted by this request. */
+    removed: number;
+    /** Requested notes that were already gone (deleted by someone else). */
+    missing: number;
 }
 
 export interface ReviewerAssignmentContextResponse {

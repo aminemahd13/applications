@@ -6,6 +6,7 @@ import {
 import { request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
 import { NextRequest, NextResponse } from "next/server";
+import { hardenUploadResponseHeaders } from "@/lib/upload-response-headers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,6 +25,35 @@ const HOP_BY_HOP_HEADERS = new Set([
 const SENSITIVE_UPSTREAM_HEADERS = new Set(["cookie", "cookie2"]);
 const UPLOADS_PREFIX = "/uploads/";
 const MICROSITE_STORAGE_KEY_RE = /^events\/[^/]+\/microsite\/.+/i;
+const UPLOAD_BODY_TRUNCATED = "UPLOAD_BODY_TRUNCATED";
+const STORAGE_UPSTREAM_TIMEOUT = "STORAGE_UPSTREAM_TIMEOUT";
+
+function errorCode(error: unknown): string {
+  const code =
+    typeof error === "object" && error !== null
+      ? (error as { code?: unknown }).code
+      : undefined;
+  return typeof code === "string" && code.length > 0 ? code : "UNKNOWN";
+}
+
+/**
+ * Upload-proxy failures were silent. Logs the method, the path WITHOUT its
+ * query string (that holds the presigned signature), a code and the time spent.
+ */
+function logUploadProxyFailure(
+  req: NextRequest,
+  startedAt: number,
+  details: { code: string; status?: number; message?: string },
+): void {
+  const parts = [
+    `[uploads] ${req.method.toUpperCase()} ${req.nextUrl.pathname} failed`,
+    `code=${details.code}`,
+    ...(details.status !== undefined ? [`status=${details.status}`] : []),
+    `elapsedMs=${Date.now() - startedAt}`,
+    ...(details.message ? [`error=${JSON.stringify(details.message)}`] : []),
+  ];
+  console.warn(parts.join(" "));
+}
 
 function hasSignatureQueryParam(searchParams: URLSearchParams): boolean {
   for (const key of searchParams.keys()) {
@@ -215,6 +245,8 @@ async function proxyToStorage(
         copyResponseHeaders(upstreamRes.headers, responseHeaders);
 
         const status = upstreamRes.statusCode ?? 502;
+        // Same-origin storage responses must never render as an active page.
+        hardenUploadResponseHeaders(responseHeaders, status);
         const stream =
           status === 204 || status === 205 || status === 304
             ? null
@@ -254,6 +286,7 @@ async function proxyToStorage(
 async function proxyUploadStream(
   baseUrl: string,
   req: NextRequest,
+  startedAt: number,
 ): Promise<Response> {
   const targetUrl = buildTargetUrl(
     baseUrl,
@@ -293,6 +326,13 @@ async function proxyUploadStream(
         const responseHeaders = new Headers();
         copyResponseHeaders(upstreamRes.headers, responseHeaders);
         const status = upstreamRes.statusCode ?? 502;
+        if (status >= 400) {
+          logUploadProxyFailure(req, startedAt, {
+            code: "UPSTREAM_STATUS",
+            status,
+          });
+        }
+        hardenUploadResponseHeaders(responseHeaders, status);
         const stream =
           status === 204 || status === 205 || status === 304
             ? null
@@ -305,7 +345,11 @@ async function proxyUploadStream(
 
     upstreamReq.on("error", reject);
     upstreamReq.on("timeout", () => {
-      upstreamReq.destroy(new Error("Storage upstream timeout"));
+      upstreamReq.destroy(
+        Object.assign(new Error("Storage upstream timeout"), {
+          code: STORAGE_UPSTREAM_TIMEOUT,
+        }),
+      );
     });
 
     if (!req.body) {
@@ -315,6 +359,26 @@ async function proxyUploadStream(
     const bodyReadable = Readable.fromWeb(
       req.body as unknown as Parameters<typeof Readable.fromWeb>[0],
     );
+    // A body that ends short of its Content-Length would leave storage
+    // waiting for bytes that never come (then a 502 after the timeout).
+    // Fail fast instead. Listeners go on before pipe() so no chunk is missed
+    // and the check runs before pipe ends the upstream request.
+    let forwardedBytes = 0;
+    bodyReadable.on("data", (chunk: Uint8Array) => {
+      forwardedBytes += chunk.byteLength;
+    });
+    bodyReadable.on("end", () => {
+      if (contentLength !== undefined && forwardedBytes < contentLength) {
+        upstreamReq.destroy(
+          Object.assign(
+            new Error(
+              `Upload body ended after ${forwardedBytes} of ${contentLength} bytes`,
+            ),
+            { code: UPLOAD_BODY_TRUNCATED },
+          ),
+        );
+      }
+    });
     bodyReadable.on("error", (e) => upstreamReq.destroy(e));
     bodyReadable.pipe(upstreamReq);
   });
@@ -330,6 +394,7 @@ async function handle(req: NextRequest): Promise<Response> {
   const shouldReadBody = method !== "GET" && method !== "HEAD";
 
   if (shouldReadBody) {
+    const startedAt = Date.now();
     // Uploads stream straight through; the body is consumed once, so send it to
     // the first reachable (non-same-origin) target rather than retrying.
     for (const baseUrl of resolveStorageBaseUrls()) {
@@ -340,14 +405,28 @@ async function handle(req: NextRequest): Promise<Response> {
       );
       if (isSameOrigin(targetUrl, req)) continue;
       try {
-        return await proxyUploadStream(baseUrl, req);
-      } catch {
+        return await proxyUploadStream(baseUrl, req, startedAt);
+      } catch (error) {
+        const code = errorCode(error);
+        logUploadProxyFailure(req, startedAt, {
+          code,
+          message: error instanceof Error ? error.message : undefined,
+        });
+        if (code === UPLOAD_BODY_TRUNCATED) {
+          // 408 (incomplete request), not 413: the client retries 408 on the
+          // same presigned URL, which is what a cut-off body needs.
+          return NextResponse.json(
+            { message: "Upload was incomplete. Please try again." },
+            { status: 408 },
+          );
+        }
         return NextResponse.json(
           { message: "Storage upstream unavailable" },
           { status: 502 },
         );
       }
     }
+    logUploadProxyFailure(req, startedAt, { code: "NO_STORAGE_TARGET" });
     return NextResponse.json(
       { message: "Storage upstream unavailable" },
       { status: 502 },

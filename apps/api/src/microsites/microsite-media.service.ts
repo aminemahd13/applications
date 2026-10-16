@@ -6,11 +6,39 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { StorageService } from '../common/storage/storage.service';
+import {
+  isActiveContentMimeType,
+  normalizeMimeEssence,
+  resolveSafeResponseHeaders,
+} from '../common/storage/safe-response-headers.util';
 import { ClsService } from 'nestjs-cls';
 import { FileSensitivity } from '@event-platform/shared';
 
 type MediaKind = 'all' | 'image' | 'video';
 const MICROSITE_STORAGE_PREFIX = /^events\/[^/]+\/microsite\/.+/;
+const MICROSITE_MEDIA_MAX_SIZE_BYTES = 150 * 1024 * 1024;
+const PUBLIC_ASSET_URL_TTL_SECONDS = 3600;
+const BLOCKED_FILE_TYPE_MESSAGE =
+  'This file type is not allowed for security reasons.';
+const BLOCKED_EXECUTABLE_MIME_TYPES = [
+  'application/x-msdownload',
+  'application/x-sh',
+  'application/x-php',
+  'application/x-dosexec',
+];
+
+/**
+ * Microsite media is public and served from the app origin. Active content
+ * (HTML, XML, JS…) is refused; SVG stays allowed for logos — it is always
+ * served as an attachment, so it renders in <img> but never as a page.
+ */
+function isBlockedMicrositeMimeType(rawMimeType: unknown): boolean {
+  const essence = normalizeMimeEssence(rawMimeType);
+  if (!essence) return true;
+  if (BLOCKED_EXECUTABLE_MIME_TYPES.includes(essence)) return true;
+  if (essence === 'image/svg+xml') return false;
+  return isActiveContentMimeType(essence);
+}
 
 @Injectable()
 export class MicrositeMediaService {
@@ -29,7 +57,30 @@ export class MicrositeMediaService {
     },
   ) {
     const userId = this.cls.get('actorId');
-    const safeName = (data.originalFilename || 'upload')
+
+    const declaredMimeType =
+      typeof data?.mimeType === 'string' ? data.mimeType.trim() : '';
+    const mimeEssence = normalizeMimeEssence(declaredMimeType);
+    if (!declaredMimeType || !mimeEssence) {
+      throw new BadRequestException('mimeType must be a valid MIME type');
+    }
+    if (isBlockedMicrositeMimeType(mimeEssence)) {
+      throw new BadRequestException(BLOCKED_FILE_TYPE_MESSAGE);
+    }
+    const sizeBytes = Number(data?.sizeBytes);
+    if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
+      throw new BadRequestException('sizeBytes must be a positive integer');
+    }
+    if (sizeBytes > MICROSITE_MEDIA_MAX_SIZE_BYTES) {
+      throw new BadRequestException('File too large (Max 150MB).');
+    }
+
+    const originalFilename =
+      typeof data?.originalFilename === 'string' &&
+      data.originalFilename.trim()
+        ? data.originalFilename.trim()
+        : 'upload';
+    const safeName = originalFilename
       .toLowerCase()
       .replace(/[^a-z0-9.\-_]+/g, '-')
       .replace(/-+/g, '-')
@@ -45,9 +96,9 @@ export class MicrositeMediaService {
         id: crypto.randomUUID(),
         event_id: eventId,
         storage_key: storageKey,
-        original_filename: data.originalFilename,
-        mime_type: data.mimeType,
-        size_bytes: BigInt(data.sizeBytes),
+        original_filename: originalFilename,
+        mime_type: mimeEssence,
+        size_bytes: BigInt(sizeBytes),
         sensitivity: FileSensitivity.NORMAL,
         status: 'STAGED',
         expires_at: expiresAt,
@@ -55,9 +106,11 @@ export class MicrositeMediaService {
       },
     });
 
+    // Sign the exact Content-Type the browser will send on the PUT; the
+    // stored essence is what commit and serving compare against.
     const uploadUrl = await this.storageService.getPresignedPutUrl(
       storageKey,
-      data.mimeType,
+      declaredMimeType,
     );
 
     return {
@@ -104,8 +157,7 @@ export class MicrositeMediaService {
     );
     const expectedMime = this.normalizeMimeType(file.mime_type);
 
-    const MAX_SIZE = 150 * 1024 * 1024;
-    if (actualSize > MAX_SIZE) {
+    if (actualSize > MICROSITE_MEDIA_MAX_SIZE_BYTES) {
       await this.cleanupFailedUpload(file.storage_key, fileId);
       throw new BadRequestException('File too large (Max 150MB).');
     }
@@ -117,15 +169,9 @@ export class MicrositeMediaService {
       );
     }
 
-    const blockedTypes = [
-      'application/x-msdownload',
-      'application/x-sh',
-      'application/x-php',
-      'application/x-dosexec',
-    ];
-    if (blockedTypes.includes(actualMime)) {
+    if (isBlockedMicrositeMimeType(actualMime)) {
       await this.cleanupFailedUpload(file.storage_key, fileId);
-      throw new BadRequestException('File type not allowed.');
+      throw new BadRequestException(BLOCKED_FILE_TYPE_MESSAGE);
     }
 
     const sha256 = await this.storageService.computeSha256(file.storage_key);
@@ -237,13 +283,28 @@ export class MicrositeMediaService {
         status: 'COMMITTED',
         events: { is: { status: { not: 'archived' } } },
       },
-      select: { id: true },
+      select: { id: true, mime_type: true, original_filename: true },
     });
     if (!asset) {
       throw new NotFoundException('Asset not found');
     }
 
-    return this.storageService.getPresignedGetUrl(storageKey, 3600);
+    // Served from the app origin: never echo the stored type for anything
+    // that could render as a document (SVG keeps its type but downloads).
+    const responseHeaders = resolveSafeResponseHeaders({
+      mimeType: asset.mime_type,
+      filename: asset.original_filename,
+      profile: 'public-asset',
+    });
+    return this.storageService.getPresignedGetUrlWithResponseHeaders(
+      storageKey,
+      {
+        contentType: responseHeaders.contentType,
+        contentDisposition: responseHeaders.contentDisposition,
+        cacheControl: 'public, max-age=3600',
+      },
+      PUBLIC_ASSET_URL_TTL_SECONDS,
+    );
   }
 
   private async cleanupFailedUpload(key: string, fileId: string) {
@@ -256,13 +317,10 @@ export class MicrositeMediaService {
   }
 
   private normalizeMimeType(rawMimeType: string | undefined): string {
-    const normalized = String(rawMimeType ?? 'application/octet-stream')
-      .trim()
-      .toLowerCase();
-    if (normalized === 'image/jpg' || normalized === 'image/pjpeg') {
-      return 'image/jpeg';
-    }
-    return normalized;
+    const raw = rawMimeType ?? 'application/octet-stream';
+    // Compare essences (no `;params`, jpg → jpeg); keep the raw lowercase
+    // string for unparseable values so they still fail the block check.
+    return normalizeMimeEssence(raw) ?? String(raw).trim().toLowerCase();
   }
 
   private async ensureCommittedOptimizationState(

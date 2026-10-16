@@ -838,6 +838,24 @@ export default function StepFormPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [hasTriedSubmit, setHasTriedSubmit] = useState(false);
   const [isStepUnavailable, setIsStepUnavailable] = useState(false);
+  // File fields with an upload in flight: saving or submitting now would drop
+  // (or strand) the file being uploaded.
+  const [uploadingFieldIds, setUploadingFieldIds] = useState<ReadonlySet<string>>(
+    () => new Set<string>()
+  );
+  const isUploadInProgress = uploadingFieldIds.size > 0;
+  const handleFieldUploadingChange = useCallback(
+    (fieldId: string, isUploading: boolean) => {
+      setUploadingFieldIds((previous) => {
+        if (previous.has(fieldId) === isUploading) return previous;
+        const next = new Set(previous);
+        if (isUploading) next.add(fieldId);
+        else next.delete(fieldId);
+        return next;
+      });
+    },
+    []
+  );
 
   useSetBreadcrumbs(
     step && eventTitle
@@ -975,6 +993,7 @@ export default function StepFormPage() {
     !isReadOnly &&
     !isLocked &&
     !isSubmitting &&
+    !isUploadInProgress &&
     !isStepDeadlineBlockingSubmit &&
     validationIssueEntries.length === 0;
 
@@ -1160,7 +1179,11 @@ export default function StepFormPage() {
         : undefined,
     });
     setHasTriedSubmit(true);
-    if (Object.keys(issues).length > 0 || isStepDeadlineBlockingSubmit) {
+    if (
+      Object.keys(issues).length > 0 ||
+      isStepDeadlineBlockingSubmit ||
+      isUploadInProgress
+    ) {
       setShowConfirm(false);
       return;
     }
@@ -1639,6 +1662,9 @@ export default function StepFormPage() {
                                     ? field.maxFileSizeMB
                                     : undefined
                                 }
+                                onUploadingChange={(isUploading) =>
+                                  handleFieldUploadingChange(field.fieldId, isUploading)
+                                }
                               />
                             );
                           }}
@@ -1710,13 +1736,16 @@ export default function StepFormPage() {
             {isStepDeadlineBlockingSubmit && (
               <span className="text-destructive">- Deadline passed</span>
             )}
+            {isUploadInProgress && (
+              <span>- Wait for the file upload to finish</span>
+            )}
           </div>
           <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
               onClick={() => saveDraft(form.getValues())}
-              disabled={isSaving}
+              disabled={isSaving || isUploadInProgress}
             >
               <Save className="mr-1.5 h-3.5 w-3.5" />
               Save draft

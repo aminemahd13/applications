@@ -18,6 +18,10 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { useAuth } from "@/lib/auth-context";
+import {
+  describeSignupSuccess,
+  type SignupOutcome,
+} from "@/lib/signup-outcome";
 
 const signupSchema = z
   .object({
@@ -39,7 +43,9 @@ export default function SignupPage() {
   const { registrationEnabled, emailVerificationRequired } =
     usePlatformSettings();
   const [isLoading, setIsLoading] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
+  const [signupOutcome, setSignupOutcome] = useState<SignupOutcome | null>(
+    null,
+  );
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
@@ -73,12 +79,16 @@ export default function SignupPage() {
 
   async function onSubmit(values: SignupValues) {
     setIsLoading(true);
-    const success = await signup(values.email, values.password);
+    const outcome = await signup(values.email, values.password);
     setIsLoading(false);
-    if (success) setIsSuccess(true);
+    if (outcome) setSignupOutcome(outcome);
   }
 
-  if (isSuccess) {
+  if (signupOutcome) {
+    const successMessage = describeSignupSuccess(
+      signupOutcome,
+      emailVerificationRequired,
+    );
     return (
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
@@ -89,13 +99,9 @@ export default function SignupPage() {
         <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-success/10">
           <CheckCircle2 className="h-8 w-8 text-success" />
         </div>
-        <h2 className="text-xl font-bold">
-          {emailVerificationRequired ? "Check your email" : "Account created"}
-        </h2>
+        <h2 className="text-xl font-bold">{successMessage.title}</h2>
         <p className="text-sm text-muted-foreground">
-          {emailVerificationRequired
-            ? "We've sent a verification link to your email address. Please check your inbox and click the link to activate your account."
-            : "Your account is ready. You can sign in and start your application now."}
+          {successMessage.description}
         </p>
         <Button variant="outline" asChild className="mt-4">
           <Link href="/login">Back to sign in</Link>

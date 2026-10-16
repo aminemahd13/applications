@@ -39,6 +39,7 @@ import {
   ResolveApplicationsByEmailsSchema,
   UpdateApplicationSavedViewSchema,
   AppendInternalNoteSchema,
+  DeleteInternalNotesSchema,
 } from '@event-platform/shared';
 import { ClsService } from 'nestjs-cls';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -46,10 +47,6 @@ import { z } from 'zod';
 
 const UpdateApplicationTagsSchema = z.object({
   tags: z.array(z.string().trim().min(1)).max(100),
-});
-
-const UpdateApplicationNotesSchema = z.object({
-  internalNotes: z.string().max(20000).nullable(),
 });
 
 /**
@@ -341,22 +338,18 @@ export class ApplicationsController {
   }
 
   /**
-   * Update internal notes
+   * Replace the whole internal notes blob: retired. A full replace built from
+   * a stale page silently dropped notes added or deleted meanwhile. Kept as a
+   * route so tabs still running an old bundle get a clear "reload" error
+   * instead of a 404, and can never overwrite notes.
    */
   @Patch(':applicationId/internal-notes')
   @RequirePermission(Permission.EVENT_APPLICATION_NOTES_MANAGE)
-  async updateInternalNotes(
-    @Param('eventId') eventId: string,
-    @Param('applicationId') applicationId: string,
-    @Body() body: any,
-  ) {
-    const dto = UpdateApplicationNotesSchema.parse(body);
-    const application = await this.applicationsService.updateInternalNotes(
-      eventId,
-      applicationId,
-      dto.internalNotes,
-    );
-    return { data: application };
+  updateInternalNotes(): never {
+    throw new GoneException({
+      code: 'INTERNAL_NOTES_REPLACE_DISABLED',
+      message: 'This page is out of date. Reload it to add or delete notes.',
+    });
   }
 
   /**
@@ -375,6 +368,27 @@ export class ApplicationsController {
       eventId,
       id,
       dto.content,
+    );
+    return { data: result };
+  }
+
+  /**
+   * Delete internal notes the caller has seen (one, or all for "Clear all").
+   * Notes added meanwhile are kept; notes already deleted count as missing.
+   */
+  @Delete(':applicationId/internal-notes')
+  @RequirePermission(Permission.EVENT_APPLICATION_NOTES_MANAGE)
+  async deleteInternalNotes(
+    @Param('eventId') eventId: string,
+    @Param('applicationId') applicationId: string,
+    @Body() body: unknown,
+  ) {
+    const id = z.string().uuid().parse(applicationId);
+    const dto = DeleteInternalNotesSchema.parse(body);
+    const result = await this.applicationsService.deleteInternalNotes(
+      eventId,
+      id,
+      dto.notes,
     );
     return { data: result };
   }

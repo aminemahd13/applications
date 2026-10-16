@@ -113,6 +113,8 @@ interface ApiClientOptions extends Omit<RequestInit, "body"> {
   csrfToken?: string;
   /** Pass `req.headers.get('cookie')` from Server Components for authenticated SSR. */
   serverCookies?: string;
+  /** Skip the error toast; the caller reports the failure itself (e.g. after retries). */
+  silent?: boolean;
 }
 
 export class ApiError extends Error {
@@ -130,7 +132,7 @@ export async function apiClient<T = unknown>(
   path: string,
   options: ApiClientOptions = {}
 ): Promise<T> {
-  const { body, csrfToken, serverCookies, headers: extraHeaders, ...rest } = options;
+  const { body, csrfToken, serverCookies, silent, headers: extraHeaders, ...rest } = options;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -162,7 +164,7 @@ export async function apiClient<T = unknown>(
 
     if (invalidCsrf) {
       triggerCsrfRecoveryReload();
-    } else if (typeof window !== "undefined") {
+    } else if (!silent && typeof window !== "undefined") {
       toast.error(message);
     }
 

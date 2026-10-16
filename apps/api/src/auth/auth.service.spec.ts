@@ -104,6 +104,54 @@ describe('AuthService', () => {
             await expect(service.signup(dto)).rejects.toThrow(BadRequestException);
         });
 
+        describe('when the email belongs to an unverified account', () => {
+            beforeEach(() => {
+                mockOrgSettings.getSettings.mockResolvedValue({
+                    security: {
+                        registrationEnabled: true,
+                        emailVerificationRequired: true,
+                    },
+                });
+                mockPrisma.users.findUnique.mockResolvedValue({
+                    id: 'user-1',
+                    email: dto.email,
+                    email_verified_at: null,
+                    password_hash: TEST_HASH,
+                });
+            });
+
+            it.each(['correct-password', 'wrong-password'])(
+                'answers exactly like a verified account (password %s is never checked)',
+                async (password) => {
+                    const unverifiedError = await service
+                        .signup({ ...dto, password })
+                        .catch((e) => e);
+
+                    mockPrisma.users.findUnique.mockResolvedValue({
+                        id: 'user-2',
+                        email: dto.email,
+                        email_verified_at: new Date(),
+                        password_hash: TEST_HASH,
+                    });
+                    const verifiedError = await service
+                        .signup({ ...dto, password })
+                        .catch((e) => e);
+
+                    expect(unverifiedError).toBeInstanceOf(BadRequestException);
+                    expect(unverifiedError.getStatus()).toBe(verifiedError.getStatus());
+                    expect(unverifiedError.getResponse()).toEqual(
+                        verifiedError.getResponse(),
+                    );
+                    expect(unverifiedError.getResponse()).toEqual(
+                        expect.objectContaining({ message: 'Email already in use' }),
+                    );
+                    expect(mockPrisma.applicant_profiles.upsert).not.toHaveBeenCalled();
+                    expect(mockPrisma.users.update).not.toHaveBeenCalled();
+                    expect(mockPrisma.users.create).not.toHaveBeenCalled();
+                },
+            );
+        });
+
         it('should succeed for new user', async () => {
             mockPrisma.users.findUnique.mockResolvedValue(null);
             mockPrisma.$transaction.mockImplementation(async (fn: any) => {
@@ -231,6 +279,97 @@ describe('AuthService', () => {
                 }),
             );
         });
+    });
+
+    describe('updateMyProfile date of birth', () => {
+        beforeEach(() => {
+            mockPrisma.applicant_profiles.upsert.mockResolvedValue({});
+            mockPrisma.users.findUnique.mockResolvedValue({
+                email: 'test@example.com',
+                applicant_profiles: null,
+            });
+        });
+
+        afterEach(() => {
+            jest.useRealTimers();
+        });
+
+        it.each([
+            '20009-01-30',
+            '2009-02-30',
+            '1899-12-31',
+            'not-a-date',
+            '2009-01-30T00:00:00.000Z',
+        ])('rejects %p with a 400 and saves nothing', async (dateOfBirth) => {
+            await expect(
+                service.updateMyProfile('user-1', { firstName: 'A', dateOfBirth }),
+            ).rejects.toThrow(
+                new BadRequestException(
+                    'Date of birth must be a valid date between 1900-01-01 and today.',
+                ),
+            );
+            expect(mockPrisma.applicant_profiles.upsert).not.toHaveBeenCalled();
+        });
+
+        it('rejects a non-string value', async () => {
+            await expect(
+                service.updateMyProfile('user-1', { dateOfBirth: 20090130 as any }),
+            ).rejects.toThrow(BadRequestException);
+            expect(mockPrisma.applicant_profiles.upsert).not.toHaveBeenCalled();
+        });
+
+        it('rejects a date in the future but accepts the latest local today', async () => {
+            jest.useFakeTimers({ now: new Date('2026-10-16T12:00:00.000Z') });
+
+            await expect(
+                service.updateMyProfile('user-1', { dateOfBirth: '2026-10-18' }),
+            ).rejects.toThrow(BadRequestException);
+
+            // 2026-10-17 is already "today" in UTC+14.
+            await expect(
+                service.updateMyProfile('user-1', { dateOfBirth: '2026-10-17' }),
+            ).resolves.toBeDefined();
+        });
+
+        it('stores a valid date as UTC midnight', async () => {
+            await service.updateMyProfile('user-1', { dateOfBirth: '2009-01-30' });
+
+            const expected = new Date('2009-01-30T00:00:00.000Z');
+            expect(mockPrisma.applicant_profiles.upsert).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    update: expect.objectContaining({ date_of_birth: expected }),
+                    create: expect.objectContaining({ date_of_birth: expected }),
+                }),
+            );
+        });
+
+        it('accepts 1900-01-01', async () => {
+            await service.updateMyProfile('user-1', { dateOfBirth: '1900-01-01' });
+
+            expect(mockPrisma.applicant_profiles.upsert).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    update: expect.objectContaining({
+                        date_of_birth: new Date('1900-01-01T00:00:00.000Z'),
+                    }),
+                }),
+            );
+        });
+
+        it.each(['', '   ', undefined, null])(
+            'leaves the stored date unchanged for %p',
+            async (dateOfBirth) => {
+                await service.updateMyProfile('user-1', {
+                    dateOfBirth: dateOfBirth as any,
+                });
+
+                expect(mockPrisma.applicant_profiles.upsert).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        update: expect.objectContaining({ date_of_birth: undefined }),
+                        create: expect.objectContaining({ date_of_birth: null }),
+                    }),
+                );
+            },
+        );
     });
 
     describe('deleteMyAccount', () => {
