@@ -14,6 +14,7 @@ import {
   NeedsInfoResponse,
   NeedsInfoStatus,
   Permission,
+  StepStatus,
 } from '@event-platform/shared';
 import { StepStateService } from '../applications/step-state.service';
 import { ApplicationsService } from '../applications/applications.service';
@@ -24,6 +25,7 @@ import {
   normalizeAnswersShape,
   type RemovedRequiredFileField,
 } from '../common/utils/effective-answers.util';
+import { resolveEffectiveRevisionDeadline } from '../common/utils/revision-deadline.util';
 
 export const REQUIRED_FILE_REMOVED_BY_STAFF_CODE =
   'REQUIRED_FILE_REMOVED_BY_STAFF';
@@ -111,13 +113,28 @@ export class ReviewsService {
 
     const existingReview = await this.prisma.review_records.findFirst({
       where: { submission_version_id: versionId },
-      select: { id: true },
+      orderBy: { created_at: 'desc' },
+      select: { id: true, created_at: true },
     });
     if (existingReview) {
-      throw new ConflictException({
-        code: 'REVIEW_ALREADY_COMPLETED',
-        message: 'This submission version has already been reviewed.',
+      // One review per version, unless staff put the step back to "awaiting
+      // review" after that review (bulk unapprove / un-reject / mark
+      // submitted). Requiring the step to have changed since the last review
+      // keeps a double-submitted review from being recorded twice.
+      const stepState = await this.prisma.application_step_states.findFirst({
+        where: { application_id: applicationId, step_id: stepId },
+        select: { status: true, last_activity_at: true },
       });
+      const reopenedSinceReview =
+        stepState?.status === StepStatus.SUBMITTED &&
+        stepState.last_activity_at.getTime() >
+          existingReview.created_at.getTime();
+      if (!reopenedSinceReview) {
+        throw new ConflictException({
+          code: 'REVIEW_ALREADY_COMPLETED',
+          message: 'This submission version has already been reviewed.',
+        });
+      }
     }
 
     if (dto.outcome === ReviewOutcome.APPROVE) {
@@ -157,13 +174,13 @@ export class ReviewsService {
 
     const effectiveRevisionDeadline =
       dto.outcome === ReviewOutcome.REQUEST_INFO
-        ? this.resolveEffectiveRevisionDeadline(
+        ? resolveEffectiveRevisionDeadline(
             step.revision_deadline_at,
             dto.deadline,
           )
         : dto.outcome === ReviewOutcome.REJECT &&
             step.reject_behavior !== 'FINAL'
-          ? this.resolveEffectiveRevisionDeadline(step.revision_deadline_at)
+          ? resolveEffectiveRevisionDeadline(step.revision_deadline_at)
           : null;
 
     // Create review record
@@ -225,34 +242,6 @@ export class ReviewsService {
       notesInternal: review.notes_internal,
       createdAt: review.created_at,
     };
-  }
-
-  private resolveEffectiveRevisionDeadline(
-    stepRevisionDeadlineAt: Date | null | undefined,
-    reviewerDeadlineAt?: Date,
-  ): Date | null {
-    if (!stepRevisionDeadlineAt && !reviewerDeadlineAt) {
-      return null;
-    }
-
-    if (!stepRevisionDeadlineAt) {
-      return reviewerDeadlineAt ?? null;
-    }
-
-    if (!reviewerDeadlineAt) {
-      return stepRevisionDeadlineAt;
-    }
-
-    if (
-      new Date(reviewerDeadlineAt).getTime() >
-      new Date(stepRevisionDeadlineAt).getTime()
-    ) {
-      throw new BadRequestException(
-        'Review deadline can only shorten the configured revision deadline for this step',
-      );
-    }
-
-    return reviewerDeadlineAt;
   }
 
   /**

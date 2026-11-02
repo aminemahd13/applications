@@ -149,14 +149,19 @@ describe('ReviewerAssignmentService', () => {
   });
 
   function mockQueueForPreview(scopeItems: Array<ReturnType<typeof buildScopeItem>>) {
-    prisma.review_queue_items.findMany
-      .mockResolvedValueOnce(
-        scopeItems.map((item) => ({
-          id: item.id,
-          submission_version_id: item.submission_version_id,
-        })),
-      )
-      .mockResolvedValueOnce(scopeItems);
+    const responses: unknown[] = [
+      scopeItems.map((item) => ({
+        id: item.id,
+        submission_version_id: item.submission_version_id,
+      })),
+      scopeItems,
+    ];
+    prisma.review_queue_items.findMany.mockImplementation((args: any) =>
+      // The queue sync's lookup of completed items to reopen: none here.
+      args?.where?.completed_at?.not === null
+        ? Promise.resolve([])
+        : Promise.resolve(responses.shift()),
+    );
   }
 
   it('allocates equal distribution deterministically', async () => {
@@ -852,5 +857,86 @@ describe('ReviewerAssignmentService', () => {
     expect(error.getResponse()).toMatchObject({
       code: 'CLAIM_REQUIRED',
     });
+  });
+});
+
+describe('ReviewerAssignmentService queue sync', () => {
+  const REOPENED_AT = new Date('2026-10-21T09:00:00.000Z');
+
+  function setup(params: {
+    openItems: Array<{ id: string; submission_version_id: string }>;
+    completedItems?: Array<{ id: string; submission_version_id: string; completed_at: Date }>;
+  }) {
+    const prisma = buildMockPrisma();
+    prisma.application_step_states.findMany.mockResolvedValue([
+      {
+        application_id: 'app-1',
+        step_id: 'step-1',
+        latest_submission_version_id: 'sub-1',
+        last_activity_at: REOPENED_AT,
+      },
+    ]);
+    prisma.review_queue_items.findMany.mockImplementation(({ where }: any) =>
+      Promise.resolve(
+        where.completed_at === null ? params.openItems : (params.completedItems ?? []),
+      ),
+    );
+    const service = new ReviewerAssignmentService(prisma as any, buildCls() as any);
+    return { prisma, service };
+  }
+
+  it('reopens the completed queue item of a step put back to "Submitted"', async () => {
+    const { prisma, service } = setup({
+      openItems: [],
+      completedItems: [
+        { id: 'q-1', submission_version_id: 'sub-1', completed_at: new Date('2026-10-20T10:00:00.000Z') },
+      ],
+    });
+
+    await service.syncOpenQueueItemsForEvent('event-1');
+
+    expect(prisma.review_queue_items.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['q-1'] }, completed_at: { not: null } },
+      data: {
+        completed_at: null,
+        completed_by: null,
+        queue_mode: 'shared',
+        assigned_reviewer_id: null,
+        assignment_expires_at: null,
+        updated_at: expect.any(Date),
+      },
+    });
+    // Reopen first; the create for the same (unique) version is then skipped.
+    expect(
+      prisma.review_queue_items.updateMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(prisma.review_queue_items.createMany.mock.invocationCallOrder[0]);
+  });
+
+  it('does not reopen an item completed after the step was read (a racing review)', async () => {
+    const { prisma, service } = setup({
+      openItems: [],
+      completedItems: [
+        { id: 'q-1', submission_version_id: 'sub-1', completed_at: new Date('2026-10-21T09:05:00.000Z') },
+      ],
+    });
+
+    await service.syncOpenQueueItemsForEvent('event-1');
+
+    for (const [args] of prisma.review_queue_items.updateMany.mock.calls) {
+      expect(args.data.completed_at).not.toBeNull();
+    }
+  });
+
+  it('leaves completed items alone when every submitted step already has an open item', async () => {
+    const { prisma, service } = setup({
+      openItems: [{ id: 'q-2', submission_version_id: 'sub-1' }],
+    });
+
+    await service.syncOpenQueueItemsForEvent('event-1');
+
+    expect(prisma.review_queue_items.createMany).not.toHaveBeenCalled();
+    for (const [args] of prisma.review_queue_items.updateMany.mock.calls) {
+      expect(args.where.completed_at).toBeNull();
+    }
   });
 });

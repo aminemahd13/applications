@@ -234,6 +234,7 @@ export class ReviewerAssignmentService {
         application_id: true,
         step_id: true,
         latest_submission_version_id: true,
+        last_activity_at: true,
       },
     });
 
@@ -277,6 +278,54 @@ export class ReviewerAssignmentService {
     );
 
     if (missing.length > 0) {
+      // A step put back to "awaiting review" (staff unapproved / un-rejected
+      // it, or marked it submitted) keeps its submission version, whose queue
+      // item was completed. submission_version_id is unique, so reopen that
+      // item instead of trying to create a new one (which would be skipped).
+      // Only reopen items completed before the step last changed: an item
+      // completed after this sync read the step (a review racing the sync)
+      // belongs to a step that is no longer awaiting review.
+      const lastActivityByVersionId = new Map(
+        pendingStepStates.map((row) => [
+          row.latest_submission_version_id,
+          row.last_activity_at,
+        ]),
+      );
+      const completedItems = await this.prisma.review_queue_items.findMany({
+        where: {
+          event_id: eventId,
+          submission_version_id: {
+            in: missing.map((row) => row.submissionVersionId),
+          },
+          completed_at: { not: null },
+        },
+        select: { id: true, submission_version_id: true, completed_at: true },
+      });
+      const reopenIds = completedItems
+        .filter((item) => {
+          const lastActivity = lastActivityByVersionId.get(
+            item.submission_version_id,
+          );
+          return (
+            item.completed_at !== null &&
+            lastActivity instanceof Date &&
+            item.completed_at.getTime() < lastActivity.getTime()
+          );
+        })
+        .map((item) => item.id);
+      if (reopenIds.length > 0) {
+        await this.prisma.review_queue_items.updateMany({
+          where: { id: { in: reopenIds }, completed_at: { not: null } },
+          data: {
+            completed_at: null,
+            completed_by: null,
+            queue_mode: 'shared',
+            assigned_reviewer_id: null,
+            assignment_expires_at: null,
+            updated_at: now,
+          },
+        });
+      }
       await this.prisma.review_queue_items.createMany({
         data: missing.map((entry) => ({
           id: crypto.randomUUID(),

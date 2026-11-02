@@ -123,8 +123,19 @@ import {
   APPLICATION_EXPORT_CORE_COLUMNS,
   Permission,
   type ApplicationExportCoreColumn,
+  type BulkStepActionType,
   type ResolveApplicationsByEmailsResult,
 } from "@event-platform/shared";
+import {
+  addBulkStepActionChunk,
+  allowedBulkStepActions,
+  bulkStepActionWarning,
+  emptyBulkStepActionSummary,
+  getBulkStepActionOption,
+  groupBulkOutcomes,
+  revisionDeadlineToIso,
+  type BulkStepActionSummary,
+} from "@/lib/bulk-step-actions";
 import {
   MAX_PASTED_EMAILS,
   parsePastedEmails,
@@ -143,6 +154,9 @@ import {
 const PUBLIC_API_URL = resolvePublicApiBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 const APPLICATIONS_PAGE_SIZE = 100;
 const BULK_ACTION_CHUNK_SIZE = 200;
+// Each step action does several writes per application: smaller requests stay
+// well within the API proxy timeout.
+const BULK_STEP_ACTION_CHUNK_SIZE = 50;
 
 interface Application {
   id: string;
@@ -515,8 +529,22 @@ export default function ApplicationsListPage() {
   const [isPublishingDecisions, setIsPublishingDecisions] = useState(false);
   const [showBulkStepAction, setShowBulkStepAction] = useState(false);
   const [bulkStepId, setBulkStepId] = useState("");
-  const [bulkStepAction, setBulkStepAction] = useState<"UNLOCK" | "APPROVE" | "LOCK">("UNLOCK");
-  const [workflowSteps, setWorkflowSteps] = useState<Array<{ id: string; title: string; stepIndex: number }>>([]);
+  const [bulkStepAction, setBulkStepAction] = useState<BulkStepActionType>("APPROVE");
+  const [bulkRevisionMessage, setBulkRevisionMessage] = useState("");
+  const [bulkRevisionDeadline, setBulkRevisionDeadline] = useState("");
+  // Outcome of the last apply, shown in the dialog when something was skipped
+  // or needs attention.
+  const [bulkStepResult, setBulkStepResult] =
+    useState<BulkStepActionSummary | null>(null);
+  const [workflowSteps, setWorkflowSteps] = useState<
+    Array<{
+      id: string;
+      title: string;
+      stepIndex: number;
+      category?: string;
+      reviewRequired?: boolean;
+    }>
+  >([]);
   const [filterableFields, setFilterableFields] = useState<FilterableFieldStep[]>([]);
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState("");
@@ -887,6 +915,9 @@ export default function ApplicationsListPage() {
             id: s.id,
             title: s.title,
             stepIndex: s.stepIndex ?? s.step_index ?? 0,
+            category: typeof s.category === "string" ? s.category : undefined,
+            reviewRequired:
+              typeof s.reviewRequired === "boolean" ? s.reviewRequired : undefined,
           }))
         );
         // Fetch answer-filterable form fields for the field_answer condition.
@@ -1958,19 +1989,31 @@ export default function ApplicationsListPage() {
     totalMatchingApplications,
   ]);
 
+  const bulkStepActionOptions = useMemo(
+    () =>
+      allowedBulkStepActions({
+        canReview: canStepReview,
+        canOverride: canStepOverride,
+      }),
+    [canStepOverride, canStepReview],
+  );
+
+  const bulkStepWarning = useMemo(
+    () =>
+      bulkStepActionWarning(
+        bulkStepAction,
+        workflowSteps.find((step) => step.id === bulkStepId),
+        workflowSteps,
+      ),
+    [bulkStepAction, bulkStepId, workflowSteps],
+  );
+
   useEffect(() => {
-    const allowedActions: Array<"UNLOCK" | "APPROVE" | "LOCK"> = [];
-    if (canStepOverride) {
-      allowedActions.push("UNLOCK", "LOCK");
+    if (bulkStepActionOptions.length === 0) return;
+    if (!bulkStepActionOptions.some((option) => option.value === bulkStepAction)) {
+      setBulkStepAction(bulkStepActionOptions[0].value);
     }
-    if (canStepReview) {
-      allowedActions.push("APPROVE");
-    }
-    if (allowedActions.length === 0) return;
-    if (!allowedActions.includes(bulkStepAction)) {
-      setBulkStepAction(allowedActions[0]);
-    }
-  }, [bulkStepAction, canStepOverride, canStepReview]);
+  }, [bulkStepAction, bulkStepActionOptions]);
 
   function parseTagInput(input: string): string[] {
     return Array.from(
@@ -1999,13 +2042,14 @@ export default function ApplicationsListPage() {
     applicationIds: string[];
     executeChunk: (chunkApplicationIds: string[]) => Promise<TChunkResult>;
     createAggregate: () => TAggregate;
+    chunkSize?: number;
     aggregateChunkResult?: (
       aggregate: TAggregate,
       chunkResult: TChunkResult,
       chunkApplicationIds: string[],
     ) => void;
   }): Promise<BulkChunkRunSummary<TAggregate>> {
-    const chunks = chunkApplicationIds(options.applicationIds);
+    const chunks = chunkApplicationIds(options.applicationIds, options.chunkSize);
     const totalRequested = chunks.reduce((total, chunk) => total + chunk.length, 0);
     const aggregate = options.createAggregate();
     const failedIdSet = new Set<string>();
@@ -2969,44 +3013,66 @@ export default function ApplicationsListPage() {
     }
   }
 
+  function closeBulkStepDialog() {
+    setShowBulkStepAction(false);
+    setBulkStepResult(null);
+    // Never carry an applicant-facing message over to a later revision request.
+    setBulkRevisionMessage("");
+    setBulkRevisionDeadline("");
+  }
+
   async function applyBulkStepAction() {
     if (!bulkStepId || selectedApplicationIds.length === 0) return;
+    const isRevision = bulkStepAction === "REQUEST_REVISION";
+    const revisionDeadline = isRevision
+      ? revisionDeadlineToIso(bulkRevisionDeadline)
+      : undefined;
     setIsApplyingBulk(true);
+    setBulkStepResult(null);
     try {
-      const summary = await runBulkActionInChunks<
-        { data?: { updated?: number; skipped?: number } },
-        { updated: number; skipped: number }
-      >({
+      const summary = await runBulkActionInChunks<unknown, BulkStepActionSummary>({
         applicationIds: selectedApplicationIds,
         executeChunk: (chunkApplicationIds) =>
-          apiClient<{ data?: { updated?: number; skipped?: number } }>(`/events/${eventId}/applications/bulk/step-action`, {
+          apiClient<unknown>(`/events/${eventId}/applications/bulk/step-action`, {
             method: "POST",
             body: {
               applicationIds: chunkApplicationIds,
               stepId: bulkStepId,
               action: bulkStepAction,
+              ...(isRevision && bulkRevisionMessage.trim()
+                ? { message: bulkRevisionMessage.trim() }
+                : {}),
+              ...(revisionDeadline ? { revisionDeadline } : {}),
             },
             csrfToken: csrfToken ?? undefined,
           }),
-        createAggregate: () => ({ updated: 0, skipped: 0 }),
-        aggregateChunkResult: (aggregate, chunkResult) => {
-          aggregate.updated += Number(chunkResult?.data?.updated ?? 0);
-          aggregate.skipped += Number(chunkResult?.data?.skipped ?? 0);
-        },
+        createAggregate: emptyBulkStepActionSummary,
+        aggregateChunkResult: addBulkStepActionChunk,
+        chunkSize: BULK_STEP_ACTION_CHUNK_SIZE,
       });
-      const updated = summary.aggregate.updated;
-      const skipped = summary.aggregate.skipped;
-      await refreshApplications();
+      const result = summary.aggregate;
+      await refreshApplications({ clearSelection: false });
       if (summary.totalSucceeded > 0) {
-        toast.success(`Step action applied: ${updated} updated, ${skipped} skipped`);
+        const label = getBulkStepActionOption(bulkStepAction)?.label ?? "Step action";
+        toast.success(
+          `${label}: ${result.updated} updated${result.skipped > 0 ? `, ${result.skipped} skipped` : ""}`,
+        );
       }
+      const needsAttention =
+        result.skippedDetails.length > 0 || result.notes.length > 0;
       if (summary.totalFailed > 0) {
         setSelectedIds(summary.failedApplicationIds);
         toast.warning(
           `Could not process ${summary.totalFailed} application(s). They remain selected for retry.`,
         );
-      } else {
-        setShowBulkStepAction(false);
+      }
+      if (needsAttention) {
+        // Keep the dialog open (and the selection) so staff can see who was
+        // skipped and why, and apply another action to the same group.
+        setBulkStepResult(result);
+      } else if (summary.totalFailed === 0) {
+        setSelectedIds([]);
+        closeBulkStepDialog();
       }
       toastBulkChunkErrors("Step action", summary.errorMessages);
     } catch {
@@ -4673,18 +4739,31 @@ export default function ApplicationsListPage() {
       />
 
       {/* Bulk step action dialog */}
-      <Dialog open={showBulkStepAction} onOpenChange={setShowBulkStepAction}>
-        <DialogContent>
+      <Dialog
+        open={showBulkStepAction}
+        onOpenChange={(open) => {
+          if (open) setShowBulkStepAction(true);
+          else closeBulkStepDialog();
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bulk step action</DialogTitle>
             <DialogDescription>
-              Apply a step action for {selectedCount} selected application(s).
+              Change the step status for {selectedCount} selected application(s).
+              Staff actions are not limited by deadlines.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-2">
               <Label>Step</Label>
-              <Select value={bulkStepId} onValueChange={setBulkStepId}>
+              <Select
+                value={bulkStepId}
+                onValueChange={(value) => {
+                  setBulkStepId(value);
+                  setBulkStepResult(null);
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Select step..." />
                 </SelectTrigger>
@@ -4699,34 +4778,154 @@ export default function ApplicationsListPage() {
             </div>
             <div className="space-y-2">
               <Label>Action</Label>
-              <Select value={bulkStepAction} onValueChange={(v) => setBulkStepAction(v as typeof bulkStepAction)}>
+              <Select
+                value={bulkStepAction}
+                onValueChange={(value) => {
+                  setBulkStepAction(value as BulkStepActionType);
+                  setBulkStepResult(null);
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {canStepOverride && (
-                    <SelectItem value="UNLOCK">Unlock</SelectItem>
-                  )}
-                  {canStepReview && (
-                    <SelectItem value="APPROVE">Approve</SelectItem>
-                  )}
-                  {canStepOverride && (
-                    <SelectItem value="LOCK">Lock</SelectItem>
-                  )}
+                  {bulkStepActionOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+              {getBulkStepActionOption(bulkStepAction) && (
+                <p className="text-muted-foreground text-xs">
+                  {getBulkStepActionOption(bulkStepAction)?.description}
+                </p>
+              )}
+              {bulkStepWarning && (
+                <p
+                  className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                  role="note"
+                >
+                  {bulkStepWarning}
+                </p>
+              )}
             </div>
+            {bulkStepAction === "REQUEST_REVISION" && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="bulk-revision-message">Message to applicants</Label>
+                  <Textarea
+                    id="bulk-revision-message"
+                    value={bulkRevisionMessage}
+                    onChange={(event) => setBulkRevisionMessage(event.target.value)}
+                    placeholder="Explain what needs to be updated…"
+                    maxLength={5000}
+                    rows={3}
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    Shown on the step. Leave empty for “Please review and update this step.”
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bulk-revision-deadline">Revision deadline (optional)</Label>
+                  <Input
+                    id="bulk-revision-deadline"
+                    type="datetime-local"
+                    min="2000-01-01T00:00"
+                    max="2100-12-31T23:59"
+                    value={bulkRevisionDeadline}
+                    onChange={(event) => setBulkRevisionDeadline(event.target.value)}
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    Same rule as reviewers: it can only shorten the step’s own revision deadline.
+                  </p>
+                </div>
+              </>
+            )}
+            {bulkStepResult && (
+              <div className="space-y-2 rounded-md border p-3 text-sm" role="status">
+                <p className="font-medium">
+                  {bulkStepResult.updated} updated · {bulkStepResult.skipped} skipped
+                </p>
+                {groupBulkOutcomes(
+                  bulkStepResult.skippedDetails.map((item) => ({
+                    applicationId: item.applicationId,
+                    message: item.reason,
+                  })),
+                ).map((group) => (
+                  <BulkOutcomeGroup
+                    key={`skipped:${group.message}`}
+                    title={`Skipped: ${group.message}`}
+                    applicationIds={group.applicationIds}
+                    applications={applications}
+                  />
+                ))}
+                {groupBulkOutcomes(
+                  bulkStepResult.notes.map((item) => ({
+                    applicationId: item.applicationId,
+                    message: item.note,
+                  })),
+                ).map((group) => (
+                  <BulkOutcomeGroup
+                    key={`note:${group.message}`}
+                    title={group.message}
+                    applicationIds={group.applicationIds}
+                    applications={applications}
+                  />
+                ))}
+              </div>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowBulkStepAction(false)}>
-              Cancel
+            <Button
+              variant="outline"
+              onClick={closeBulkStepDialog}
+            >
+              {bulkStepResult ? "Close" : "Cancel"}
             </Button>
-            <Button onClick={applyBulkStepAction} disabled={isApplyingBulk || !bulkStepId}>
+            <Button
+              onClick={applyBulkStepAction}
+              disabled={isApplyingBulk || !bulkStepId || selectedCount === 0}
+            >
               {isApplyingBulk ? "Applying..." : "Apply"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+const BULK_OUTCOME_MAX_NAMES = 20;
+
+/** One group of a bulk step action's outcome: who was skipped / affected and why. */
+function BulkOutcomeGroup({
+  title,
+  applicationIds,
+  applications,
+}: {
+  title: string;
+  applicationIds: string[];
+  applications: Application[];
+}) {
+  // Selections can span pages ("select all matching"): fall back to a short id
+  // for applications not loaded on this page.
+  const labelById = new Map(
+    applications.map((app) => [app.id, app.applicantName || app.applicantEmail]),
+  );
+  const names = applicationIds
+    .slice(0, BULK_OUTCOME_MAX_NAMES)
+    .map((id) => labelById.get(id) ?? `Application ${id.slice(0, 8)}`);
+  const remaining = applicationIds.length - names.length;
+  return (
+    <div className="space-y-0.5">
+      <p className="text-muted-foreground">
+        {title} ({applicationIds.length})
+      </p>
+      <p className="break-words text-xs">
+        {names.join(", ")}
+        {remaining > 0 ? ` and ${remaining} more` : ""}
+      </p>
     </div>
   );
 }

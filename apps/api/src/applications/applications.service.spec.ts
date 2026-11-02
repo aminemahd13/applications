@@ -2,6 +2,7 @@ import { ApplicationsService } from './applications.service';
 import {
   BadRequestException,
   ForbiddenException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { DecisionStatus } from '@event-platform/shared';
@@ -1255,225 +1256,634 @@ describe('ApplicationsService create profile requirements', () => {
 });
 
 describe('ApplicationsService bulk step action', () => {
-  it('adds approve side effects and tolerates non-fatal confirmation failures', async () => {
+  const APP_1 = '37a2125b-fdd0-42e2-a273-89d2f8010e4c';
+  const APP_2 = '5b0c9d2e-7f61-4a8b-9c3d-2e1f0a9b8c7d';
+  const STEP = 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a';
+  const VERSION = 'version-1';
+  const TICKET_REVOKED =
+    'Attendance confirmation cancelled (check-in ticket revoked)';
+
+  type StepRow = {
+    status: string;
+    latest_submission_version_id: string | null;
+  } | null;
+
+  function setup(options: {
+    category?: string;
+    stepIndex?: number;
+    reviewRequired?: boolean;
+    stepRevisionDeadline?: Date | null;
+    /** Step indexes of the event's confirmation steps (default: this step if it is one). */
+    confirmationStepIndexes?: number[];
+    checkinEnabled?: boolean;
+    /** Whether a later confirmation step is approved (un-reject ticket restore). */
+    laterConfirmationApproved?: boolean;
+    /** Step state per application (null = no row yet). */
+    states: Record<string, StepRow>;
+    /** State rows created by ensureStepStates for apps that had none. */
+    createdStates?: Record<string, StepRow>;
+    attendance?: { cancelledCount?: number; status?: string };
+  }) {
+    const category = options.category ?? 'APPLICATION';
+    const stepIndex = options.stepIndex ?? 0;
+    const confirmationStepIndexes =
+      options.confirmationStepIndexes ??
+      (category === 'CONFIRMATION' ? [stepIndex] : []);
+    const states = { ...options.states };
+    const appIds = Object.keys(options.states);
     const mockPrisma = {
       workflow_steps: {
         findFirst: jest.fn().mockResolvedValue({
-          id: 'step-1',
-          category: 'CONFIRMATION',
+          id: STEP,
+          category,
+          step_index: stepIndex,
+          review_required: options.reviewRequired ?? true,
+          revision_deadline_at: options.stepRevisionDeadline ?? null,
+        }),
+        findMany: jest.fn().mockResolvedValue(
+          confirmationStepIndexes.map((index) => ({
+            id: index === stepIndex ? STEP : `confirm-${index}`,
+            step_index: index,
+          })),
+        ),
+      },
+      events: {
+        findUnique: jest.fn().mockResolvedValue({
+          checkin_config: { enabled: options.checkinEnabled ?? true },
         }),
       },
       applications: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'app-1' }]),
+        findMany: jest.fn().mockResolvedValue(appIds.map((id) => ({ id }))),
       },
       application_step_states: {
-        findMany: jest.fn().mockResolvedValue([{ application_id: 'app-1' }]),
-        updateMany: jest.fn(),
+        findMany: jest.fn(({ select }: any) =>
+          Promise.resolve(
+            appIds
+              .filter((id) => states[id])
+              .map((id) =>
+                select?.status
+                  ? { application_id: id, ...states[id] }
+                  : { application_id: id },
+              ),
+          ),
+        ),
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(
+            options.laterConfirmationApproved ? { id: 'confirm-state' } : null,
+          ),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       needs_info_requests: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        create: jest.fn().mockResolvedValue({}),
+      },
+      attendance_records: {
+        updateMany: jest
+          .fn()
+          .mockResolvedValue({ count: options.attendance?.cancelledCount ?? 0 }),
+        findUnique: jest.fn().mockResolvedValue(
+          options.attendance?.status ? { status: options.attendance.status } : null,
+        ),
       },
     };
     const stepStateService = {
-      manualUnlock: jest.fn(),
       markApproved: jest.fn().mockResolvedValue(undefined),
-      markNeedsRevision: jest.fn(),
-    };
-
-    const service = new ApplicationsService(
-      mockPrisma as any,
-      { get: jest.fn() } as any,
-      stepStateService as any,
-    );
-    jest
-      .spyOn(service, 'confirmAttendance')
-      .mockRejectedValue(new Error('non-fatal'));
-
-    const result = await service.bulkStepAction('event-1', {
-      applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
-      stepId: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
-      action: 'APPROVE',
-    });
-
-    expect(stepStateService.markApproved).toHaveBeenCalledWith(
-      'app-1',
-      'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
-    );
-    expect(mockPrisma.needs_info_requests.updateMany).toHaveBeenCalledWith({
-      where: {
-        application_id: 'app-1',
-        step_id: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
-        status: 'OPEN',
-      },
-      data: {
-        status: 'CANCELED',
-        resolved_at: expect.any(Date),
-      },
-    });
-    expect(service.confirmAttendance).toHaveBeenCalledWith('event-1', 'app-1');
-    expect(result).toEqual({ updated: 1, skipped: 0 });
-  });
-
-  it('applies SUBMITTED when a submission version exists and resolves open needs-info requests', async () => {
-    const mockPrisma = {
-      workflow_steps: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'step-1',
-          category: 'APPLICATION',
-        }),
-      },
-      applications: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'app-1' }]),
-      },
-      application_step_states: {
-        findMany: jest.fn().mockResolvedValue([{ application_id: 'app-1' }]),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      },
-      needs_info_requests: {
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      },
-    };
-    const stepStateService = {
-      manualUnlock: jest.fn(),
-      markApproved: jest.fn(),
-      markNeedsRevision: jest.fn(),
-      recomputeAllStepStates: jest.fn().mockResolvedValue(undefined),
-    };
-
-    const service = new ApplicationsService(
-      mockPrisma as any,
-      { get: jest.fn() } as any,
-      stepStateService as any,
-    );
-
-    const result = await service.bulkStepAction('event-1', {
-      applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
-      stepId: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
-      action: 'SUBMITTED',
-    });
-
-    expect(mockPrisma.application_step_states.updateMany).toHaveBeenCalledWith({
-      where: {
-        application_id: 'app-1',
-        step_id: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
-        latest_submission_version_id: { not: null },
-      },
-      data: {
-        status: 'SUBMITTED',
-        current_draft_id: null,
-        last_activity_at: expect.any(Date),
-      },
-    });
-    expect(stepStateService.recomputeAllStepStates).toHaveBeenCalledWith('app-1');
-    expect(mockPrisma.needs_info_requests.updateMany).toHaveBeenCalledWith({
-      where: {
-        application_id: 'app-1',
-        step_id: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
-        status: 'OPEN',
-      },
-      data: {
-        status: 'RESOLVED',
-        resolved_at: expect.any(Date),
-      },
-    });
-    expect(result).toEqual({ updated: 1, skipped: 0 });
-  });
-
-  it('applies REJECT by setting final rejection and canceling open needs-info requests', async () => {
-    const mockPrisma = {
-      workflow_steps: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'step-1',
-          category: 'APPLICATION',
-        }),
-      },
-      applications: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'app-1' }]),
-      },
-      application_step_states: {
-        findMany: jest.fn().mockResolvedValue([{ application_id: 'app-1' }]),
-        updateMany: jest.fn(),
-      },
-      needs_info_requests: {
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      },
-    };
-    const stepStateService = {
-      manualUnlock: jest.fn(),
-      markApproved: jest.fn(),
-      markNeedsRevision: jest.fn(),
       markRejectedFinal: jest.fn().mockResolvedValue(undefined),
+      markNeedsRevision: jest.fn().mockResolvedValue(undefined),
+      manualUnlock: jest.fn().mockResolvedValue(undefined),
+      recomputeAllStepStates: jest.fn().mockResolvedValue(undefined),
+      ensureStepStates: jest.fn((applicationId: string) => {
+        states[applicationId] = options.createdStates?.[applicationId] ?? null;
+        return Promise.resolve(true);
+      }),
     };
-
+    const cls = {
+      get: jest.fn((key: string) => (key === 'actorId' ? 'staff-1' : undefined)),
+    };
     const service = new ApplicationsService(
       mockPrisma as any,
-      { get: jest.fn() } as any,
+      cls as any,
       stepStateService as any,
     );
+    const confirmAttendance = jest
+      .spyOn(service, 'confirmAttendance')
+      .mockResolvedValue({ qrToken: 'token' });
+    return { service, mockPrisma, stepStateService, confirmAttendance };
+  }
 
-    const result = await service.bulkStepAction('event-1', {
-      applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
-      stepId: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
-      action: 'REJECT',
-    });
-
-    expect(stepStateService.markRejectedFinal).toHaveBeenCalledWith(
-      'app-1',
-      'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
-    );
-    expect(mockPrisma.needs_info_requests.updateMany).toHaveBeenCalledWith({
-      where: {
-        application_id: 'app-1',
-        step_id: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
-        status: 'OPEN',
-      },
-      data: {
-        status: 'CANCELED',
-        resolved_at: expect.any(Date),
-      },
-    });
-    expect(result).toEqual({ updated: 1, skipped: 0 });
+  const submitted = (status: string): StepRow => ({
+    status,
+    latest_submission_version_id: VERSION,
+  });
+  const notSubmitted = (status: string): StepRow => ({
+    status,
+    latest_submission_version_id: null,
   });
 
-  it('skips LOCK when no step state exists for an application', async () => {
-    const mockPrisma = {
-      workflow_steps: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'step-1',
-          category: 'APPLICATION',
-        }),
-      },
-      applications: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'app-1' }]),
-      },
-      application_step_states: {
-        findMany: jest.fn().mockResolvedValue([]),
-        updateMany: jest.fn(),
-      },
-      needs_info_requests: {
-        updateMany: jest.fn(),
-      },
-    };
-    const stepStateService = {
-      manualUnlock: jest.fn(),
-      markApproved: jest.fn(),
-      markNeedsRevision: jest.fn(),
-    };
+  function run(
+    service: ApplicationsService,
+    action: any,
+    extra: Record<string, unknown> = {},
+    applicationIds: string[] = [APP_1],
+  ) {
+    return service.bulkStepAction('event-1', {
+      applicationIds,
+      stepId: STEP,
+      action,
+      ...extra,
+    } as any);
+  }
 
-    const service = new ApplicationsService(
-      mockPrisma as any,
-      { get: jest.fn() } as any,
-      stepStateService as any,
-    );
+  describe('approve', () => {
+    it('approves, cancels open revision requests and issues the check-in ticket', async () => {
+      const { service, mockPrisma, stepStateService, confirmAttendance } = setup({
+        category: 'CONFIRMATION',
+        states: { [APP_1]: submitted('SUBMITTED') },
+      });
 
-    const result = await service.bulkStepAction('event-1', {
-      applicationIds: ['37a2125b-fdd0-42e2-a273-89d2f8010e4c'],
-      stepId: 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a',
-      action: 'LOCK',
+      const result = await run(service, 'APPROVE');
+
+      expect(stepStateService.markApproved).toHaveBeenCalledWith(APP_1, STEP);
+      expect(mockPrisma.needs_info_requests.updateMany).toHaveBeenCalledWith({
+        where: { application_id: APP_1, step_id: STEP, status: 'OPEN' },
+        data: { status: 'CANCELED', resolved_at: expect.any(Date) },
+      });
+      expect(confirmAttendance).toHaveBeenCalledWith('event-1', APP_1);
+      expect(result).toEqual({ updated: 1, skipped: 0, skippedDetails: [], notes: [] });
     });
 
-    expect(mockPrisma.application_step_states.updateMany).not.toHaveBeenCalled();
-    expect(result).toEqual({ updated: 0, skipped: 1 });
+    it('reports why attendance could not be confirmed as a note', async () => {
+      const { service, confirmAttendance } = setup({
+        category: 'CONFIRMATION',
+        states: { [APP_1]: submitted('SUBMITTED') },
+      });
+      confirmAttendance.mockRejectedValue(
+        new ForbiddenException('Application not accepted'),
+      );
+
+      const result = await run(service, 'APPROVE');
+
+      expect(result).toMatchObject({
+        updated: 1,
+        notes: [
+          {
+            applicationId: APP_1,
+            note: 'Approved, but attendance was not confirmed: Application not accepted',
+          },
+        ],
+      });
+    });
+
+    it('does not try to issue tickets when check-in is off for the event', async () => {
+      const { service, confirmAttendance } = setup({
+        category: 'CONFIRMATION',
+        checkinEnabled: false,
+        states: { [APP_1]: submitted('SUBMITTED') },
+      });
+
+      const result = await run(service, 'APPROVE');
+
+      expect(confirmAttendance).not.toHaveBeenCalled();
+      expect(result.notes).toEqual([]);
+    });
+
+    it('skips steps that are already approved, with a reason', async () => {
+      const { service, stepStateService } = setup({
+        states: { [APP_1]: submitted('APPROVED') },
+      });
+
+      const result = await run(service, 'APPROVE');
+
+      expect(stepStateService.markApproved).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        updated: 0,
+        skipped: 1,
+        skippedDetails: [{ applicationId: APP_1, reason: 'Already approved' }],
+      });
+    });
+  });
+
+  describe('unapprove and un-reject', () => {
+    it('unapproves back to "Submitted" when there is a submission, else back to open', async () => {
+      const { service, mockPrisma, stepStateService } = setup({
+        states: {
+          [APP_1]: submitted('APPROVED'),
+          [APP_2]: notSubmitted('APPROVED'),
+        },
+      });
+
+      const result = await run(service, 'UNAPPROVE', {}, [APP_1, APP_2]);
+
+      expect(mockPrisma.application_step_states.updateMany).toHaveBeenCalledWith({
+        where: { application_id: APP_1, step_id: STEP },
+        data: { status: 'SUBMITTED', last_activity_at: expect.any(Date) },
+      });
+      expect(mockPrisma.application_step_states.updateMany).toHaveBeenCalledWith({
+        where: { application_id: APP_2, step_id: STEP },
+        data: {
+          status: 'UNLOCKED',
+          last_activity_at: expect.any(Date),
+          unlocked_at: expect.any(Date),
+        },
+      });
+      expect(stepStateService.recomputeAllStepStates).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({ updated: 2, skipped: 0 });
+    });
+
+    it('reopens a step without review for editing (it would never be reviewed)', async () => {
+      const { service, mockPrisma } = setup({
+        reviewRequired: false,
+        states: { [APP_1]: submitted('APPROVED') },
+      });
+
+      await run(service, 'UNAPPROVE');
+
+      expect(mockPrisma.application_step_states.updateMany).toHaveBeenCalledWith({
+        where: { application_id: APP_1, step_id: STEP },
+        data: expect.objectContaining({ status: 'UNLOCKED' }),
+      });
+    });
+
+    it('does not unapprove a step that is not approved', async () => {
+      const { service, mockPrisma } = setup({
+        states: { [APP_1]: submitted('SUBMITTED') },
+      });
+
+      const result = await run(service, 'UNAPPROVE');
+
+      expect(mockPrisma.application_step_states.updateMany).not.toHaveBeenCalled();
+      expect(result.skippedDetails).toEqual([
+        { applicationId: APP_1, reason: 'The step is not approved' },
+      ]);
+    });
+
+    it('un-rejects back to "Submitted", and skips steps that are not rejected', async () => {
+      const { service, mockPrisma } = setup({
+        states: {
+          [APP_1]: submitted('REJECTED_FINAL'),
+          [APP_2]: submitted('APPROVED'),
+        },
+      });
+
+      const result = await run(service, 'UNREJECT', {}, [APP_1, APP_2]);
+
+      expect(mockPrisma.application_step_states.updateMany).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.application_step_states.updateMany).toHaveBeenCalledWith({
+        where: { application_id: APP_1, step_id: STEP },
+        data: { status: 'SUBMITTED', last_activity_at: expect.any(Date) },
+      });
+      expect(result).toMatchObject({
+        updated: 1,
+        skipped: 1,
+        skippedDetails: [{ applicationId: APP_2, reason: 'The step is not rejected' }],
+      });
+    });
+  });
+
+  describe('reject', () => {
+    it('rejects (final), keeping later submitted/approved steps, and cancels open revision requests', async () => {
+      const { service, mockPrisma, stepStateService } = setup({
+        states: { [APP_1]: submitted('SUBMITTED') },
+      });
+
+      const result = await run(service, 'REJECT');
+
+      expect(stepStateService.markRejectedFinal).toHaveBeenCalledWith(APP_1, STEP, {
+        keepSubmittedDownstream: true,
+      });
+      expect(mockPrisma.needs_info_requests.updateMany).toHaveBeenCalled();
+      expect(mockPrisma.attendance_records.updateMany).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ updated: 1, skipped: 0 });
+    });
+
+    it('rejecting a step before the confirmation step revokes the check-in ticket', async () => {
+      const { service, mockPrisma } = setup({
+        stepIndex: 0,
+        confirmationStepIndexes: [2],
+        states: { [APP_1]: submitted('APPROVED') },
+        attendance: { cancelledCount: 1 },
+      });
+
+      const result = await run(service, 'REJECT');
+
+      expect(mockPrisma.attendance_records.updateMany).toHaveBeenCalledWith({
+        where: { application_id: APP_1, status: 'CONFIRMED' },
+        data: {
+          status: 'NONE',
+          confirmed_at: null,
+          qr_token_hash: null,
+          qr_issued_at: null,
+        },
+      });
+      expect(result.notes).toEqual([{ applicationId: APP_1, note: TICKET_REVOKED }]);
+    });
+
+    it('rejecting a step after the confirmation step keeps the ticket', async () => {
+      const { service, mockPrisma } = setup({
+        stepIndex: 3,
+        confirmationStepIndexes: [2],
+        states: { [APP_1]: submitted('SUBMITTED') },
+      });
+
+      await run(service, 'REJECT');
+
+      expect(mockPrisma.attendance_records.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('keeps the attendance of applicants who already checked in', async () => {
+      const { service } = setup({
+        category: 'CONFIRMATION',
+        states: { [APP_1]: submitted('APPROVED') },
+        attendance: { cancelledCount: 0, status: 'CHECKED_IN' },
+      });
+
+      const result = await run(service, 'REJECT');
+
+      expect(result).toMatchObject({
+        updated: 1,
+        notes: [{ applicationId: APP_1, note: 'Already checked in: attendance kept' }],
+      });
+    });
+
+    it('un-rejecting an earlier step gives back the ticket of an approved confirmation', async () => {
+      const { service, confirmAttendance } = setup({
+        stepIndex: 0,
+        confirmationStepIndexes: [2],
+        laterConfirmationApproved: true,
+        states: { [APP_1]: submitted('REJECTED_FINAL') },
+        attendance: { status: 'NONE' },
+      });
+
+      const result = await run(service, 'UNREJECT');
+
+      expect(confirmAttendance).toHaveBeenCalledWith('event-1', APP_1);
+      expect(result.notes).toEqual([
+        { applicationId: APP_1, note: 'Attendance confirmed again (new check-in ticket)' },
+      ]);
+    });
+
+    it('un-rejecting does not issue a ticket when the confirmation is not approved', async () => {
+      const { service, confirmAttendance } = setup({
+        stepIndex: 0,
+        confirmationStepIndexes: [2],
+        laterConfirmationApproved: false,
+        states: { [APP_1]: submitted('REJECTED_FINAL') },
+      });
+
+      const result = await run(service, 'UNREJECT');
+
+      expect(confirmAttendance).not.toHaveBeenCalled();
+      expect(result.notes).toEqual([]);
+    });
+  });
+
+  describe('check-in ticket on the confirmation step', () => {
+    it.each(['UNAPPROVE', 'SUBMITTED', 'LOCK', 'UNLOCK', 'REQUEST_REVISION'])(
+      '%s on an approved confirmation step revokes the ticket',
+      async (action) => {
+        const { service, mockPrisma } = setup({
+          category: 'CONFIRMATION',
+          states: { [APP_1]: submitted('APPROVED') },
+          attendance: { cancelledCount: 1 },
+        });
+
+        const result = await run(service, action);
+
+        expect(mockPrisma.attendance_records.updateMany).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({
+          updated: 1,
+          notes: [{ applicationId: APP_1, note: TICKET_REVOKED }],
+        });
+      },
+    );
+
+    it('leaves the ticket alone when the confirmation step was not approved', async () => {
+      const { service, mockPrisma } = setup({
+        category: 'CONFIRMATION',
+        states: { [APP_1]: submitted('SUBMITTED') },
+      });
+
+      await run(service, 'LOCK');
+
+      expect(mockPrisma.attendance_records.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('request revision', () => {
+    it('replaces open requests and records the message, deadline and staff author', async () => {
+      const deadline = new Date('2026-12-01T00:00:00.000Z');
+      const { service, mockPrisma, stepStateService } = setup({
+        states: { [APP_1]: submitted('APPROVED') },
+      });
+
+      const result = await run(service, 'REQUEST_REVISION', {
+        message: '  Please upload a clearer ID.  ',
+        revisionDeadline: deadline,
+      });
+
+      expect(mockPrisma.needs_info_requests.updateMany).toHaveBeenCalledWith({
+        where: { application_id: APP_1, step_id: STEP, status: 'OPEN' },
+        data: { status: 'CANCELED', resolved_at: expect.any(Date) },
+      });
+      expect(mockPrisma.needs_info_requests.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          application_id: APP_1,
+          step_id: STEP,
+          submission_version_id: VERSION,
+          target_field_ids: [],
+          message: 'Please upload a clearer ID.',
+          deadline_at: deadline,
+          status: 'OPEN',
+          created_by: 'staff-1',
+        }),
+      });
+      expect(stepStateService.markNeedsRevision).toHaveBeenCalledWith(APP_1, STEP, {
+        revisionDeadlineAt: deadline,
+      });
+      expect(result).toMatchObject({ updated: 1, skipped: 0 });
+    });
+
+    it('uses a default message and the step deadline when none is given', async () => {
+      const stepDeadline = new Date('2026-12-15T00:00:00.000Z');
+      const { service, mockPrisma, stepStateService } = setup({
+        stepRevisionDeadline: stepDeadline,
+        states: { [APP_1]: submitted('SUBMITTED') },
+      });
+
+      await run(service, 'REQUEST_REVISION');
+
+      expect(mockPrisma.needs_info_requests.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          message: 'Please review and update this step.',
+          deadline_at: stepDeadline,
+        }),
+      });
+      expect(stepStateService.markNeedsRevision).toHaveBeenCalledWith(APP_1, STEP, {
+        revisionDeadlineAt: stepDeadline,
+      });
+    });
+
+    it('refuses a deadline later than the step allows, before changing anything', async () => {
+      const { service, mockPrisma } = setup({
+        stepRevisionDeadline: new Date('2026-12-01T00:00:00.000Z'),
+        states: { [APP_1]: submitted('SUBMITTED') },
+      });
+
+      await expect(
+        run(service, 'REQUEST_REVISION', {
+          revisionDeadline: new Date('2026-12-20T00:00:00.000Z'),
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.applications.findMany).not.toHaveBeenCalled();
+      expect(mockPrisma.needs_info_requests.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('mark as submitted', () => {
+    it('marks submitted, recomputes the workflow and resolves open revision requests', async () => {
+      const { service, mockPrisma, stepStateService } = setup({
+        states: { [APP_1]: submitted('NEEDS_REVISION') },
+      });
+
+      const result = await run(service, 'SUBMITTED');
+
+      expect(mockPrisma.application_step_states.updateMany).toHaveBeenCalledWith({
+        where: { application_id: APP_1, step_id: STEP },
+        data: {
+          status: 'SUBMITTED',
+          current_draft_id: null,
+          last_activity_at: expect.any(Date),
+        },
+      });
+      expect(stepStateService.recomputeAllStepStates).toHaveBeenCalledWith(APP_1);
+      expect(mockPrisma.needs_info_requests.updateMany).toHaveBeenCalledWith({
+        where: { application_id: APP_1, step_id: STEP, status: 'OPEN' },
+        data: { status: 'RESOLVED', resolved_at: expect.any(Date) },
+      });
+      expect(result).toMatchObject({ updated: 1, skipped: 0 });
+    });
+
+    it('skips steps without review, which would never be reviewed', async () => {
+      const { service, mockPrisma } = setup({
+        reviewRequired: false,
+        states: { [APP_1]: submitted('APPROVED') },
+      });
+
+      const result = await run(service, 'SUBMITTED');
+
+      expect(mockPrisma.application_step_states.updateMany).not.toHaveBeenCalled();
+      expect(result.skippedDetails).toEqual([
+        {
+          applicationId: APP_1,
+          reason: 'This step has no review: use Approve or Open for editing instead',
+        },
+      ]);
+    });
+
+    it('skips revision requests and "mark submitted" when nothing was submitted', async () => {
+      const { service, mockPrisma } = setup({
+        states: { [APP_1]: notSubmitted('UNLOCKED') },
+      });
+
+      const revision = await run(service, 'REQUEST_REVISION');
+      const markSubmitted = await run(service, 'SUBMITTED');
+
+      expect(mockPrisma.needs_info_requests.create).not.toHaveBeenCalled();
+      expect(mockPrisma.application_step_states.updateMany).not.toHaveBeenCalled();
+      expect(revision.skippedDetails).toEqual([
+        { applicationId: APP_1, reason: 'Nothing submitted yet' },
+      ]);
+      expect(markSubmitted.skippedDetails).toEqual([
+        { applicationId: APP_1, reason: 'Nothing submitted yet' },
+      ]);
+    });
+  });
+
+  describe('open and lock', () => {
+    it('opens and locks steps whatever their status, skipping no-ops', async () => {
+      const open = setup({ states: { [APP_1]: submitted('APPROVED') } });
+      await run(open.service, 'UNLOCK');
+      expect(open.stepStateService.manualUnlock).toHaveBeenCalledWith(APP_1, STEP);
+
+      const lock = setup({ states: { [APP_1]: submitted('SUBMITTED') } });
+      await run(lock.service, 'LOCK');
+      expect(lock.mockPrisma.application_step_states.updateMany).toHaveBeenCalledWith({
+        where: { application_id: APP_1, step_id: STEP },
+        data: { status: 'LOCKED', last_activity_at: expect.any(Date) },
+      });
+
+      const alreadyOpen = setup({ states: { [APP_1]: notSubmitted('UNLOCKED') } });
+      const result = await run(alreadyOpen.service, 'UNLOCK');
+      expect(alreadyOpen.stepStateService.manualUnlock).not.toHaveBeenCalled();
+      expect(result.skippedDetails).toEqual([
+        { applicationId: APP_1, reason: 'Already open' },
+      ]);
+    });
+  });
+
+  describe('selection handling', () => {
+    it('creates missing step states so applicants who never opened the step are not skipped', async () => {
+      const { service, stepStateService } = setup({
+        states: { [APP_1]: null },
+        createdStates: { [APP_1]: notSubmitted('LOCKED') },
+      });
+
+      const result = await run(service, 'UNLOCK');
+
+      expect(stepStateService.ensureStepStates).toHaveBeenCalledWith(APP_1, 'event-1');
+      expect(stepStateService.manualUnlock).toHaveBeenCalledWith(APP_1, STEP);
+      expect(result).toMatchObject({ updated: 1, skipped: 0 });
+    });
+
+    it('reports applications outside the event and failures without stopping or leaking internals', async () => {
+      const logError = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      const { service, stepStateService } = setup({
+        states: {
+          [APP_1]: submitted('SUBMITTED'),
+          [APP_2]: submitted('SUBMITTED'),
+        },
+      });
+      stepStateService.markApproved.mockImplementation((applicationId: string) =>
+        applicationId === APP_1
+          ? Promise.reject(new Error('Invalid `prisma.application_step_states.updateMany()` invocation'))
+          : Promise.resolve(undefined),
+      );
+      const unknownId = '0f0e0d0c-0b0a-4909-8807-060504030201';
+
+      const result = await run(service, 'APPROVE', {}, [APP_1, APP_2, unknownId]);
+
+      expect(result).toMatchObject({ updated: 1, skipped: 2 });
+      expect(result.skippedDetails).toEqual(
+        expect.arrayContaining([
+          { applicationId: unknownId, reason: 'Application not found in this event' },
+          {
+            applicationId: APP_1,
+            reason:
+              'Failed: unexpected error. The step may be partly updated; open the application to check it',
+          },
+        ]),
+      );
+      expect(logError).toHaveBeenCalled();
+      logError.mockRestore();
+    });
+
+    it('reports expected errors by their message', async () => {
+      const { service, stepStateService } = setup({
+        states: { [APP_1]: submitted('SUBMITTED') },
+      });
+      stepStateService.markApproved.mockRejectedValue(
+        new NotFoundException('Step state not found'),
+      );
+
+      const result = await run(service, 'APPROVE');
+
+      expect(result.skippedDetails).toEqual([
+        { applicationId: APP_1, reason: 'Failed: Step state not found' },
+      ]);
+    });
   });
 });
 

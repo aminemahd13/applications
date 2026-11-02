@@ -254,4 +254,54 @@ describe('StepStateService', () => {
 
     expect(prisma.application_step_states.updateMany).not.toHaveBeenCalled();
   });
+
+  describe('markRejectedFinal', () => {
+    function rejectHarness() {
+      const harness = createHarness();
+      harness.prisma.workflow_steps.findUnique.mockResolvedValue({
+        event_id: 'event-1',
+        step_index: 0,
+      });
+      (harness.prisma.workflow_steps as any).findMany = jest
+        .fn()
+        .mockResolvedValue([{ id: 'step-2' }, { id: 'step-3' }]);
+      return harness;
+    }
+
+    it('locks every later step (reviewer rejection)', async () => {
+      const { service, prisma } = rejectHarness();
+
+      await service.markRejectedFinal('app-1', 'step-1');
+
+      expect(prisma.application_step_states.updateMany).toHaveBeenLastCalledWith({
+        where: { application_id: 'app-1', step_id: { in: ['step-2', 'step-3'] } },
+        data: { status: StepStatus.LOCKED, last_activity_at: expect.any(Date) },
+      });
+    });
+
+    it('only locks later steps still being filled in when keeping submitted ones (staff bulk reject)', async () => {
+      const { service, prisma } = rejectHarness();
+
+      await service.markRejectedFinal('app-1', 'step-1', {
+        keepSubmittedDownstream: true,
+      });
+
+      expect(prisma.application_step_states.updateMany).toHaveBeenCalledWith({
+        where: { application_id: 'app-1', step_id: 'step-1' },
+        data: {
+          status: StepStatus.REJECTED_FINAL,
+          revision_deadline_at: null,
+          last_activity_at: expect.any(Date),
+        },
+      });
+      expect(prisma.application_step_states.updateMany).toHaveBeenLastCalledWith({
+        where: {
+          application_id: 'app-1',
+          step_id: { in: ['step-2', 'step-3'] },
+          status: { in: [StepStatus.UNLOCKED, 'UNLOCKED_DRAFT', 'READY_TO_SUBMIT'] },
+        },
+        data: { status: StepStatus.LOCKED, last_activity_at: expect.any(Date) },
+      });
+    });
+  });
 });

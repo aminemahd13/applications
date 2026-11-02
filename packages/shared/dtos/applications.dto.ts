@@ -479,12 +479,45 @@ export const BulkDecisionDraftSchema = BulkApplicationIdsSchema.extend({
 
 export type BulkDecisionDraftDto = z.infer<typeof BulkDecisionDraftSchema>;
 
+export const BULK_STEP_ACTIONS = [
+    'APPROVE',
+    'UNAPPROVE',
+    'REJECT',
+    'UNREJECT',
+    'REQUEST_REVISION',
+    'UNLOCK',
+    'LOCK',
+    'SUBMITTED',
+] as const;
+
+export type BulkStepActionType = (typeof BULK_STEP_ACTIONS)[number];
+
 export const BulkStepActionSchema = BulkApplicationIdsSchema.extend({
     stepId: z.string().uuid(),
-    action: z.enum(['UNLOCK', 'SUBMITTED', 'APPROVE', 'REJECT', 'LOCK']),
+    action: z.enum(BULK_STEP_ACTIONS),
+    /** REQUEST_REVISION only: message shown to the applicant. */
+    message: z.string().trim().max(5000).optional(),
+    /** REQUEST_REVISION only: revision deadline (same rules as a reviewer's). */
+    revisionDeadline: z.coerce
+        .date()
+        .refine(
+            (date) =>
+                date.getUTCFullYear() >= 2000 && date.getUTCFullYear() <= 2100,
+            { message: 'Revision deadline must be a valid date' },
+        )
+        .optional(),
 });
 
 export type BulkStepActionDto = z.infer<typeof BulkStepActionSchema>;
+
+export interface BulkStepActionResult {
+    updated: number;
+    skipped: number;
+    /** Why each skipped application was not changed. */
+    skippedDetails: Array<{ applicationId: string; reason: string }>;
+    /** Changed, but with something worth knowing (e.g. attendance kept). */
+    notes: Array<{ applicationId: string; note: string }>;
+}
 
 export const ResolveApplicationsByEmailsSchema = z.object({
     emails: z.array(z.string().trim().email()).min(1).max(2000),

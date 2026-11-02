@@ -463,7 +463,8 @@ export class ApplicationsController {
   }
 
   /**
-   * Bulk step action (unlock, submitted, approve, reject, lock)
+   * Bulk step action (approve, unapprove, reject, un-reject, request revision,
+   * open, lock, mark submitted)
    */
   @Post('bulk/step-action')
   @RequirePermission(
@@ -481,13 +482,17 @@ export class ApplicationsController {
           Object.values(Permission).includes(permission),
       ),
     );
-    const requiredPermission =
-      dto.action === 'SUBMITTED' ||
-      dto.action === 'APPROVE' ||
-      dto.action === 'REJECT'
-        ? Permission.EVENT_STEP_REVIEW
-        : Permission.EVENT_STEP_OVERRIDE_UNLOCK;
-    if (!permissions.has(requiredPermission)) {
+    // Opening / locking a step is an override and approving is a review
+    // decision. Undoing or overriding decisions (unapprove, reject, un-reject,
+    // request revision, mark submitted) needs both, i.e. organizers and
+    // admins by default, not plain reviewers.
+    const requiredPermissions =
+      dto.action === 'UNLOCK' || dto.action === 'LOCK'
+        ? [Permission.EVENT_STEP_OVERRIDE_UNLOCK]
+        : dto.action === 'APPROVE'
+          ? [Permission.EVENT_STEP_REVIEW]
+          : [Permission.EVENT_STEP_REVIEW, Permission.EVENT_STEP_OVERRIDE_UNLOCK];
+    if (!requiredPermissions.every((permission) => permissions.has(permission))) {
       throw new ForbiddenException('Insufficient permissions');
     }
     const result = await this.applicationsService.bulkStepAction(

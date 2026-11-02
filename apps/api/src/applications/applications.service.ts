@@ -1,8 +1,10 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  HttpException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
@@ -36,6 +38,8 @@ import {
   BulkAssignReviewerDto,
   BulkDecisionDraftDto,
   BulkStepActionDto,
+  BulkStepActionResult,
+  BulkStepActionType,
   CreateDecisionTemplateDto,
   DecisionStatus,
   DecisionTemplateResponse,
@@ -75,6 +79,17 @@ import {
   normalizeAnswersShape,
   resolveEffectiveAnswers,
 } from '../common/utils/effective-answers.util';
+import { resolveEffectiveRevisionDeadline } from '../common/utils/revision-deadline.util';
+
+type BulkStepContext = {
+  reviewRequired: boolean;
+  isConfirmationStep: boolean;
+  /** Confirmation steps after the selected step. */
+  laterConfirmationStepIds: string[];
+  checkinEnabled: boolean;
+  revisionDeadline: Date | null;
+  actorId?: string;
+};
 
 type ApplicationsListRecord = {
   id: string;
@@ -177,6 +192,8 @@ export class ApplicationsService {
     const last = profile?.last_name?.trim?.() ?? '';
     return [first, last].filter(Boolean).join(' ') || profile?.full_name?.trim?.() || '';
   }
+
+  private readonly logger = new Logger(ApplicationsService.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -2703,134 +2720,472 @@ export class ApplicationsService {
   }
 
   /**
-   * Bulk step action (unlock, submitted, approve, reject, lock)
+   * Bulk step action. Staff get full control over the step status of the
+   * selected applications, whatever the current status or deadlines (the
+   * applicant-side deadline rules are unchanged). Applicants who never opened
+   * the step get their step states created first, so nobody is silently
+   * skipped; every skipped application comes back with a reason.
    */
   async bulkStepAction(
     eventId: string,
     dto: BulkStepActionDto,
-  ): Promise<{ updated: number; skipped: number }> {
+  ): Promise<BulkStepActionResult> {
     const step = await this.prisma.workflow_steps.findFirst({
       where: { id: dto.stepId, event_id: eventId },
-      select: { id: true, category: true },
+      select: {
+        id: true,
+        category: true,
+        step_index: true,
+        review_required: true,
+        revision_deadline_at: true,
+      },
     });
     if (!step) throw new NotFoundException('Step not found in this event');
 
+    // Same rule as a reviewer's "Request revision": the deadline may only
+    // shorten the step's configured revision deadline.
+    const revisionDeadline =
+      dto.action === 'REQUEST_REVISION'
+        ? resolveEffectiveRevisionDeadline(
+            step.revision_deadline_at,
+            dto.revisionDeadline,
+          )
+        : null;
+
+    const result: BulkStepActionResult = {
+      updated: 0,
+      skipped: 0,
+      skippedDetails: [],
+      notes: [],
+    };
+    const skip = (applicationId: string, reason: string) => {
+      result.skipped++;
+      result.skippedDetails.push({ applicationId, reason });
+    };
+
+    const requestedIds = Array.from(new Set(dto.applicationIds));
     const apps = await this.prisma.applications.findMany({
-      where: { event_id: eventId, id: { in: dto.applicationIds } },
+      where: { event_id: eventId, id: { in: requestedIds } },
       select: { id: true },
     });
-    if (apps.length === 0) return { updated: 0, skipped: 0 };
+    const foundIds = new Set(apps.map((app) => app.id));
+    for (const id of requestedIds) {
+      if (!foundIds.has(id)) skip(id, 'Application not found in this event');
+    }
+    if (apps.length === 0) return result;
+    const appIds = apps.map((app) => app.id);
 
-    const stepStates = await this.prisma.application_step_states.findMany({
-      where: {
-        application_id: { in: apps.map((app) => app.id) },
-        step_id: dto.stepId,
-      },
+    // Step states are created lazily; create them for applicants who never
+    // opened this step so the action applies to them too.
+    const existingStates = await this.prisma.application_step_states.findMany({
+      where: { application_id: { in: appIds }, step_id: dto.stepId },
       select: { application_id: true },
     });
-    const appIdsWithStepState = new Set(
-      stepStates.map((state) => state.application_id),
+    const withState = new Set(
+      existingStates.map((state) => state.application_id),
     );
-
-    let updated = 0;
-    for (const app of apps) {
-      if (!appIdsWithStepState.has(app.id)) {
-        continue;
-      }
-
+    for (const appId of appIds) {
+      if (withState.has(appId)) continue;
       try {
-        switch (dto.action) {
-          case 'UNLOCK':
-            await this.stepStateService.manualUnlock(app.id, dto.stepId);
-            break;
-          case 'SUBMITTED': {
-            const submittedAt = new Date();
-            const submittedResult = await this.prisma.application_step_states.updateMany(
-              {
-                where: {
-                  application_id: app.id,
-                  step_id: dto.stepId,
-                  latest_submission_version_id: { not: null },
-                },
-                data: {
-                  status: StepStatus.SUBMITTED,
-                  current_draft_id: null,
-                  last_activity_at: submittedAt,
-                },
-              },
-            );
-            if (submittedResult.count === 0) {
-              continue;
-            }
-            await this.stepStateService.recomputeAllStepStates(app.id);
-            await this.prisma.needs_info_requests.updateMany({
-              where: {
-                application_id: app.id,
-                step_id: dto.stepId,
-                status: 'OPEN',
-              },
-              data: {
-                status: 'RESOLVED',
-                resolved_at: submittedAt,
-              },
-            });
-            break;
-          }
-          case 'APPROVE':
-            await this.stepStateService.markApproved(app.id, dto.stepId);
-            await this.prisma.needs_info_requests.updateMany({
-              where: {
-                application_id: app.id,
-                step_id: dto.stepId,
-                status: 'OPEN',
-              },
-              data: {
-                status: 'CANCELED',
-                resolved_at: new Date(),
-              },
-            });
-            if (step.category === 'CONFIRMATION') {
-              try {
-                await this.confirmAttendance(eventId, app.id);
-              } catch {
-                // Non-fatal in bulk mode.
-              }
-            }
-            break;
-          case 'REJECT':
-            await this.stepStateService.markRejectedFinal(app.id, dto.stepId);
-            await this.prisma.needs_info_requests.updateMany({
-              where: {
-                application_id: app.id,
-                step_id: dto.stepId,
-                status: 'OPEN',
-              },
-              data: {
-                status: 'CANCELED',
-                resolved_at: new Date(),
-              },
-            });
-            break;
-          case 'LOCK': {
-            const lockResult = await this.prisma.application_step_states.updateMany(
-              {
-                where: { application_id: app.id, step_id: dto.stepId },
-                data: { status: 'LOCKED', last_activity_at: new Date() },
-              },
-            );
-            if (lockResult.count === 0) {
-              continue;
-            }
-            break;
-          }
-        }
-        updated++;
+        await this.stepStateService.ensureStepStates(appId, eventId);
       } catch {
-        // Skip individual failures
+        // Reported below as "could not be created".
       }
     }
 
-    return { updated, skipped: apps.length - updated };
+    const states = await this.prisma.application_step_states.findMany({
+      where: { application_id: { in: appIds }, step_id: dto.stepId },
+      select: {
+        application_id: true,
+        status: true,
+        latest_submission_version_id: true,
+      },
+    });
+    const stateByAppId = new Map(
+      states.map((state) => [state.application_id, state]),
+    );
+
+    const context = await this.loadBulkStepContext(
+      eventId,
+      step,
+      dto.action,
+      revisionDeadline,
+    );
+
+    for (const appId of appIds) {
+      const state = stateByAppId.get(appId);
+      if (!state) {
+        skip(appId, 'The step status could not be created');
+        continue;
+      }
+      try {
+        const outcome = await this.applyBulkStepAction(
+          eventId,
+          appId,
+          dto,
+          state,
+          context,
+        );
+        if (outcome.skipped) {
+          skip(appId, outcome.skipped);
+          continue;
+        }
+        result.updated++;
+        if (outcome.note) {
+          result.notes.push({ applicationId: appId, note: outcome.note });
+        }
+      } catch (error) {
+        skip(appId, this.describeBulkStepError(appId, error));
+      }
+    }
+
+    return result;
+  }
+
+  private async loadBulkStepContext(
+    eventId: string,
+    step: {
+      id: string;
+      category: string;
+      step_index: number;
+      review_required: boolean;
+    },
+    action: BulkStepActionType,
+    revisionDeadline: Date | null,
+  ): Promise<BulkStepContext> {
+    const confirmationSteps = await this.prisma.workflow_steps.findMany({
+      where: { event_id: eventId, category: 'CONFIRMATION' },
+      select: { id: true, step_index: true },
+    });
+    const isConfirmationStep = step.category === 'CONFIRMATION';
+    const laterConfirmationStepIds = confirmationSteps
+      .filter((item) => item.step_index > step.step_index)
+      .map((item) => item.id);
+
+    // Only approving the confirmation step, or un-rejecting a step before it,
+    // can issue a check-in ticket.
+    const mayIssueTicket =
+      (action === 'APPROVE' && isConfirmationStep) ||
+      (action === 'UNREJECT' && laterConfirmationStepIds.length > 0);
+    let checkinEnabled = false;
+    if (mayIssueTicket) {
+      const event = await this.prisma.events.findUnique({
+        where: { id: eventId },
+        select: { checkin_config: true },
+      });
+      const checkinConfig =
+        (event?.checkin_config as Record<string, unknown>) ?? {};
+      checkinEnabled = this.readBoolean(checkinConfig.enabled, false);
+    }
+
+    return {
+      reviewRequired: step.review_required,
+      isConfirmationStep,
+      laterConfirmationStepIds,
+      checkinEnabled,
+      revisionDeadline,
+      actorId: this.cls.get('actorId') as string | undefined,
+    };
+  }
+
+  private async applyBulkStepAction(
+    eventId: string,
+    applicationId: string,
+    dto: BulkStepActionDto,
+    state: { status: string; latest_submission_version_id: string | null },
+    context: BulkStepContext,
+  ): Promise<{ skipped?: string; note?: string }> {
+    const stepId = dto.stepId;
+    const hasSubmission = Boolean(state.latest_submission_version_id);
+    // Unapprove / un-reject go back to "awaiting review" when there is a
+    // submission to review. Otherwise, and for steps without review (which
+    // are approved on submit), back to open for editing.
+    const reopenedStatus =
+      hasSubmission && context.reviewRequired
+        ? StepStatus.SUBMITTED
+        : StepStatus.UNLOCKED;
+    // A check-in ticket is only valid while the confirmation step is
+    // approved: any other action on an approved confirmation step revokes it.
+    const leavesApprovedConfirmation =
+      context.isConfirmationStep && state.status === StepStatus.APPROVED;
+    const now = new Date();
+
+    switch (dto.action) {
+      case 'APPROVE': {
+        if (state.status === StepStatus.APPROVED) {
+          return { skipped: 'Already approved' };
+        }
+        await this.stepStateService.markApproved(applicationId, stepId);
+        await this.cancelOpenNeedsInfoRequests(applicationId, stepId, now);
+        if (context.isConfirmationStep) {
+          const failure = await this.issueCheckinTicket(
+            eventId,
+            applicationId,
+            context,
+          );
+          if (failure) {
+            return {
+              note: `Approved, but attendance was not confirmed: ${failure}`,
+            };
+          }
+        }
+        return {};
+      }
+
+      case 'UNAPPROVE': {
+        if (state.status !== StepStatus.APPROVED) {
+          return { skipped: 'The step is not approved' };
+        }
+        await this.reopenStepState(applicationId, stepId, reopenedStatus, now);
+        return this.revokeTicketIf(leavesApprovedConfirmation, applicationId);
+      }
+
+      case 'REJECT': {
+        if (state.status === StepStatus.REJECTED_FINAL) {
+          return { skipped: 'Already rejected' };
+        }
+        await this.stepStateService.markRejectedFinal(applicationId, stepId, {
+          keepSubmittedDownstream: true,
+        });
+        await this.cancelOpenNeedsInfoRequests(applicationId, stepId, now);
+        // Rejecting the confirmation step, or a step before it, revokes the
+        // ticket (a confirmation approved later on keeps its status, so an
+        // un-reject can issue a new ticket).
+        return this.revokeTicketIf(
+          context.isConfirmationStep ||
+            context.laterConfirmationStepIds.length > 0,
+          applicationId,
+        );
+      }
+
+      case 'UNREJECT': {
+        if (state.status !== StepStatus.REJECTED_FINAL) {
+          return { skipped: 'The step is not rejected' };
+        }
+        await this.reopenStepState(applicationId, stepId, reopenedStatus, now);
+        return this.restoreTicketAfterUnreject(eventId, applicationId, context);
+      }
+
+      case 'REQUEST_REVISION': {
+        if (!state.latest_submission_version_id) {
+          return { skipped: 'Nothing submitted yet' };
+        }
+        if (!context.actorId) {
+          throw new ForbiddenException('No signed-in staff member');
+        }
+        // Keep a single open request per step: the new one replaces any
+        // earlier open request.
+        await this.cancelOpenNeedsInfoRequests(applicationId, stepId, now);
+        await this.prisma.needs_info_requests.create({
+          data: {
+            id: crypto.randomUUID(),
+            application_id: applicationId,
+            step_id: stepId,
+            submission_version_id: state.latest_submission_version_id,
+            target_field_ids: [],
+            message:
+              dto.message?.trim() || 'Please review and update this step.',
+            deadline_at: context.revisionDeadline,
+            status: 'OPEN',
+            created_by: context.actorId,
+          },
+        });
+        await this.stepStateService.markNeedsRevision(applicationId, stepId, {
+          revisionDeadlineAt: context.revisionDeadline,
+        });
+        return this.revokeTicketIf(leavesApprovedConfirmation, applicationId);
+      }
+
+      case 'UNLOCK': {
+        if (state.status === StepStatus.UNLOCKED) {
+          return { skipped: 'Already open' };
+        }
+        await this.stepStateService.manualUnlock(applicationId, stepId);
+        return this.revokeTicketIf(leavesApprovedConfirmation, applicationId);
+      }
+
+      case 'LOCK': {
+        if (state.status === StepStatus.LOCKED) {
+          return { skipped: 'Already locked' };
+        }
+        await this.prisma.application_step_states.updateMany({
+          where: { application_id: applicationId, step_id: stepId },
+          data: { status: StepStatus.LOCKED, last_activity_at: now },
+        });
+        return this.revokeTicketIf(leavesApprovedConfirmation, applicationId);
+      }
+
+      case 'SUBMITTED': {
+        if (!context.reviewRequired) {
+          return {
+            skipped:
+              'This step has no review: use Approve or Open for editing instead',
+          };
+        }
+        if (!state.latest_submission_version_id) {
+          return { skipped: 'Nothing submitted yet' };
+        }
+        if (state.status === StepStatus.SUBMITTED) {
+          return { skipped: 'Already submitted' };
+        }
+        await this.prisma.application_step_states.updateMany({
+          where: { application_id: applicationId, step_id: stepId },
+          data: {
+            status: StepStatus.SUBMITTED,
+            current_draft_id: null,
+            last_activity_at: now,
+          },
+        });
+        await this.stepStateService.recomputeAllStepStates(applicationId);
+        await this.prisma.needs_info_requests.updateMany({
+          where: {
+            application_id: applicationId,
+            step_id: stepId,
+            status: 'OPEN',
+          },
+          data: { status: 'RESOLVED', resolved_at: now },
+        });
+        return this.revokeTicketIf(leavesApprovedConfirmation, applicationId);
+      }
+    }
+  }
+
+  /** Put a decided step back to "awaiting review" or "open" (unapprove / un-reject). */
+  private async reopenStepState(
+    applicationId: string,
+    stepId: string,
+    status: StepStatus,
+    now: Date,
+  ): Promise<void> {
+    await this.prisma.application_step_states.updateMany({
+      where: { application_id: applicationId, step_id: stepId },
+      data: {
+        status,
+        last_activity_at: now,
+        ...(status === StepStatus.UNLOCKED ? { unlocked_at: now } : {}),
+      },
+    });
+    await this.stepStateService.recomputeAllStepStates(applicationId);
+  }
+
+  private async cancelOpenNeedsInfoRequests(
+    applicationId: string,
+    stepId: string,
+    now: Date,
+  ): Promise<void> {
+    await this.prisma.needs_info_requests.updateMany({
+      where: { application_id: applicationId, step_id: stepId, status: 'OPEN' },
+      data: { status: 'CANCELED', resolved_at: now },
+    });
+  }
+
+  private async revokeTicketIf(
+    shouldRevoke: boolean,
+    applicationId: string,
+  ): Promise<{ note?: string }> {
+    if (!shouldRevoke) return {};
+    return { note: await this.cancelAttendanceConfirmation(applicationId) };
+  }
+
+  /**
+   * Confirms attendance (issues the check-in ticket). Returns why it could
+   * not, or undefined when done or when check-in is off for the event.
+   */
+  private async issueCheckinTicket(
+    eventId: string,
+    applicationId: string,
+    context: BulkStepContext,
+  ): Promise<string | undefined> {
+    if (!context.checkinEnabled) return undefined;
+    try {
+      await this.confirmAttendance(eventId, applicationId);
+      return undefined;
+    } catch (error) {
+      if (error instanceof HttpException) return error.message;
+      this.logger.error(
+        `Bulk step action: confirming attendance failed for application ${applicationId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      return 'unexpected error';
+    }
+  }
+
+  /**
+   * After un-rejecting a step before the confirmation step: if the
+   * confirmation is (still) approved, give the applicant a ticket again.
+   */
+  private async restoreTicketAfterUnreject(
+    eventId: string,
+    applicationId: string,
+    context: BulkStepContext,
+  ): Promise<{ note?: string }> {
+    if (!context.checkinEnabled || context.laterConfirmationStepIds.length === 0) {
+      return {};
+    }
+    const approvedConfirmation =
+      await this.prisma.application_step_states.findFirst({
+        where: {
+          application_id: applicationId,
+          step_id: { in: context.laterConfirmationStepIds },
+          status: StepStatus.APPROVED,
+        },
+        select: { id: true },
+      });
+    if (!approvedConfirmation) return {};
+    const attendance = await this.prisma.attendance_records.findUnique({
+      where: { application_id: applicationId },
+      select: { status: true },
+    });
+    if (attendance?.status === 'CONFIRMED' || attendance?.status === 'CHECKED_IN') {
+      return {};
+    }
+    const failure = await this.issueCheckinTicket(eventId, applicationId, context);
+    return {
+      note: failure
+        ? `Attendance was not confirmed again: ${failure}`
+        : 'Attendance confirmed again (new check-in ticket)',
+    };
+  }
+
+  /**
+   * Un-confirm attendance and revoke the check-in ticket (a re-approval
+   * issues a new one). Applicants already checked in are left untouched.
+   */
+  private async cancelAttendanceConfirmation(
+    applicationId: string,
+  ): Promise<string | undefined> {
+    const cancelled = await this.prisma.attendance_records.updateMany({
+      where: { application_id: applicationId, status: 'CONFIRMED' },
+      data: {
+        status: 'NONE',
+        confirmed_at: null,
+        qr_token_hash: null,
+        qr_issued_at: null,
+      },
+    });
+    if (cancelled.count > 0) {
+      return 'Attendance confirmation cancelled (check-in ticket revoked)';
+    }
+    const record = await this.prisma.attendance_records.findUnique({
+      where: { application_id: applicationId },
+      select: { status: true },
+    });
+    if (record?.status === 'CHECKED_IN') {
+      return 'Already checked in: attendance kept';
+    }
+    return undefined;
+  }
+
+  /** A per-application failure, without leaking internals (e.g. Prisma errors). */
+  private describeBulkStepError(applicationId: string, error: unknown): string {
+    if (error instanceof HttpException) {
+      return `Failed: ${error.message}`;
+    }
+    this.logger.error(
+      `Bulk step action failed for application ${applicationId}`,
+      error instanceof Error ? error.stack : String(error),
+    );
+    return 'Failed: unexpected error. The step may be partly updated; open the application to check it';
   }
 
   /**

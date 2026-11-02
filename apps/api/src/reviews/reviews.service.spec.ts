@@ -9,70 +9,6 @@ import { ReviewsService } from './reviews.service';
 import { FilesService } from './files.service';
 import { FormsService } from '../workflow/forms.service';
 
-describe('ReviewsService revision deadline resolution', () => {
-  function createService() {
-    return new ReviewsService(
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-    );
-  }
-
-  it('uses step revision deadline when reviewer deadline is missing', () => {
-    const service = createService();
-    const stepDeadline = new Date('2026-05-10T10:00:00.000Z');
-
-    const resolved = (service as any).resolveEffectiveRevisionDeadline(
-      stepDeadline,
-      undefined,
-    );
-
-    expect(resolved).toEqual(stepDeadline);
-  });
-
-  it('allows reviewer deadline when no step revision deadline is configured', () => {
-    const service = createService();
-    const reviewerDeadline = new Date('2026-05-05T10:00:00.000Z');
-
-    const resolved = (service as any).resolveEffectiveRevisionDeadline(
-      null,
-      reviewerDeadline,
-    );
-
-    expect(resolved).toEqual(reviewerDeadline);
-  });
-
-  it('throws when reviewer deadline extends configured step revision deadline', () => {
-    const service = createService();
-    const stepDeadline = new Date('2026-05-10T10:00:00.000Z');
-    const reviewerDeadline = new Date('2026-05-11T10:00:00.000Z');
-
-    expect(() =>
-      (service as any).resolveEffectiveRevisionDeadline(
-        stepDeadline,
-        reviewerDeadline,
-      ),
-    ).toThrow(BadRequestException);
-  });
-
-  it('uses reviewer deadline when it shortens configured step revision deadline', () => {
-    const service = createService();
-    const stepDeadline = new Date('2026-05-10T10:00:00.000Z');
-    const reviewerDeadline = new Date('2026-05-08T10:00:00.000Z');
-
-    const resolved = (service as any).resolveEffectiveRevisionDeadline(
-      stepDeadline,
-      reviewerDeadline,
-    );
-
-    expect(resolved).toEqual(reviewerDeadline);
-  });
-});
-
 describe('ReviewsService getNeedsInfo access', () => {
   const EVENT_ID = 'event-1';
   const APPLICATION_ID = 'app-1';
@@ -295,6 +231,59 @@ describe('ReviewsService approve gate', () => {
       },
       { resume: { fileObjectId: FILE_ORIGINAL } },
     );
+  });
+
+  const REVIEWED_AT = new Date('2026-10-20T10:00:00.000Z');
+
+  it('allows a new review when staff put the reviewed step back to "Submitted"', async () => {
+    const { service, prisma, stepStateService } = createService({
+      answersSnapshot: { resume: { fileObjectId: FILE_ORIGINAL } },
+      patches: replacePatch,
+      verified: [{ fieldId: 'resume', fileObjectId: FILE_REPLACEMENT }],
+    });
+    prisma.review_records.findFirst.mockResolvedValue({
+      id: 'earlier-review',
+      created_at: REVIEWED_AT,
+    });
+    (prisma as any).application_step_states = {
+      findFirst: asyncMock({
+        status: 'SUBMITTED',
+        last_activity_at: new Date('2026-10-21T09:00:00.000Z'),
+      }),
+    };
+
+    await expect(approve(service)).resolves.toMatchObject({
+      outcome: ReviewOutcome.APPROVE,
+    });
+    expect(stepStateService.markApproved).toHaveBeenCalledWith(
+      APPLICATION_ID,
+      STEP_ID,
+    );
+  });
+
+  it.each([
+    ['the step is no longer awaiting review', 'APPROVED', '2026-10-21T09:00:00.000Z'],
+    // A double-submitted review: the step is still SUBMITTED, but has not
+    // changed since the first review was recorded.
+    ['the step was not reopened since that review', 'SUBMITTED', '2026-10-19T08:00:00.000Z'],
+  ])('refuses a second review when %s', async (_label, status, lastActivity) => {
+    const { service, prisma } = createService({
+      answersSnapshot: { resume: { fileObjectId: FILE_ORIGINAL } },
+      patches: replacePatch,
+      verified: [{ fieldId: 'resume', fileObjectId: FILE_REPLACEMENT }],
+    });
+    prisma.review_records.findFirst.mockResolvedValue({
+      id: 'earlier-review',
+      created_at: REVIEWED_AT,
+    });
+    (prisma as any).application_step_states = {
+      findFirst: asyncMock({ status, last_activity_at: new Date(lastActivity) }),
+    };
+
+    await expect(approve(service)).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'REVIEW_ALREADY_COMPLETED' }),
+    });
+    expect(prisma.review_records.create).not.toHaveBeenCalled();
   });
 
   it('refuses approval when only the replaced original file was verified', async () => {

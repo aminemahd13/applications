@@ -272,9 +272,10 @@ describe('ApplicationsController bulk step action permissions', () => {
     expect(applicationsService.bulkStepAction).toHaveBeenCalledTimes(1);
   });
 
-  it('allows SUBMITTED when actor has review permission', async () => {
+  it('allows SUBMITTED when actor has review and override permissions', async () => {
     const { controller, applicationsService } = createController([
       'event.step.review',
+      'event.step.override.unlock',
     ]);
 
     await expect(
@@ -803,5 +804,124 @@ describe('ApplicationsController retired internal-notes replace', () => {
       code: 'INTERNAL_NOTES_REPLACE_DISABLED',
       message: 'This page is out of date. Reload it to add or delete notes.',
     });
+  });
+});
+
+describe('ApplicationsController bulk step action: new actions', () => {
+  const APP = '37a2125b-fdd0-42e2-a273-89d2f8010e4c';
+  const STEP = 'd8e8eb57-6ac9-440e-8036-6ac8fd5fcb9a';
+
+  function createController(permissions: string[]) {
+    const applicationsService = {
+      bulkStepAction: jest.fn().mockResolvedValue({
+        updated: 1,
+        skipped: 0,
+        skippedDetails: [],
+        notes: [],
+      }),
+    };
+    const cls = {
+      get: jest.fn((key: string) => (key === 'permissions' ? permissions : undefined)),
+    };
+    const controller = new ApplicationsController(
+      applicationsService as any,
+      {} as any,
+      {} as any,
+      cls as any,
+      {} as any,
+    );
+    return { controller, applicationsService };
+  }
+
+  const UNDO_ACTIONS = ['UNAPPROVE', 'REJECT', 'UNREJECT', 'REQUEST_REVISION', 'SUBMITTED'];
+
+  it.each(UNDO_ACTIONS)('refuses %s with only the override permission', async (action) => {
+    const { controller, applicationsService } = createController([
+      Permission.EVENT_STEP_OVERRIDE_UNLOCK,
+    ]);
+    await expect(
+      controller.bulkStepAction('event-1', { applicationIds: [APP], stepId: STEP, action }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(applicationsService.bulkStepAction).not.toHaveBeenCalled();
+  });
+
+  it.each(UNDO_ACTIONS)('refuses %s to a plain reviewer (organizers only)', async (action) => {
+    const { controller, applicationsService } = createController([
+      Permission.EVENT_STEP_REVIEW,
+    ]);
+    await expect(
+      controller.bulkStepAction('event-1', { applicationIds: [APP], stepId: STEP, action }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(applicationsService.bulkStepAction).not.toHaveBeenCalled();
+  });
+
+  it.each(UNDO_ACTIONS)('allows %s with review and override permissions', async (action) => {
+    const { controller, applicationsService } = createController([
+      Permission.EVENT_STEP_REVIEW,
+      Permission.EVENT_STEP_OVERRIDE_UNLOCK,
+    ]);
+    await controller.bulkStepAction('event-1', { applicationIds: [APP], stepId: STEP, action });
+    expect(applicationsService.bulkStepAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('still lets a plain reviewer bulk-approve', async () => {
+    const { controller, applicationsService } = createController([
+      Permission.EVENT_STEP_REVIEW,
+    ]);
+    await controller.bulkStepAction('event-1', {
+      applicationIds: [APP],
+      stepId: STEP,
+      action: 'APPROVE',
+    });
+    expect(applicationsService.bulkStepAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires the override permission to open a step', async () => {
+    const { controller } = createController([Permission.EVENT_STEP_REVIEW]);
+    await expect(
+      controller.bulkStepAction('event-1', { applicationIds: [APP], stepId: STEP, action: 'UNLOCK' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('passes a revision request with its message and deadline to the service', async () => {
+    const { controller, applicationsService } = createController([
+      Permission.EVENT_STEP_REVIEW,
+      Permission.EVENT_STEP_OVERRIDE_UNLOCK,
+    ]);
+
+    await controller.bulkStepAction('event-1', {
+      applicationIds: [APP],
+      stepId: STEP,
+      action: 'REQUEST_REVISION',
+      message: 'Please re-upload',
+      revisionDeadline: '2026-12-01',
+    });
+
+    expect(applicationsService.bulkStepAction).toHaveBeenCalledWith('event-1', {
+      applicationIds: [APP],
+      stepId: STEP,
+      action: 'REQUEST_REVISION',
+      message: 'Please re-upload',
+      revisionDeadline: new Date('2026-12-01'),
+    });
+  });
+
+  it('rejects unknown actions and absurd revision deadlines', async () => {
+    const { controller, applicationsService } = createController([
+      Permission.EVENT_STEP_REVIEW,
+      Permission.EVENT_STEP_OVERRIDE_UNLOCK,
+    ]);
+    await expect(
+      controller.bulkStepAction('event-1', { applicationIds: [APP], stepId: STEP, action: 'DELETE' }),
+    ).rejects.toThrow();
+    await expect(
+      controller.bulkStepAction('event-1', {
+        applicationIds: [APP],
+        stepId: STEP,
+        action: 'REQUEST_REVISION',
+        revisionDeadline: '20009-01-30',
+      }),
+    ).rejects.toThrow();
+    expect(applicationsService.bulkStepAction).not.toHaveBeenCalled();
   });
 });

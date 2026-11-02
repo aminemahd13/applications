@@ -406,7 +406,17 @@ export class StepStateService {
   /**
    * Mark step as rejected final and lock all downstream steps.
    */
-  async markRejectedFinal(applicationId: string, stepId: string): Promise<void> {
+  /**
+   * Final rejection: later steps are locked. With keepSubmittedDownstream
+   * (staff bulk reject), only later steps still being filled in are locked;
+   * submitted, approved or revising ones keep their status so an un-reject
+   * restores the application.
+   */
+  async markRejectedFinal(
+    applicationId: string,
+    stepId: string,
+    options?: { keepSubmittedDownstream?: boolean },
+  ): Promise<void> {
     const step = await this.prisma.workflow_steps.findUnique({
       where: { id: stepId },
       select: { event_id: true, step_index: true },
@@ -438,6 +448,13 @@ export class StepStateService {
         where: {
           application_id: applicationId,
           step_id: { in: downstreamSteps.map((item) => item.id) },
+          ...(options?.keepSubmittedDownstream
+            ? {
+                status: {
+                  in: [StepStatus.UNLOCKED, 'UNLOCKED_DRAFT', 'READY_TO_SUBMIT'],
+                },
+              }
+            : {}),
         },
         data: {
           status: StepStatus.LOCKED,
